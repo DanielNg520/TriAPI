@@ -31,7 +31,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import dispatcher, planner
+from scripts import dispatcher, planner, resource_guard
+from scripts.config_loader import load_resource_guard_services
 from scripts.cost_report import report as cost_report
 from scripts.tri_logging import get_logger
 
@@ -161,7 +162,16 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
         print(f"Raw log:         tail -f {log_path}")
         return
 
-    _breakdown_and_dispatch(state)
+    # Pause resource-competing services (config/resource_guard.yaml) for the
+    # duration of the run, resume them no matter how it ends -- success,
+    # a stopped-on-failure item, or an uncaught exception. Covers both the
+    # foreground path and the --background path, since the detached child
+    # re-execs `dispatch <run_id>` without --background and lands here too.
+    paused = resource_guard.pause_services(load_resource_guard_services())
+    try:
+        _breakdown_and_dispatch(state)
+    finally:
+        resource_guard.resume_services(paused)
 
 
 def cmd_status(run_id: str) -> None:

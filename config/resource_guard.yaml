@@ -1,0 +1,23 @@
+# Machine-specific: systemd --user services that compete with TriAPI's
+# Tier 4 (local Ollama) for CPU/RAM/GPU on THIS machine. Paused for the
+# duration of every `triapi dispatch` run and resumed afterward -- during a
+# dispatch, TriAPI gets resource priority, since a hallucinated/failed
+# result from starved Tier 4 costs more than a temporarily-paused personal
+# assistant. Not portable to another deployment; edit freely, or leave the
+# list empty to disable the guard entirely.
+#
+# Found necessary 2026-08-10 (PLAN.md Phase 11): oh-my-llama's own resident
+# Ollama models were occupying most of the shared iGPU/system RAM budget,
+# causing TriAPI's Tier 4 draft model to repeatedly fail to even finish
+# loading.
+#
+# Deliberately NOT included: com.duy.recorder.service (archiver-suite
+# recorder) -- explicitly excluded by user instruction, stays running
+# regardless of dispatch state.
+pause_services:
+  - "oh-my-llama.service"
+  - "oh-my-llama-web.service"
+  - "oh-my-llama-telegram.service"
+  - "oh-my-llama-discord.service"
+  - "oh-my-llama-brief.service"
+  - "oh-my-llama-brief.timer"

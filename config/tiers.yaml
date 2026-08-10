@@ -62,7 +62,15 @@ tier_4_worker:
   models:
     draft: "qwen3-coder:30b-cc"
     fallback: "gpt-oss:20b"
-  default_model: draft
+  # default_model set to fallback (gpt-oss:20b, MXFP4, 13GB), not draft
+  # (qwen3-coder:30b-cc, Q4_K_M, 18GB) -- the 30B model repeatedly failed to
+  # even finish loading on this machine's shared iGPU/RAM (2026-08-10,
+  # PLAN.md Phase 11), and 5GB less footprint gives real headroom against
+  # whatever else is resident. Paired with resource_guard.yaml (pauses
+  # competing services during a dispatch run) as the other half of the fix.
+  # Revert to `draft` if resource pressure is no longer a concern and the
+  # extra code quality is worth it.
+  default_model: fallback
   role: "high-volume code drafting, cmake/g++ compilation loops"
   automatable: true
   # Project-specific; callers may override per invocation.
