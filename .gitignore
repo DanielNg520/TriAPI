@@ -1,0 +1,9 @@
+logs/*.jsonl
+logs/*.md
+logs/state/*.json
+!logs/state/.gitkeep
+config/secrets.yaml
+__pycache__/
+*.pyc
+.venv/
+samples/*/build/

@@ -1,0 +1,87 @@
+# Single source of truth for the 4-tier pipeline. Scripts read this instead
+# of hardcoding model names, endpoints, or escalation thresholds.
+
+tier_1_planner:
+  name: "Claude Code CLI"
+  invocation: "claude -p"
+  model: "sonnet"
+  role: "strategic planning"
+  automatable: true
+  outputs: ["PLAN.json", "ARCHITECTURE.md"]
+
+tier_2_manager:
+  name: "Gemini (Google AI Studio API)"
+  # The Antigravity 2.0 desktop app is a GUI with no headless mode and stays
+  # available as a manual review surface, but automated escalation calls the
+  # underlying Gemini model directly via the Google AI Studio REST API --
+  # not through the desktop app.
+  endpoint: "https://generativelanguage.googleapis.com"
+  models:
+    flash: "gemini-3.5-flash"
+    pro: "gemini-3.5-pro"
+  default_model: flash
+  role: "task orchestration, context isolation, high-level architectural correction"
+  automatable: true
+  pricing:
+    # Google AI Studio offers a free tier for Gemini (rate-limited, not
+    # unlimited). free_tier_rpm/rpd below are CONSERVATIVE PLACEHOLDERS,
+    # not verified against Google's current published limits -- budget_guard.py
+    # treats these as a hard cap, so verify and tighten/loosen before relying
+    # on this for real usage.
+    last_verified: "2026-08-09"
+    free_tier_rpm: 10
+    free_tier_rpd: 250
+    notes: "free tier via Google AI Studio; RPM/RPD limits are unverified placeholders"
+
+tier_3_debugger:
+  name: "DeepSeek"
+  endpoint: "https://api.deepseek.com"
+  models:
+    flash: "deepseek-v4-flash"
+    pro: "deepseek-v4-pro"
+  default_model: flash
+  role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
+  automatable: true
+  pricing:
+    # Verify against DeepSeek's live pricing page periodically -- these
+    # numbers WILL drift. Cost logging stores raw token counts precisely
+    # so historical cost can be recomputed if this block goes stale.
+    last_verified: "2026-08-09"
+    flash:
+      cache_miss_per_mtok_usd: 0.14
+      cache_hit_per_mtok_usd: 0.0028
+      output_per_mtok_usd: null   # not given in source doc -- verify before relying on it
+    pro:
+      cache_miss_per_mtok_usd: null  # not given in source doc -- verify before relying on it
+      cache_hit_per_mtok_usd: 0.003625
+      output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
+
+tier_4_worker:
+  name: "Ollama local"
+  endpoint: "http://localhost:11434"
+  models:
+    draft: "qwen3-coder:30b-cc"
+    fallback: "gpt-oss:20b"
+  default_model: draft
+  role: "high-volume code drafting, cmake/g++ compilation loops"
+  automatable: true
+  # Project-specific; callers may override per invocation.
+  build_commands:
+    - "cmake --build build"
+
+escalation_rules:
+  tier4_to_tier3:
+    trigger: consecutive_build_failures
+    threshold: 2
+  tier3_to_tier1:
+    trigger: deepseek_unresolved
+    threshold: 1
+    action: call_claude_code
+  tier1_to_tier2:
+    trigger: claude_code_unresolved
+    threshold: 1
+    action: call_gemini_api
+  tier2_to_human:
+    trigger: gemini_unresolved
+    threshold: 1
+    action: log_and_notify
