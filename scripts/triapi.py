@@ -97,18 +97,13 @@ def cmd_plan(prompt: str, project_dir: str) -> None:
 
 
 def _breakdown_and_dispatch(state: dict) -> None:
-    if state["breakdown"] is None:
-        print("Breaking down plan into a checklist (Tier 2 / Gemini)...")
-        breakdown_result = dispatcher.breakdown_plan(state["plan_text"])
-        if breakdown_result["status"] != "ok":
-            print(f"Breakdown failed: {breakdown_result.get('reason')}")
-            state["status"] = "failed"
-            dispatcher.save_run(state)
-            return
-        state["breakdown"] = breakdown_result["breakdown"]
+    print("Breaking down plan into a checklist, one phase at a time (Tier 2 / Gemini)...")
+    breakdown_result = dispatcher.breakdown_plan(state)  # mutates and saves state incrementally
+    if breakdown_result["status"] != "ok":
+        print(f"Breakdown failed: {breakdown_result.get('reason')}")
+        state["status"] = "failed"
         dispatcher.save_run(state)
-    else:
-        print("Resuming existing checklist breakdown.")
+        return
 
     total_items = sum(len(p["items"]) for p in state["breakdown"]["phases"])
     print(

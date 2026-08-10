@@ -64,6 +64,29 @@ def human_handoff(task_id: str, reason: str, detail: str = "") -> None:
     log.warning("[%s] Human handoff: %s", task_id, reason)
 
 
+def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
+    """For plan items with nothing to draft/change (e.g. "run the test
+    suite", "grep for no remaining call sites") -- runs build_cmd against
+    files as they already are. Never invokes Tier 4's draft step, which
+    would otherwise overwrite a file that doesn't need editing, and never
+    escalates to Tier 1/2/3: there's no file for an AI tier to sensibly
+    "fix" for a pure check -- if it fails, the real bug is presumably in
+    whatever an earlier item changed, not in this verification command
+    itself, so this goes straight to human_handoff on the first failure."""
+    log.info("[%s] verify_task starting: %s", task_id, build_cmd)
+    ok, output = run_build(build_cmd, workdir)
+    cost_rep = report(task_id)
+    if ok:
+        clear_state(task_id)
+        log.info("[%s] verify_task succeeded", task_id)
+        return {"status": "success", "resolved_by": "verify", "cost_report": cost_rep}
+
+    record_failure(task_id, output)
+    detail = f"**Verification command:** `{build_cmd}`\n\n**Output:**\n```\n{output}\n```"
+    human_handoff(task_id, "verification failed (no file to draft/fix for this step)", detail)
+    return {"status": "human_handoff", "resolved_by": None, "cost_report": cost_rep}
+
+
 def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None) -> dict:
     config = load_tiers()
     build_cmd = build_cmd or " && ".join(config["tier_4_worker"]["build_commands"])
