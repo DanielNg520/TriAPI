@@ -322,3 +322,19 @@ Addressed the gap noted above: ran a real `triapi plan` → `triapi dispatch` ag
 - Confirmed `com.duy.recorder.service` was untouched throughout (checked before and after).
 
 **Not yet re-tested end-to-end:** the guard has been verified standalone (pause/resume both directions confirmed against real service state) but not yet exercised through an actual `triapi dispatch` invocation start-to-finish. The next real resume of the oh-my-llama run (Phase 10/11's unfinished thread) will be the first true end-to-end test of both fixes together.
+
+### Phase 12.1 — Self-healing resource guard (crash-proofing) ✅
+
+**Why:** per the user ("you crashed again... make it an automaton"), and a real gap: a plain `try`/`finally` in `triapi.py` does NOT run on `SIGTERM` (only on exceptions and `SIGINT`) -- a `kill <pid>` on a stuck dispatch, which literally happened once already in this project's real usage (PLAN.md's Phase 10 dispatch, killed manually mid-run), would have left services paused forever with the guard as it stood after Phase 12.
+
+**Fix, two layers on top of the caller's existing try/finally, in `resource_guard.py`:**
+1. **Signal/atexit safety net** — the moment anything is actually paused, `pause_services()` installs handlers for `SIGTERM`, `SIGINT`, and normal interpreter exit (`atexit`), all calling the same idempotent `resume_services()`. Whichever fires first wins; `_state["resumed"]` guards against double-starting services if more than one fires (e.g. the caller's own `finally` AND `atexit` at normal exit).
+2. **Lock file self-healing for the un-catchable case** — `pause_services()` writes `logs/resource_guard_lock.json` (`{pid, paused, started_at}`) the moment it pauses anything, and removes it on a clean `resume_services()`. If the owning pid is hard-killed (`SIGKILL`, OOM-kill, power loss) before even a signal handler can run, the lock survives on disk. Every subsequent call to `pause_services()` -- i.e. the very next `triapi dispatch`, for anyone or anything -- starts by checking the lock: if its pid is no longer alive, it resumes exactly the services that lock recorded and clears the file before proceeding. No separate watchdog process, cron job, or manual cleanup ever required.
+
+**Verified for real, both directions, against the live services on this machine:**
+- Ran `pause_services()` in a background process, confirmed the lock file was written with the correct pid/service list.
+- `kill -9`'d that process directly (not `SIGTERM` -- the un-catchable case). Confirmed via `systemctl --user list-units --all` that the paused services stayed down (`oh-my-llama-web.service`/`oh-my-llama-brief.timer` correctly `inactive/dead`) and the lock file survived, now orphaned.
+- Called `pause_services([])` from a fresh process (simulating the next dispatch starting) with an empty list, to isolate the healing behavior from any new pausing. Confirmed it detected the dead pid, resumed exactly `oh-my-llama.service`/`oh-my-llama-web.service`/`oh-my-llama-brief.timer` back to `active`/`running`/`waiting`, and deleted the stale lock file -- all before doing anything else.
+- Confirmed throughout: `oh-my-llama-telegram.service`/`oh-my-llama-discord.service` (already off before this test, for an unrelated reason) were never touched in either direction, and `com.duy.recorder.service` was never touched.
+
+**Noted, not fixed (out of scope -- oh-my-llama's own config, not TriAPI's):** `oh-my-llama.service` itself takes ~40s to respond to `systemctl --user stop` (its own shutdown behavior under SIGTERM) -- every `triapi dispatch` run will eat that delay once at startup while the guard waits for the stop to complete. Also noticed in passing: `oh-my-llama-brief.service` was already in a `failed` (OOM-killed) state from ~2 hours prior to this testing, unrelated to any of today's changes -- not touched, not TriAPI's to fix.

@@ -2,16 +2,41 @@
 (local Ollama) for CPU/RAM/GPU, so a dispatch run gets full priority on this
 machine's shared resources. Service list is config/resource_guard.yaml, not
 hardcoded here -- machine-specific, edited independently of code.
+
+Self-healing by design, not just a try/finally in the caller: a plain
+try/finally does NOT run on SIGTERM (only on exceptions and SIGINT), so a
+`kill <pid>` on a stuck dispatch -- which has actually happened once
+already in this project's real usage -- would otherwise leave services
+paused forever. Two layers of defense on top of the caller's own
+try/finally:
+  1. A signal/atexit safety net installed the moment anything gets paused,
+     so SIGTERM/SIGINT/normal-exit all resume services from *this*
+     process, whichever happens first.
+  2. A lock file (logs/resource_guard_lock.json) recording what got paused
+     and by which pid. If that pid is hard-killed (SIGKILL, OOM, power
+     loss) before even the signal handler runs, the lock survives; the
+     very next call to pause_services() (i.e. the next `triapi dispatch`)
+     notices the owning pid is dead and resumes the orphaned services
+     before doing anything else. No separate watchdog process needed.
 """
 
+import atexit
+import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.tri_logging import get_logger
 
 log = get_logger("resource_guard")
+
+LOCK_PATH = Path(__file__).resolve().parent.parent / "logs" / "resource_guard_lock.json"
+
+_state = {"resumed": False}
 
 
 def _is_active(service: str) -> bool:
@@ -22,12 +47,61 @@ def _is_active(service: str) -> bool:
     return result.stdout.strip() == "active"
 
 
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just not ours to signal -- treat as alive
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _reap_stale_lock() -> None:
+    if not LOCK_PATH.exists():
+        return
+    try:
+        lock = json.loads(LOCK_PATH.read_text())
+    except (json.JSONDecodeError, OSError):
+        LOCK_PATH.unlink(missing_ok=True)
+        return
+    if _pid_alive(lock.get("pid", -1)):
+        return  # a dispatch is still legitimately holding the guard
+    log.warning(
+        "Found orphaned resource-guard lock from dead pid %s -- resuming %s and clearing it",
+        lock.get("pid"), lock.get("paused"),
+    )
+    _do_resume(lock.get("paused") or [])
+    LOCK_PATH.unlink(missing_ok=True)
+
+
+def _do_resume(paused: list[str]) -> None:
+    for service in paused:
+        log.info("Resuming %s", service)
+        subprocess.run(["systemctl", "--user", "start", service], stdin=subprocess.DEVNULL)
+
+
+def _install_safety_net(paused: list[str]) -> None:
+    def _handler(signum=None, frame=None):
+        resume_services(paused)
+        if signum is not None:
+            sys.exit(128 + signum)
+
+    atexit.register(_handler)
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+
+
 def pause_services(services: list[str]) -> list[str]:
     """Stops each currently-active service in `services`. Returns exactly
     the subset that was actually running -- a service already stopped for
     an unrelated reason is left alone in both directions, so this never
     resurrects something the user (or another process) deliberately turned
     off before the dispatch run started."""
+    _reap_stale_lock()
+
     paused = []
     for service in services:
         if _is_active(service):
@@ -36,10 +110,21 @@ def pause_services(services: list[str]) -> list[str]:
             paused.append(service)
         else:
             log.info("%s already inactive, leaving as-is", service)
+
+    if paused:
+        _state["resumed"] = False
+        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LOCK_PATH.write_text(json.dumps({"pid": os.getpid(), "paused": paused, "started_at": time.time()}))
+        _install_safety_net(paused)
+
     return paused
 
 
 def resume_services(paused: list[str]) -> None:
-    for service in paused:
-        log.info("Resuming %s", service)
-        subprocess.run(["systemctl", "--user", "start", service], stdin=subprocess.DEVNULL)
+    """Idempotent -- safe to call from the caller's own try/finally AND
+    from the signal/atexit safety net without double-starting anything."""
+    if _state["resumed"]:
+        return
+    _do_resume(paused)
+    _state["resumed"] = True
+    LOCK_PATH.unlink(missing_ok=True)

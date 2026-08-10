@@ -3,6 +3,7 @@ logs/*.md
 logs/*.log
 logs/state/*.json
 logs/runs/
+logs/resource_guard_lock.json
 !logs/state/.gitkeep
 config/secrets.yaml
 __pycache__/
