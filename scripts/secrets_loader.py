@@ -24,6 +24,7 @@ def load_secrets() -> dict:
             capture_output=True,
             text=True,
             check=True,
+            stdin=subprocess.DEVNULL,
         )
     except FileNotFoundError as e:
         raise RuntimeError("`sops` binary not found on PATH.") from e

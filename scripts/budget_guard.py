@@ -12,6 +12,9 @@ import time
 from pathlib import Path
 
 from scripts.config_loader import load_tiers
+from scripts.tri_logging import get_logger
+
+log = get_logger("budget_guard")
 
 GEMINI_USAGE_LOG = Path(__file__).resolve().parent.parent / "logs" / "gemini_usage.jsonl"
 
@@ -26,12 +29,14 @@ def check_tier1_ok() -> dict:
     """Refuses if ANTHROPIC_API_KEY is set -- its presence routes `claude -p`
     to metered API billing instead of the Pro/Max subscription."""
     if os.environ.get("ANTHROPIC_API_KEY"):
+        log.warning("Tier 1 refused: ANTHROPIC_API_KEY is set in the environment")
         return {
             "ok": False,
             "reason": "ANTHROPIC_API_KEY is set in the environment; this would route "
             "`claude -p` to metered API billing instead of the Pro/Max subscription. "
             "Unset it to use Tier 1 safely, or this call is skipped.",
         }
+    log.debug("Tier 1 budget check passed (subscription auth)")
     return {"ok": True, "reason": "subscription auth (no ANTHROPIC_API_KEY set)"}
 
 
@@ -67,13 +72,16 @@ def check_tier2_ok() -> dict:
     calls_last_day = _read_gemini_usage_window(86400)
 
     if calls_last_minute >= rpm_limit:
+        log.warning("Tier 2 refused: RPM limit reached (%d/%d in last 60s)", calls_last_minute, rpm_limit)
         return {
             "ok": False,
             "reason": f"would exceed free-tier RPM limit ({calls_last_minute}/{rpm_limit} in the last 60s)",
         }
     if calls_last_day >= rpd_limit:
+        log.warning("Tier 2 refused: RPD limit reached (%d/%d in last 24h)", calls_last_day, rpd_limit)
         return {
             "ok": False,
             "reason": f"would exceed free-tier RPD limit ({calls_last_day}/{rpd_limit} in the last 24h)",
         }
+    log.debug("Tier 2 budget check passed (%d/%d rpm, %d/%d rpd)", calls_last_minute, rpm_limit, calls_last_day, rpd_limit)
     return {"ok": True, "reason": f"within free tier ({calls_last_minute}/{rpm_limit} rpm, {calls_last_day}/{rpd_limit} rpd)"}

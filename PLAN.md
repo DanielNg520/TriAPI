@@ -180,13 +180,74 @@ The user's stated direction: if an MCP-style integration is needed later, it poi
 
 ---
 
+---
+
+## Phase 8 — Natural-language planner/dispatcher, `triapi` CLI, and debug logging ✅
+
+**Why:** the pipeline through Phase 7 only handled "fix this one already-broken file." The user wanted something closer to the source doc's original top-down design (Tier 1 plans, Tier 2 manages/dispatches) reachable via natural language, e.g. `triapi plan "there is a plan.md in ~/foo, follow it strictly"` — with the existing Tier4→3→1→2→handoff chain becoming the execution primitive underneath, not replaced.
+
+**Design, settled via back-and-forth with the user:**
+- **Two-step, not one-shot.** `triapi plan` is an *interactive* conversation with Claude (multiple `claude -p --resume <session_id>` turns, verified session memory works correctly across calls) so the user can give feedback and refine before anything is built — "this will cost more if execution takes a wrong turn and goes too far" was the stated reasoning. Only an explicitly approved plan (`triapi plan` reply of "approve"/"lgtm"/etc.) ever reaches dispatch. `triapi dispatch <run_id>` then has Gemini break the approved plan into a strict phase/checklist JSON structure and works through it with `orchestrator.run_task()`, one item at a time, in order — "time is not a constraint, code quality high and reliable" ruled out any parallelism.
+- **`dispatch` is the only part that runs unattended.** Planning always needs a human; `--background` (detached via `subprocess.Popen(..., start_new_session=True)`, output to `logs/runs/<run_id>.log`) only applies to `dispatch`, matching the stated goal of low-friction use over SSH/Tailscale — start a dispatch, disconnect, check back later with `triapi status <run_id>`.
+- **Run state is file-backed** (`logs/runs/<run_id>.json`), updated after every single dispatched item — a long dispatch survives an SSH drop by construction, not by any special recovery logic.
+- **`planner.py`/`dispatcher.py` are new, separate from `tier1_escalate.py`/`tier2_escalate.py`** — same underlying Claude/Gemini services, different roles (plan vs. repair-one-file) and different prompts; kept as distinct files rather than overloading the existing ones.
+- **`triapi` is a real command**, not `python3 scripts/triapi.py` — `scripts/triapi.py` got a shebang + `chmod +x`, symlinked to `~/.local/bin/triapi` (already on PATH, same pattern as `sops`/`age`).
+
+**Dev checklist:**
+- [x] Verified `claude -p --resume <session_id>` genuinely retains conversation memory across separate CLI invocations (a fact stated in call 1 was correctly recalled in a `--resume`'d call 2) before building anything on top of it
+- [x] Wrote `scripts/planner.py`: `plan_turn(message, project_dir, session_id)` — one turn of an interactive planning conversation, read-only tool access (`--allowedTools Read,Glob,Grep`, `--add-dir <project_dir>`), can ask clarifying questions or propose/revise a phase-checklist markdown plan; budget-guarded like `tier1_escalate.py`
+- [x] Wrote `scripts/dispatcher.py`: `breakdown_plan()` (Gemini, `responseMimeType: application/json`, converts the approved plan markdown into `{"phases": [{"name", "items": [{"description", "target", "build_cmd"}]}]}`) and `dispatch()` (walks phases/items sequentially via `orchestrator.run_task()`, persists state after every item, stops on the first non-success item rather than cascading forward on a broken foundation)
+- [x] Wrote `scripts/triapi.py`: subcommands `plan` / `dispatch` / `status` / `list`; `plan` runs the interactive loop; `dispatch --background` spawns a detached child; `status`/`list` read run-state files for zero-cost progress checks
+- [x] Installed as a real command: `chmod +x scripts/triapi.py` + `ln -sf` into `~/.local/bin/triapi`
+- [x] Wrote `scripts/tri_logging.py`: centralized logging, **on by default**, toggle via `TRIAPI_LOG=0` / level via `TRIAPI_LOG_LEVEL` / file location via `TRIAPI_LOG_FILE` (default `logs/triapi.log`). Named `tri_logging` not `logging` so it doesn't shadow the stdlib module. Integrated into every script (`budget_guard`, `tier1-4`, `orchestrator`, `planner`, `dispatcher`, `triapi` CLI) at the meaningful decision points — tier calls, budget-guard refusals, escalation/handoff, dispatch progress — not instrumented exhaustively everywhere.
+- [x] Updated `mapping.md`, `.gitignore` (`logs/*.log`, `logs/runs/`)
+
+**Real bugs found and fixed during testing (not hypothetical — each one actually broke a real run):**
+1. **`claude -p` subprocess inherited the parent's stdin**, undeclared in `planner.py` and `tier1_escalate.py`. Under `triapi plan`'s interactive loop this meant the Claude subprocess silently drained the same stdin pipe meant for the Python `input()` call — the user's simulated feedback text got fed into Claude as part of its *first* turn instead of a second turn, then `input()` hit EOF. Fixed by adding `stdin=subprocess.DEVNULL` to every `subprocess.run` call in the codebase (`planner.py`, `tier1_escalate.py`, `tier4_worker.py`'s `run_build`, `secrets_loader.py`) for consistency, not just the one that broke.
+2. **Empty `build_cmd` from a Gemini breakdown item** (correctly left empty for a documentation-only step with nothing to build) was falling through to `orchestrator.run_task`'s default — the *C++ project's* `cmake --build build` — which is nonsensical for a markdown file and failed forever regardless of content. Fixed in `dispatcher.dispatch()`: an empty `build_cmd` now becomes `test -f <target>` (existence check) instead of the code-project default.
+3. **Resuming a stopped dispatch skipped the failed item instead of retrying it** — `dispatch()`'s "already done" count included *every* recorded result regardless of status, so a `human_handoff` entry was treated as permanently done. Fixed: since the design always stops immediately on the first non-success item, that item (if present) is always the last result and gets popped off before resuming, so it's retried rather than skipped.
+4. **Every tier's prompt was hardcoded to "You are a C++ debugging assistant" / a ` ```cpp ` fence`**, a leftover from when the pipeline only ever repaired known-C++ files (Phases 0-6). Once the planner/dispatcher could generate *any* file type, this caused real corruption: an earlier failed attempt at fixing a `.md` file (compounded with bug #2's bad build_cmd) resulted in Tier 1/2/3 actually writing C++ code into `PROJECT_MAP.md`, since their prompts insisted the answer must be C++. Fixed by generalizing all four prompts (`tier4_worker.build_prompt`, `tier3_escalate.build_stable_context`, `tier2_escalate.SYSTEM_INSTRUCTION`, `tier1_escalate.SYSTEM_PROMPT`) to be language-agnostic ("using the language tag appropriate for this file, or no tag for plain text/markdown") — `extract_code()`'s fence regex already accepted any language tag, only the prompt text was the problem. Re-verified: a fresh run against the same documentation task produced clean, correct markdown.
+
+**End-of-phase tests (real API calls throughout, using a small dedicated test project, not `samples/broken_build`):**
+- [x] **Seam** — `triapi plan "..."` against a project containing `plan.md` produced a clean, well-structured phase/checklist plan (no trailing questions, once the prompt fix from bug-fixing during Phase 4 was extended here too); `triapi dispatch` correctly broke it down via Gemini and resolved both real items (one via `tier_4`, one via `tier_3`) at a real total cost of $0.000048.
+- [x] **Gap** — interactive feedback round tested for real: initial plan proposed a plain greeting, user feedback ("change it to all-caps") was correctly incorporated into a revised plan on the next turn, approval completed cleanly. Verified the underlying `--resume` session genuinely carried the conversation, not just re-sent the whole prompt. Separately, deliberately exercised the resume-after-failure path (bug #3 above) and the non-code-file path (bug #4 above), both confirmed fixed with real re-runs.
+- [x] **Function** — final built files independently verified: `hello.cpp` and `CMakeLists.txt` matched the approved (feedback-revised) plan exactly, `PROJECT_MAP.md` contained correct clean markdown (not corrupted C++), and `logs/triapi.log` showed a complete, readable trace of the whole run (tier attempts, budget-guard checks, resume/retry decisions) confirming the logging feature actually captures what it's meant to. Confirmed `TRIAPI_LOG=0` correctly produces zero log output.
+
+---
+
+## Phase 9 — Git clone/pull/push authority ✅
+
+**Why:** the user wants plans that can act on git repos directly — clone a repo to start from, pull to sync, push/commit changes — not just edit files already sitting in `--project-dir`.
+
+**Design:**
+- New module `scripts/git_ops.py`: `clone(url, path)`, `pull(repo_dir)`, `push(repo_dir, message, branch=None)` — direct shell git commands (not AI-drafted content), fully logged via `tri_logging`.
+- **Safety rails, not overridable by a plan:** never force-push; `push()` never lands directly on `main`/`master` unless a plan step explicitly names that exact branch — otherwise it creates a new `triapi/<dirname>-<timestamp>` branch and pushes there instead, so an unattended `--background` dispatch can't clobber the primary branch's history or trigger CI/deploys on it. Credentials are never handled by this code — relies entirely on whatever git credential setup (SSH agent / credential helper) already exists on the machine, same as this session used for TriAPI's own push.
+- **New checklist-item shape in `dispatcher.py`**, alongside the existing file-fix shape: `{"description", "git": {"action": "clone"|"pull"|"push", ...}}`. `dispatch()` branches on `"git" in item` to route to `git_ops` instead of `orchestrator.run_task()`. A failed git operation writes a human handoff via `orchestrator.human_handoff` (refactored from a private `_human_handoff` into a public, reusable function so `dispatcher.py` doesn't duplicate the escalation-file-writing logic) and stops the run, same as a failed file item.
+- **`dispatcher.breakdown_plan()`'s Gemini instruction updated** to describe both item shapes and explicitly told not to invent git steps the plan didn't ask for.
+- **`planner.py`'s system prompt updated** so Claude knows git steps are an option when a goal actually calls for one, and states the push-safety-rail behavior in the plan itself (so the human reviewing/approving the plan sees it, not just discovers it at dispatch time).
+
+**Dev checklist:**
+- [x] Wrote `scripts/git_ops.py` with the safety rails described above
+- [x] Refactored `orchestrator._human_handoff` → public `orchestrator.human_handoff(task_id, reason, detail)`, updated its one existing call site to build `detail` from state itself (previously done inside the function)
+- [x] Updated `dispatcher.py`: `BREAKDOWN_SYSTEM_INSTRUCTION` describes both item shapes; `_dispatch_git_item()` routes to `git_ops` and normalizes results to the same `{"status", "resolved_by"}` shape used everywhere else (`resolved_by: "git"` on success)
+- [x] Updated `planner.py`'s `SYSTEM_PROMPT` to cover git steps and the push-safety-rail disclosure
+- [x] Updated `mapping.md`
+
+**End-of-phase tests (against a local bare git repo — deliberately not a real remote, so testing push behavior couldn't affect anything real):**
+- [x] **Seam** — `git_ops.clone()` against a seeded local bare repo (with an existing `main` branch and a commit) correctly cloned and checked out `main` with the right content.
+- [x] **Gap** — the actual safety rail, exercised directly: pushing from `main` with no branch specified created `triapi/git_test_clone-<timestamp>` and pushed there — verified independently by inspecting the bare repo directly that `main` was completely untouched (still just the original file) and the new branch had the pushed content. Then pushed again with an explicit `branch="feature/notes"` and confirmed it went to exactly that branch, not another auto-generated one. `pull()` against an up-to-date clone correctly reported "Already up to date."
+- [x] **Function** — tested the dispatcher-level routing directly (`dispatcher._dispatch_git_item`), not just the underlying `git_ops` functions: a clone item returned `{"status": "success", "resolved_by": "git"}` and the clone actually happened; a deliberately-failing clone (bad path) correctly returned `{"status": "human_handoff", "resolved_by": None}` and wrote a proper `logs/escalation_<task_id>.md` with the real git error output.
+
 ## Critical files
 - `PLAN.md`, `mapping.md`, `ARCHITECTURE.md`, `README.md` (repo root)
 - `.sops.yaml`, `config/tiers.yaml`, `config/secrets.example.yaml`, `config/secrets.enc.yaml`
-- `scripts/secrets_loader.py`, `scripts/config_loader.py`, `scripts/state.py`, `scripts/tier4_worker.py`, `scripts/tier3_escalate.py`, `scripts/tier2_escalate.py`, `scripts/tier1_escalate.py`, `scripts/budget_guard.py`, `scripts/cost_report.py`, `scripts/orchestrator.py`
+- `scripts/secrets_loader.py`, `scripts/config_loader.py`, `scripts/state.py`, `scripts/tier4_worker.py`, `scripts/tier3_escalate.py`, `scripts/tier2_escalate.py`, `scripts/tier1_escalate.py`, `scripts/budget_guard.py`, `scripts/cost_report.py`, `scripts/orchestrator.py`, `scripts/tri_logging.py`, `scripts/planner.py`, `scripts/dispatcher.py`, `scripts/triapi.py`, `scripts/git_ops.py`
 - `samples/broken_build/main.cpp`, `samples/broken_build/CMakeLists.txt`
 
 ## Open risks (carried forward, not blocking)
 1. ~~Antigravity's MCP registration UI/format is unknown from inside this repo~~ — **moot as of Phase 5 (2026-08-10):** Antigravity is no longer a dispatcher in this design (Tier 2 is a direct Gemini API call), so there's nothing to register. Superseded by: Jules integration is deferred pending `jules login` + more research (see Phase 4's DEFERRED note).
 2. ~~`claude -p` non-interactive output format needs a quick `--help` check~~ — **resolved in Phase 4**: `--output-format json` + `--tools ""` + `--system-prompt` is the pattern used in `tier1_escalate.py`.
 3. DeepSeek pricing in `tiers.yaml` will drift over time; raw token counts in `cost_log.jsonl` let historical cost be recomputed later. Same applies to Google AI Studio's `free_tier_rpm`/`free_tier_rpd` placeholders in `tier_2_manager.pricing` — never verified against Google's actual published limits.
+4. ~~Git clone/pull/push authority~~ — **built in Phase 9.**
+5. Every file checklist item currently requires exactly one `target` file. A step like "delete this file" or "rename X to Y" doesn't fit that shape either — noted but not addressed; today's plans work around it by phrasing such steps as edits to a single file.
+6. Git authority has only been tested against a local bare repo, not a real GitHub remote end-to-end through the full `triapi plan`→`dispatch` flow (deliberate, to avoid touching real remotes during testing) — the underlying mechanics (clone/push/pull, branch safety rail) are verified, but a real `triapi plan "clone https://github.com/... and add X"` run hasn't been exercised yet.

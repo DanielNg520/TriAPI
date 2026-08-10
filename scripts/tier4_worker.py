@@ -26,6 +26,9 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.config_loader import load_tiers
 from scripts.state import clear_state, read_state, record_failure
+from scripts.tri_logging import get_logger
+
+log = get_logger("tier4")
 
 CODE_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)\n(.*?)```", re.DOTALL)
 
@@ -39,14 +42,16 @@ def extract_code(response_text: str) -> str:
 
 def build_prompt(description: str, target_path: Path, last_stderr: str) -> str:
     parts = [
-        "You are a C++ coding assistant. Output ONLY the complete, corrected "
-        "file contents inside a single ```cpp code fence, no explanation.",
+        f"You are a coding/writing assistant working on {target_path.name}. Output "
+        "ONLY the complete, corrected file contents inside a single fenced code "
+        "block, using the language tag appropriate for this file (or no tag for "
+        "plain text/markdown) -- no explanation.",
         f"Task: {description}",
     ]
     if target_path.exists():
-        parts.append(f"Current contents of {target_path.name}:\n```cpp\n{target_path.read_text()}\n```")
+        parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
     if last_stderr:
-        parts.append(f"Previous build error:\n```\n{last_stderr}\n```")
+        parts.append(f"Previous build/verification error:\n```\n{last_stderr}\n```")
     return "\n\n".join(parts)
 
 
@@ -56,13 +61,17 @@ def call_ollama(host: str, model: str, prompt: str) -> str:
         json={"model": model, "prompt": prompt, "stream": False},
         timeout=300,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError:
+        log.error("Ollama request failed (model=%s): %s %s", model, resp.status_code, resp.text[:500])
+        raise
     return resp.json()["response"]
 
 
 def run_build(build_cmd: str, workdir: str, timeout: int = 120) -> tuple[bool, str]:
     result = subprocess.run(
-        build_cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout
+        build_cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
     )
     ok = result.returncode == 0
     output = (result.stdout or "") + (result.stderr or "")
@@ -83,6 +92,8 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     state = read_state(task_id)
     prompt = build_prompt(description, target_path, state.get("last_stderr", ""))
 
+    log.info("[%s] Tier 4 (Ollama/%s) drafting %s", task_id, model, target_path)
+
     response_text = call_ollama(tier4["endpoint"], model, prompt)
     code = extract_code(response_text)
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,11 +102,13 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     ok, build_output = run_build(build_cmd, workdir)
 
     if ok:
+        log.info("[%s] Tier 4 build succeeded", task_id)
         clear_state(task_id)
         return {"status": "success", "consecutive_failures": 0, "stderr": ""}
 
     state = record_failure(task_id, build_output)
     status = "escalate" if state["consecutive_failures"] >= threshold else "build_failed"
+    log.info("[%s] Tier 4 build failed (consecutive_failures=%d, threshold=%d)", task_id, state["consecutive_failures"], threshold)
     return {
         "status": status,
         "consecutive_failures": state["consecutive_failures"],

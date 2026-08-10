@@ -24,20 +24,25 @@ from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
+from scripts.tri_logging import get_logger
+
+log = get_logger("tier2")
 
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
 SYSTEM_INSTRUCTION = (
-    "You are a C++ debugging assistant. Given a file's contents and a build "
-    "error, respond with ONLY the complete, corrected file contents inside a "
-    "single ```cpp code fence -- no explanation, no partial diffs."
+    "You are a coding/writing assistant. Given a file's contents and a "
+    "build/verification error, respond with ONLY the complete, corrected file "
+    "contents inside a single fenced code block, using the language tag "
+    "appropriate for the file (or no tag for plain text/markdown) -- no "
+    "explanation, no partial diffs."
 )
 
 
 def build_user_content(target_path: Path, stderr: str) -> str:
     return (
-        f"Current contents of {target_path.name}:\n```cpp\n{target_path.read_text()}\n```\n\n"
-        f"Build error:\n```\n{stderr}\n```\n\nFix the file."
+        f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
+        f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
     )
 
 
@@ -50,6 +55,7 @@ def log_cost(entry: dict) -> None:
 def escalate(task_id: str, target: str, model: str | None = None) -> dict:
     guard = check_tier2_ok()
     if not guard["ok"]:
+        log.warning("[%s] Tier 2 skipped: %s", task_id, guard["reason"])
         return {"status": "skipped", "reason": guard["reason"]}
 
     config = load_tiers()
@@ -64,6 +70,8 @@ def escalate(task_id: str, target: str, model: str | None = None) -> dict:
     stderr = state.get("last_stderr", "")
     user_content = build_user_content(target_path, stderr)
 
+    log.info("[%s] Tier 2 (Gemini/%s) escalating for %s", task_id, model_name, target_path)
+
     resp = requests.post(
         f"{tier2['endpoint']}/v1beta/models/{model_name}:generateContent",
         params={"key": secrets["google_ai_studio_api_key"]},
@@ -74,13 +82,22 @@ def escalate(task_id: str, target: str, model: str | None = None) -> dict:
         timeout=180,
     )
     record_gemini_call()
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError:
+        log.error("[%s] Tier 2 request failed: %s %s", task_id, resp.status_code, resp.text[:500])
+        raise
     data = resp.json()
 
     usage = data.get("usageMetadata", {})
     prompt_tokens = usage.get("promptTokenCount", 0)
     cached_tokens = usage.get("cachedContentTokenCount", 0)
     output_tokens = usage.get("candidatesTokenCount", 0)
+
+    log.info(
+        "[%s] Tier 2 response: prompt=%d cached=%d output=%d",
+        task_id, prompt_tokens, cached_tokens, output_tokens,
+    )
 
     log_cost(
         {

@@ -1,6 +1,8 @@
 logs/*.jsonl
 logs/*.md
+logs/*.log
 logs/state/*.json
+logs/runs/
 !logs/state/.gitkeep
 config/secrets.yaml
 __pycache__/

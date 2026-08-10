@@ -24,6 +24,9 @@ from scripts.tier2_escalate import escalate as tier2_escalate
 from scripts.tier3_escalate import escalate as tier3_escalate
 from scripts.tier4_worker import run as tier4_run
 from scripts.tier4_worker import run_build
+from scripts.tri_logging import get_logger
+
+log = get_logger("orchestrator")
 
 ESCALATIONS_LOG = Path(__file__).resolve().parent.parent / "logs" / "escalations.jsonl"
 ESCALATIONS_DIR = Path(__file__).resolve().parent.parent / "logs"
@@ -39,24 +42,26 @@ def _rebuild_after_patch(task_id: str, build_cmd: str, workdir: str) -> bool:
     return ok
 
 
-def _human_handoff(task_id: str, reason: str) -> None:
+def human_handoff(task_id: str, reason: str, detail: str = "") -> None:
+    """Writes a human-handoff record. Public and reusable by any dispatcher
+    (not just the file-fix chain below) that needs to report an unresolved
+    item -- e.g. dispatcher.py's git steps use this too."""
     entry = {"timestamp": time.time(), "task_id": task_id, "reason": reason}
     ESCALATIONS_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(ESCALATIONS_LOG, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
-    state = read_state(task_id)
     summary_path = ESCALATIONS_DIR / f"escalation_{task_id}.md"
     summary_path.write_text(
         f"# Escalation: {task_id}\n\n"
         f"**Reason:** {reason}\n\n"
-        f"**Consecutive failures recorded:** {state.get('consecutive_failures')}\n\n"
-        f"**Last build error:**\n```\n{state.get('last_stderr', '')}\n```\n\n"
-        f"This task could not be resolved by the automated pipeline (Tier 4 -> Tier 3 -> "
-        f"Tier 1 -> Tier 2). Review manually -- e.g. in Antigravity or a normal editor.\n"
+        f"{detail}\n\n"
+        f"This task could not be resolved automatically. Review manually -- e.g. "
+        f"in Antigravity or a normal editor.\n"
     )
     print(f"[HUMAN HANDOFF] Task '{task_id}' needs manual review: {reason}")
     print(f"[HUMAN HANDOFF] See {summary_path}")
+    log.warning("[%s] Human handoff: %s", task_id, reason)
 
 
 def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None) -> dict:
@@ -69,10 +74,12 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     resolved_target = str(target_arg if target_arg.is_absolute() else Path(workdir) / target_arg)
 
     resolved_by = None
+    log.info("[%s] run_task starting: target=%s workdir=%s", task_id, target, workdir)
 
     # Tier 4: draft + build loop, until success or escalate.
     while True:
         result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model)
+        log.info("[%s] Tier 4 attempt: %s (consecutive_failures=%s)", task_id, result["status"], result.get("consecutive_failures"))
         if result["status"] == "success":
             resolved_by = "tier_4"
             break
@@ -107,11 +114,17 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             print(f"[BUDGET GUARD] Tier 2 skipped: {guard2['reason']}")
 
     if resolved_by is None:
-        _human_handoff(task_id, "unresolved after Tier 4 -> Tier 3 -> Tier 1 -> Tier 2")
+        handoff_state = read_state(task_id)
+        detail = (
+            f"**Consecutive failures recorded:** {handoff_state.get('consecutive_failures')}\n\n"
+            f"**Last build error:**\n```\n{handoff_state.get('last_stderr', '')}\n```"
+        )
+        human_handoff(task_id, "unresolved after Tier 4 -> Tier 3 -> Tier 1 -> Tier 2", detail)
         status = "human_handoff"
     else:
         status = "success"
 
+    log.info("[%s] run_task finished: status=%s resolved_by=%s", task_id, status, resolved_by)
     cost_rep = report(task_id)
     return {"status": status, "resolved_by": resolved_by, "cost_report": cost_rep}
 

@@ -32,16 +32,18 @@ from scripts.tier4_worker import extract_code
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
 SYSTEM_PROMPT = (
-    "You are a C++ debugging assistant. Given a file's contents and a build "
-    "error, respond with ONLY the complete, corrected file contents inside a "
-    "single ```cpp code fence -- no explanation, no partial diffs."
+    "You are a coding/writing assistant. Given a file's contents and a "
+    "build/verification error, respond with ONLY the complete, corrected file "
+    "contents inside a single fenced code block, using the language tag "
+    "appropriate for the file (or no tag for plain text/markdown) -- no "
+    "explanation, no partial diffs."
 )
 
 
 def build_prompt(target_path: Path, stderr: str) -> str:
     return (
-        f"Current contents of {target_path.name}:\n```cpp\n{target_path.read_text()}\n```\n\n"
-        f"Build error:\n```\n{stderr}\n```\n\nFix the file."
+        f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
+        f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
     )
 
 
@@ -76,6 +78,7 @@ def escalate(task_id: str, target: str) -> dict:
         capture_output=True,
         text=True,
         timeout=180,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         return {"status": "error", "reason": result.stderr.strip()}
