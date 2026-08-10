@@ -45,8 +45,19 @@ BREAKDOWN_SYSTEM_INSTRUCTION = (
     "one ITEM per file -- never combine multiple files into one item's "
     "'target'. Each ITEM is one of two shapes:\n"
     "1. A file item: "
-    '{"description": "...", "target": "relative/path/to/file", "build_cmd": "shell command to build/verify", "verify_only": false}. '
-    "One item per file that needs creating or changing. Set 'verify_only': "
+    '{"description": "...", "target": "relative/path/to/file", "build_cmd": "shell command to build/verify", "verify_only": false, "context_files": []}. '
+    "One item per file that needs creating or changing. 'context_files' is an "
+    "OPTIONAL list of OTHER existing repo files (relative paths) the worker "
+    "should read for grounding -- set it whenever the step's own text "
+    "references another file or pattern to follow, e.g. \"seeded from the "
+    "list in plan.md\", \"following the shape of config/tiers.yaml\", \"matching "
+    "the existing auth.py error handling\". List the actual file(s) being "
+    "referenced, not the step's own 'target'. Leaving this empty when the "
+    "step clearly depends on another file's real content is a failure -- the "
+    "worker has NO other way to see repo files besides this list, and will "
+    "invent plausible-looking but WRONG content instead (e.g. asked to seed "
+    "a file from \"the list in plan.md\" with no context_files, it will "
+    "hallucinate a generic list instead of reading the real one). Set 'verify_only': "
     "true when the step is a pure check with NO file content to draft/change "
     "-- e.g. \"run the test suite\", \"grep for no remaining call sites\", "
     "\"confirm output looks like X\". For those, 'target' should name the "
@@ -72,9 +83,10 @@ BREAKDOWN_SYSTEM_INSTRUCTION = (
     "repo at all, which fails immediately.\n"
     "Preserve this phase's step order exactly, do not reorder or merge steps "
     "into each other (except splitting a multi-file bullet into one item per "
-    "file, as above). Each 'description' is the ONLY context the worker doing "
-    "this step will see -- it will NOT see the original plan or phase text. "
-    "Carry forward every concrete technical requirement from that step "
+    "file, as above). Each 'description' plus whatever 'context_files' names "
+    "is the ONLY context the worker doing this step will see -- it will NOT "
+    "see the original plan or phase text, and will NOT see any repo file not "
+    "listed in 'context_files'. Carry forward every concrete technical requirement from that step "
     "verbatim: language/standard version, exact expected output/behavior, "
     "library versions, interfaces, anything specific. Summarizing away a "
     "specific requirement (e.g. dropping 'C++17' down to just 'create the "
@@ -344,6 +356,7 @@ def dispatch(state: dict) -> dict:
                     target=item["target"],
                     workdir=state["project_dir"],
                     build_cmd=build_cmd,
+                    context_files=item.get("context_files") or [],
                 )
             state["results"].append(
                 {

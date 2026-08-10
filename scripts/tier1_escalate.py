@@ -40,11 +40,15 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_prompt(target_path: Path, stderr: str) -> str:
-    return (
+def build_prompt(target_path: Path, stderr: str, context_blob: str = "") -> str:
+    parts = []
+    if context_blob:
+        parts.append(context_blob)
+    parts.append(
         f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
         f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
     )
+    return "\n\n".join(parts)
 
 
 def log_cost(entry: dict) -> None:
@@ -53,7 +57,7 @@ def log_cost(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def escalate(task_id: str, target: str) -> dict:
+def escalate(task_id: str, target: str, context_blob: str = "") -> dict:
     guard = check_tier1_ok()
     if not guard["ok"]:
         return {"status": "skipped", "reason": guard["reason"]}
@@ -61,7 +65,7 @@ def escalate(task_id: str, target: str) -> dict:
     target_path = Path(target)
     state = read_state(task_id)
     stderr = state.get("last_stderr", "")
-    prompt = build_prompt(target_path, stderr)
+    prompt = build_prompt(target_path, stderr, context_blob)
 
     result = subprocess.run(
         [

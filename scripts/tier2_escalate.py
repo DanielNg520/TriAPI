@@ -39,11 +39,15 @@ SYSTEM_INSTRUCTION = (
 )
 
 
-def build_user_content(target_path: Path, stderr: str) -> str:
-    return (
+def build_user_content(target_path: Path, stderr: str, context_blob: str = "") -> str:
+    parts = []
+    if context_blob:
+        parts.append(context_blob)
+    parts.append(
         f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
         f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
     )
+    return "\n\n".join(parts)
 
 
 def log_cost(entry: dict) -> None:
@@ -52,7 +56,7 @@ def log_cost(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def escalate(task_id: str, target: str, model: str | None = None) -> dict:
+def escalate(task_id: str, target: str, model: str | None = None, context_blob: str = "") -> dict:
     guard = check_tier2_ok()
     if not guard["ok"]:
         log.warning("[%s] Tier 2 skipped: %s", task_id, guard["reason"])
@@ -68,7 +72,7 @@ def escalate(task_id: str, target: str, model: str | None = None) -> dict:
     target_path = Path(target)
     state = read_state(task_id)
     stderr = state.get("last_stderr", "")
-    user_content = build_user_content(target_path, stderr)
+    user_content = build_user_content(target_path, stderr, context_blob)
 
     log.info("[%s] Tier 2 (Gemini/%s) escalating for %s", task_id, model_name, target_path)
 

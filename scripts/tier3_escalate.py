@@ -29,19 +29,25 @@ log = get_logger("tier3")
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
 
-def build_stable_context(target_path: Path) -> str:
+def build_stable_context(target_path: Path, context_blob: str = "") -> str:
     """Deterministic, byte-stable across calls for the same file contents.
     No timestamps or run-specific data allowed here -- that's what kills
-    the prefix-cache hit rate.
+    the prefix-cache hit rate. context_blob (other repo files a task
+    description references, see tier4_worker.build_context_blob) is equally
+    stable across retries for the same item, so it belongs in this cached
+    prefix too, not the volatile per-call user message.
     """
-    return (
+    parts = [
         f"You are a coding/writing assistant working on {target_path.name}. You will "
         "be given the full contents of a file that fails to build/verify, followed by "
         "the error. Respond with ONLY the complete, corrected file contents inside a "
         "single fenced code block, using the language tag appropriate for this file "
-        "(or no tag for plain text/markdown) -- no explanation, no partial diffs.\n\n"
-        f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```"
-    )
+        "(or no tag for plain text/markdown) -- no explanation, no partial diffs.",
+    ]
+    if context_blob:
+        parts.append(context_blob)
+    parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
+    return "\n\n".join(parts)
 
 
 def build_user_message(stderr: str) -> str:
@@ -77,7 +83,7 @@ def log_cost(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def escalate(task_id: str, target: str, model: str | None = None) -> dict:
+def escalate(task_id: str, target: str, model: str | None = None, context_blob: str = "") -> dict:
     config = load_tiers()
     tier3 = config["tier_3_debugger"]
     secrets = load_secrets()
@@ -92,7 +98,7 @@ def escalate(task_id: str, target: str, model: str | None = None) -> dict:
 
     log.info("[%s] Tier 3 (DeepSeek/%s) escalating for %s", task_id, model_name, target_path)
 
-    stable_context = build_stable_context(target_path)
+    stable_context = build_stable_context(target_path, context_blob)
     user_message = build_user_message(stderr)
 
     resp = requests.post(

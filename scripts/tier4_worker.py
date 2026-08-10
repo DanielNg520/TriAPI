@@ -40,7 +40,31 @@ def extract_code(response_text: str) -> str:
     return response_text.strip() + "\n"
 
 
-def build_prompt(description: str, target_path: Path, last_stderr: str) -> str:
+def build_context_blob(paths: list[str], workdir: str, max_chars_per_file: int = 20000) -> str:
+    """Reads other repo files a task description references (e.g. "seeded
+    from X", "following Y's pattern") into a labeled, read-only block so
+    drafting has real grounding instead of guessing at their content.
+    Missing paths are skipped (logged), not fatal -- a plan step can
+    reference a file that turns out not to exist, that's the drafter's
+    problem to notice, not this helper's. Each file is capped so one huge
+    reference file can't blow out the prompt."""
+    if not paths:
+        return ""
+    parts = []
+    for p in paths:
+        path_obj = Path(p)
+        resolved = path_obj if path_obj.is_absolute() else Path(workdir) / path_obj
+        if not resolved.is_file():
+            log.warning("Context file not found, skipping: %s", resolved)
+            continue
+        content = resolved.read_text(errors="replace")
+        if len(content) > max_chars_per_file:
+            content = content[:max_chars_per_file] + "\n... (truncated)"
+        parts.append(f"Reference file `{p}` (read-only, for grounding only -- do not modify):\n```\n{content}\n```")
+    return "\n\n".join(parts)
+
+
+def build_prompt(description: str, target_path: Path, last_stderr: str, context_blob: str = "") -> str:
     parts = [
         f"You are a coding/writing assistant working on {target_path.name}. Output "
         "ONLY the complete, corrected file contents inside a single fenced code "
@@ -48,6 +72,8 @@ def build_prompt(description: str, target_path: Path, last_stderr: str) -> str:
         "plain text/markdown) -- no explanation.",
         f"Task: {description}",
     ]
+    if context_blob:
+        parts.append(context_blob)
     if target_path.exists():
         parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
     if last_stderr:
@@ -78,7 +104,7 @@ def run_build(build_cmd: str, workdir: str, timeout: int = 120) -> tuple[bool, s
     return ok, output
 
 
-def run(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, model: str | None = None) -> dict:
+def run(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, model: str | None = None, context_blob: str = "") -> dict:
     config = load_tiers()
     tier4 = config["tier_4_worker"]
     threshold = config["escalation_rules"]["tier4_to_tier3"]["threshold"]
@@ -90,7 +116,7 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     target_path = target_arg if target_arg.is_absolute() else Path(workdir) / target_arg
 
     state = read_state(task_id)
-    prompt = build_prompt(description, target_path, state.get("last_stderr", ""))
+    prompt = build_prompt(description, target_path, state.get("last_stderr", ""), context_blob)
 
     log.info("[%s] Tier 4 (Ollama/%s) drafting %s", task_id, model, target_path)
 
@@ -124,9 +150,11 @@ def main():
     parser.add_argument("--workdir", default=".", help="directory to run the build command in")
     parser.add_argument("--build-cmd", default=None, help="overrides config build_commands")
     parser.add_argument("--model", default=None, help="overrides config default draft model")
+    parser.add_argument("--context-file", action="append", default=[], help="other repo file(s) to read for grounding, relative to --workdir; repeatable")
     args = parser.parse_args()
 
-    result = run(args.task_id, args.description, args.target, args.workdir, args.build_cmd, args.model)
+    context_blob = build_context_blob(args.context_file, args.workdir)
+    result = run(args.task_id, args.description, args.target, args.workdir, args.build_cmd, args.model, context_blob)
     print(json.dumps(result))
     return result
 

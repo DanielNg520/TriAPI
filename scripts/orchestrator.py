@@ -22,6 +22,7 @@ from scripts.state import clear_state, read_state, record_failure
 from scripts.tier1_escalate import escalate as tier1_escalate
 from scripts.tier2_escalate import escalate as tier2_escalate
 from scripts.tier3_escalate import escalate as tier3_escalate
+from scripts.tier4_worker import build_context_blob
 from scripts.tier4_worker import run as tier4_run
 from scripts.tier4_worker import run_build
 from scripts.tri_logging import get_logger
@@ -87,7 +88,7 @@ def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
     return {"status": "human_handoff", "resolved_by": None, "cost_report": cost_rep}
 
 
-def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None) -> dict:
+def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None) -> dict:
     config = load_tiers()
     build_cmd = build_cmd or " && ".join(config["tier_4_worker"]["build_commands"])
 
@@ -96,12 +97,19 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     target_arg = Path(target)
     resolved_target = str(target_arg if target_arg.is_absolute() else Path(workdir) / target_arg)
 
+    # Built once and reused across every tier attempt: other repo files the
+    # item's description references (e.g. "seeded from X"), read in read-only
+    # so drafting is grounded in what's actually in the repo instead of
+    # guessing. Content is fixed per item, so this is fine to reuse across
+    # Tier 4 retries and every escalation tier without re-reading each time.
+    context_blob = build_context_blob(context_files or [], workdir)
+
     resolved_by = None
-    log.info("[%s] run_task starting: target=%s workdir=%s", task_id, target, workdir)
+    log.info("[%s] run_task starting: target=%s workdir=%s context_files=%s", task_id, target, workdir, context_files)
 
     # Tier 4: draft + build loop, until success or escalate.
     while True:
-        result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model)
+        result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
         log.info("[%s] Tier 4 attempt: %s (consecutive_failures=%s)", task_id, result["status"], result.get("consecutive_failures"))
         if result["status"] == "success":
             resolved_by = "tier_4"
@@ -112,7 +120,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
 
     if resolved_by is None:
         # Tier 3: DeepSeek
-        tier3_escalate(task_id, resolved_target)
+        tier3_escalate(task_id, resolved_target, context_blob=context_blob)
         if _rebuild_after_patch(task_id, build_cmd, workdir):
             resolved_by = "tier_3"
 
@@ -120,7 +128,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # Tier 1: Claude Code CLI (budget-guarded)
         guard1 = check_tier1_ok()
         if guard1["ok"]:
-            tier1_escalate(task_id, resolved_target)
+            tier1_escalate(task_id, resolved_target, context_blob=context_blob)
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_1"
         else:
@@ -130,7 +138,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # Tier 2: Gemini API (budget-guarded)
         guard2 = check_tier2_ok()
         if guard2["ok"]:
-            tier2_escalate(task_id, resolved_target)
+            tier2_escalate(task_id, resolved_target, context_blob=context_blob)
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_2"
         else:
@@ -160,9 +168,10 @@ def main():
     parser.add_argument("--workdir", default=".")
     parser.add_argument("--build-cmd", default=None)
     parser.add_argument("--tier4-model", default=None, help="overrides config default Tier 4 draft model")
+    parser.add_argument("--context-file", action="append", default=[], help="other repo file(s) to read for grounding, relative to --workdir; repeatable")
     args = parser.parse_args()
 
-    result = run_task(args.task_id, args.description, args.target, args.workdir, args.build_cmd, args.tier4_model)
+    result = run_task(args.task_id, args.description, args.target, args.workdir, args.build_cmd, args.tier4_model, args.context_file)
     print(json.dumps({"status": result["status"], "resolved_by": result["resolved_by"]}))
     print()
     print(format_report(result["cost_report"]))
