@@ -48,8 +48,16 @@ BREAKDOWN_SYSTEM_INSTRUCTION = (
     "2. A git item, ONLY for an explicit git clone/pull/push step named in the "
     "plan (do not invent git steps that aren't in the plan): "
     '{"description": "...", "git": {"action": "clone", "url": "...", "path": "relative/or/absolute/path"}} or '
-    '{"description": "...", "git": {"action": "pull"}} or '
-    '{"description": "...", "git": {"action": "push", "message": "commit message", "branch": "optional, only if the plan names a specific branch"}}.\n'
+    '{"description": "...", "git": {"action": "pull", "path": "relative/or/absolute/path"}} or '
+    '{"description": "...", "git": {"action": "push", "path": "relative/or/absolute/path", "message": "commit message", "branch": "optional, only if the plan names a specific branch"}}.\n'
+    "'path' is REQUIRED on every git action once a repo directory is known -- "
+    "it's the directory the git command runs in. For 'clone' it's where the new "
+    "clone goes (relative to the project directory). For 'pull'/'push' it MUST "
+    "be the actual repo directory, which is very often NOT the project's top "
+    "level -- e.g. if an earlier clone step's path was 'repo', every later "
+    "pull/push step operating on that clone must also use path 'repo', not omit "
+    "it. Getting this wrong makes the command run in a directory with no git "
+    "repo at all, which fails immediately.\n"
     "Preserve the plan's phase grouping and step order exactly, do not reorder "
     "or merge steps into each other. Each 'description' is the ONLY context the "
     "worker doing this step will see -- it will NOT see the original plan. "
@@ -162,17 +170,23 @@ def new_run(prompt: str, project_dir: str) -> dict:
     return state
 
 
+def _resolve_path(path_str: str, project_dir: str) -> str:
+    p = Path(path_str)
+    return str(p if p.is_absolute() else Path(project_dir) / p)
+
+
 def _dispatch_git_item(task_id: str, git_spec: dict, project_dir: str) -> dict:
     action = git_spec.get("action")
-    log.info("[%s] Git action: %s", task_id, action)
+    path = _resolve_path(git_spec.get("path", "."), project_dir)
+    log.info("[%s] Git action: %s (path=%s)", task_id, action, path)
 
     if action == "clone":
-        result = git_ops.clone(git_spec["url"], git_spec.get("path", project_dir))
+        result = git_ops.clone(git_spec["url"], path)
     elif action == "pull":
-        result = git_ops.pull(git_spec.get("path", project_dir))
+        result = git_ops.pull(path)
     elif action == "push":
         result = git_ops.push(
-            git_spec.get("path", project_dir),
+            path,
             message=git_spec.get("message", f"TriAPI: {task_id}"),
             branch=git_spec.get("branch"),
         )

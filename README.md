@@ -121,7 +121,9 @@ triapi list                 # all runs, newest state
 
 ### Git steps in a plan
 
-A plan can include explicit git steps — clone a repo, pull, push/commit — not just file edits. Mention it in your goal (e.g. "clone `https://github.com/you/repo`, then...") and Claude will include it as a step if the goal actually calls for it. **Safety rail:** pushing never lands directly on `main`/`master` unless a step explicitly names that branch — otherwise it creates a new `triapi/<name>-<timestamp>` branch instead, so an unattended dispatch can't clobber your primary branch. The plan you approve will say which behavior applies before anything runs.
+A plan can include explicit git steps — clone a repo, pull, push/commit — not just file edits. Mention it in your goal (e.g. "clone `git@github.com:you/repo.git`, then...") and Claude will include it as a step if the goal actually calls for it. **Safety rail:** pushing never lands directly on `main`/`master` unless a step explicitly names that branch — otherwise it creates a new `triapi/<name>-<timestamp>` branch instead, so an unattended dispatch can't clobber your primary branch. The plan you approve will say which behavior applies before anything runs.
+
+**Use an SSH remote (`git@github.com:...`), not HTTPS**, for anything that needs to push or pull. Every git command strips credential helpers so a failure is immediate and clear instead of hanging, but that also means HTTPS remotes without a working non-interactive credential setup will simply fail — confirmed in practice in this environment. Cloning a public repo over HTTPS (read-only, no push) works fine either way.
 
 ## Debug logging
 

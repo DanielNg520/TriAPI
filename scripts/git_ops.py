@@ -11,10 +11,15 @@ Safety rails (not overridable by a plan):
     new branch is created, so an unattended dispatch run can't clobber the
     primary branch's history or trigger unwanted CI/deploys on it
   - relies on whatever git credential setup already exists on this machine
-    (SSH agent / credential helper) -- never handles, stores, or logs
-    credentials itself
+    for SSH remotes (SSH agent) -- never handles, stores, or logs
+    credentials itself. HTTPS remotes needing interactive auth are NOT
+    supported: every invocation explicitly disables credential helpers and
+    askpass, so an HTTPS remote lacking a working non-interactive credential
+    setup fails fast with a clear error rather than hanging. Use an SSH
+    remote (git@github.com:...) if pushing is needed.
 """
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -25,11 +30,27 @@ log = get_logger("git_ops")
 
 DEFAULT_BRANCHES = {"main", "master"}
 
+# Belt-and-suspenders against hanging on a credential prompt of any kind:
+# GIT_TERMINAL_PROMPT=0 stops git's own terminal prompt, but a *configured*
+# credential helper (e.g. a GUI askpass like ksshaskpass) can still hang
+# trying to show a dialog that never returns in a headless/background
+# context -- observed exactly this: a push hung 300s+ with that env var set
+# and stdin closed. -c credential.helper= and -c core.askpass= strip both
+# for this invocation only, so auth failure is immediate and clear instead.
+_GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+_NO_PROMPT_ARGS = ["-c", "credential.helper=", "-c", "core.askpass="]
+
 
 def _run(cmd: list[str], cwd: str, timeout: int = 300) -> tuple[bool, str]:
-    result = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
-    )
+    full_cmd = [cmd[0], *_NO_PROMPT_ARGS, *cmd[1:]]
+    try:
+        result = subprocess.run(
+            full_cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+            stdin=subprocess.DEVNULL, env=_GIT_ENV,
+        )
+    except subprocess.TimeoutExpired:
+        log.error("git command timed out after %ds: %s", timeout, " ".join(cmd))
+        return False, f"command timed out after {timeout}s: {' '.join(cmd)}"
     output = (result.stdout or "") + (result.stderr or "")
     return result.returncode == 0, output
 
