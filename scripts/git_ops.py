@@ -15,11 +15,16 @@ Safety rails (not overridable by a plan):
     credentials itself. HTTPS remotes needing interactive auth are NOT
     supported: every invocation explicitly disables credential helpers and
     askpass, so an HTTPS remote lacking a working non-interactive credential
-    setup fails fast with a clear error rather than hanging. Use an SSH
-    remote (git@github.com:...) if pushing is needed.
+    setup fails fast with a clear error rather than hanging.
+  - github.com HTTPS URLs are automatically rewritten to SSH (both for a
+    fresh clone URL and for an existing origin remote before pull/push),
+    since SSH is the only auth path confirmed working in this environment
+    -- always use it rather than relying on whoever writes the plan to
+    remember to say "git@github.com:..." instead of "https://github.com/...".
 """
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -29,6 +34,19 @@ from scripts.tri_logging import get_logger
 log = get_logger("git_ops")
 
 DEFAULT_BRANCHES = {"main", "master"}
+
+_GITHUB_HTTPS_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$")
+
+
+def _to_ssh_url(url: str) -> str | None:
+    """Returns the SSH form of a github.com HTTPS URL, or None if `url`
+    isn't a github.com HTTPS URL (left untouched -- other hosts/forms may
+    not follow the same convention or may not have SSH set up)."""
+    m = _GITHUB_HTTPS_RE.match(url.strip())
+    if not m:
+        return None
+    owner, repo, _ = m.groups()
+    return f"git@github.com:{owner}/{repo}.git"
 
 # Belt-and-suspenders against hanging on a credential prompt of any kind:
 # GIT_TERMINAL_PROMPT=0 stops git's own terminal prompt, but a *configured*
@@ -55,7 +73,21 @@ def _run(cmd: list[str], cwd: str, timeout: int = 300) -> tuple[bool, str]:
     return result.returncode == 0, output
 
 
+def _ensure_ssh_remote(repo_dir: str) -> None:
+    ok, current_url = _run(["git", "remote", "get-url", "origin"], cwd=repo_dir)
+    if not ok:
+        return
+    ssh_url = _to_ssh_url(current_url.strip())
+    if ssh_url:
+        log.info("Rewriting origin to SSH in %s: %s -> %s", repo_dir, current_url.strip(), ssh_url)
+        _run(["git", "remote", "set-url", "origin", ssh_url], cwd=repo_dir)
+
+
 def clone(url: str, path: str) -> dict:
+    ssh_url = _to_ssh_url(url)
+    if ssh_url:
+        log.info("Rewriting clone URL to SSH: %s -> %s", url, ssh_url)
+        url = ssh_url
     log.info("git clone %s -> %s", url, path)
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -66,6 +98,7 @@ def clone(url: str, path: str) -> dict:
 
 
 def pull(repo_dir: str) -> dict:
+    _ensure_ssh_remote(repo_dir)
     log.info("git pull in %s", repo_dir)
     ok, output = _run(["git", "pull", "--ff-only"], cwd=repo_dir)
     if not ok:
@@ -74,6 +107,7 @@ def pull(repo_dir: str) -> dict:
 
 
 def push(repo_dir: str, message: str, branch: str | None = None) -> dict:
+    _ensure_ssh_remote(repo_dir)
     ok, current_out = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir)
     if not ok:
         return {"ok": False, "output": current_out}
