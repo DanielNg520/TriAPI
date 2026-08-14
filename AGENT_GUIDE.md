@@ -123,6 +123,31 @@ breakdown, written specifically so another agent can hand it to
 `triapi plan` (with `--no-tier1` active) as a realistic multi-file test and
 practice the human_handoff workflow above on real escalations.
 
+**Your job here is to run this through `triapi`, not to implement it.**
+Concretely, in order:
+1. Feed the phases below into `triapi plan --project-dir <oh-my-llama path>`
+   (as-is, or split/reworded into your own prompt — re-phasing into your own
+   words is fine, writing the actual code yourself is not) and approve the
+   resulting plan after reading it in full, same discipline as everywhere
+   else in this guide.
+2. `triapi dispatch <run_id> --no-tier1` it.
+3. **"Phase it out" only if the pipeline's own breakdown needs help** —
+   e.g. if `triapi plan`'s draft doesn't naturally split into phases the
+   way `dispatcher.py` expects, or a phase is too large for one item to
+   resolve reliably (this project has repeatedly found "the giant single
+   item" failure mode — see `PLAN.md`'s history). Re-splitting a plan into
+   smaller, more resolvable phases before dispatch is a supervisor/planning
+   judgment call, not implementation work — still fine to do by hand.
+4. From dispatch onward: **you are the monitor and supervisor, not the
+   worker.** Watch the run, diagnose `human_handoff`s using the workflow
+   above (weak build_cmd vs. genuine gap), patch build_cmds/state JSON as
+   needed, and — per "What never changes" below — only hand-write
+   `ghostwriter.py`/`cli.py`/`ingestion.py` content yourself as a last
+   resort after a tier has genuinely and repeatedly failed on that exact
+   item, never as a shortcut to get through the plan faster. The point of
+   this test is to see how the pipeline behaves with one fewer repair tier,
+   not to produce the feature by any means necessary.
+
 **Goal**: given a job folder, ingest style-reference files + per-prompt
 source files, generate one `result.txt` with a draft per numbered prompt,
 reusing the model in the user's own writing voice. No AI-detection/critique
