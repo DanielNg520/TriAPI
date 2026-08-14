@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.budget_guard import check_tier1_ok, check_tier2_ok
+from scripts.budget_guard import check_tier1_ok, check_tier1_manager_ok, check_tier2_ok
 from scripts.config_loader import load_tiers
 from scripts.cost_report import format_report, report
 from scripts.state import clear_state, read_state, record_failure
@@ -136,14 +136,17 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     if resolved_by is None:
         # Tier 1: Claude Code CLI (budget-guarded)
         guard1 = check_tier1_ok()
-        if guard1["ok"]:
+        guard1m = check_tier1_manager_ok(config)
+        if guard1["ok"] and guard1m["ok"]:
             result1 = tier1_escalate(task_id, resolved_target, context_blob=context_blob)
             if result1.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 1 fix rejected: %s", task_id, result1.get("reason"))
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_1"
-        else:
+        elif not guard1["ok"]:
             print(f"[BUDGET GUARD] Tier 1 skipped: {guard1['reason']}")
+        else:
+            print(f"[BUDGET GUARD] Tier 1 skipped: {guard1m['reason']}")
 
     if resolved_by is None:
         # Tier 2: Gemini API (budget-guarded)

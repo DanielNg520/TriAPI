@@ -9,6 +9,9 @@ tier_1_planner:
   automatable: true
   outputs: ["PLAN.json", "ARCHITECTURE.md"]
 
+tier_1_manager:
+  enabled: true
+
 tier_2_manager:
   name: "Gemini (Google AI Studio API)"
   # The Antigravity 2.0 desktop app is a GUI with no headless mode and stays
@@ -90,7 +93,11 @@ tier_4_worker:
   # extra code quality is worth it.
   default_model: fallback
   role: "high-volume code drafting, cmake/g++ compilation loops"
-  automatable: true
+  # Local Ollama is not guaranteed to be running (build/verification fails
+  # with connection refused on localhost:11434), so don't auto-dispatch to
+  # this tier by default; callers that know Ollama is up can override per
+  # invocation.
+  automatable: false
   # Project-specific; callers may override per invocation.
   build_commands:
     - "cmake --build build"

@@ -24,7 +24,6 @@ GEMINI_USAGE_LOG = Path(__file__).resolve().parent.parent / "logs" / "gemini_usa
 DEFAULT_FREE_TIER_RPM = 10
 DEFAULT_FREE_TIER_RPD = 250
 
-
 def check_tier1_ok() -> dict:
     """Refuses if ANTHROPIC_API_KEY is set -- its presence routes `claude -p`
     to metered API billing instead of the Pro/Max subscription."""
@@ -60,6 +59,25 @@ def record_gemini_call(model: str | None = None) -> None:
         entry["model"] = model
     with open(GEMINI_USAGE_LOG, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def check_tier1_manager_ok(config: dict) -> dict:
+    """Refuses if tier_1_manager is disabled in config/tiers.yaml or if the
+    TRIAPI_NO_TIER1 environment variable is set (manual kill switch)."""
+    if os.environ.get("TRIAPI_NO_TIER1"):
+        log.warning("Tier 1 manager refused: TRIAPI_NO_TIER1 is set in the environment")
+        return {
+            "ok": False,
+            "reason": "TRIAPI_NO_TIER1 is set in the environment; Tier 1 manager is disabled.",
+        }
+    if not config.get("tier_1_manager", {}).get("enabled", True):
+        log.warning("Tier 1 manager refused: disabled in config/tiers.yaml")
+        return {
+            "ok": False,
+            "reason": "tier_1_manager is disabled in config/tiers.yaml",
+        }
+    log.debug("Tier 1 manager budget check passed")
+    return {"ok": True, "reason": "tier_1_manager enabled and no kill switch set"}
 
 
 def check_tier2_ok() -> dict:

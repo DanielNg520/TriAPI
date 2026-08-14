@@ -2322,3 +2322,30 @@ and `feedback_fallback_chains_go_down`, both still load-bearing.
   in this project. Every real bug found across three sessions (including
   today's crash) was found by reading actual logs/diffs, never by trusting
   a `success`/`dispatching` status field at face value.
+
+## -17. Tier 1 on/off switch, built and dispatched (2026-08-14)
+
+User asked for a small switch to turn off Tier 1 (Claude Code CLI) in the
+repair/escalation chain, explicitly NOT touching `planner.py`'s interactive
+planning step. Committed all outstanding session work first (`9ee78c8`) per
+explicit user request ("commit before you do this so it's reversible"), then
+planned + dispatched via `triapi plan`/`triapi dispatch` against TriAPI's own
+repo (run `20260814-102502-e9718b`), per the standing self-modification rule.
+Full detail in `PLAN.md`'s new Phase 20 — five real supervision findings
+(a broken `grep`/`ugrep` shell-function build_cmd masking 5 tier attempts,
+scope-creep `check_tier0_ok()` smuggled in and reverted, a dead `--no-tier1`
+flag reported as a false success by my own hastily-patched build_cmd, and
+doc-drift on both README.md/mapping.md), independently re-verified against
+real file content and live functional checks before trusting the run's own
+`completed` status. Read `PLAN.md` Phase 20 first, don't re-derive from here.
+
+**Result**: `config/tiers.yaml`'s `tier_1_manager.enabled` (default `true`),
+`triapi dispatch --no-tier1` / `TRIAPI_NO_TIER1` env var — both fully wired
+and functionally verified working.
+
+**Next user request, in progress**: write a standalone agent-guideline
+Markdown file (separate from this carryover) explaining how another agent
+should use `triapi` when Tier 1 is off — since the agent itself effectively
+becomes planner + supervisor + monitor in that mode (no Claude Code CLI
+repair tier to lean on). See that file once written for the actual content;
+don't duplicate it here.

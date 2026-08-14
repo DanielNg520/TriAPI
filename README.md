@@ -79,6 +79,7 @@ python3 scripts/cost_report.py --task-id fix-simd-crash
 
 - **Re-running the same `--task-id`** picks up wherever the failure count left off (`logs/state/<task_id>.json`). If you want a clean slate, either pick a new task-id or delete that state file.
 - **The budget guard can silently skip a tier** — if `ANTHROPIC_API_KEY` is set in your environment, Tier 1 is skipped entirely (printed as `[BUDGET GUARD] Tier 1 skipped: ...`) rather than risk metered billing. Unset it if you want Tier 1 available.
+- **Tier 1 has its own on/off switch, separate from the budget guard.** Set `tier_1_manager.enabled: false` in `config/tiers.yaml` (default `true`) to disable Tier 1 (Claude Code CLI) permanently for the repair/escalation chain, or pass `triapi dispatch --no-tier1` (or set `TRIAPI_NO_TIER1=1` yourself) to force it off for a single run without editing the yaml. When off, `run_task()` skips straight from Tier 3 (DeepSeek) to Tier 2 (Gemini), printed the same way as a budget-guard skip. This does **not** affect `triapi plan`'s interactive planning step (`scripts/planner.py`), which is a separate Claude Code CLI code path controlled by the unrelated `tier_1_planner` config block.
 - **Tier 4's model matters for speed.** The configured default (`qwen3-coder:30b-cc`) is slow if it's not actually running on your GPU — see the hardware notes at the bottom of this file. `--tier4-model <name>` lets you override it per-run (e.g. a smaller/faster model while iterating).
 
 ## Multi-file projects: `triapi plan` / `triapi dispatch`
@@ -111,6 +112,12 @@ triapi dispatch <run_id> --background
 ```
 
 The dispatch keeps running detached even if your SSH session drops.
+
+To disable Tier 1 for one run without touching `config/tiers.yaml`, add `--no-tier1`:
+
+```bash
+triapi dispatch <run_id> --no-tier1
+```
 
 ### 3. Check on it
 

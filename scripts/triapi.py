@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -62,7 +63,13 @@ def cmd_plan(prompt: str, project_dir: str) -> None:
     total_notional = 0.0
 
     while True:
-        turn = planner.plan_turn(message, project_dir, session_id)
+        try:
+            turn = planner.plan_turn(message, project_dir, session_id)
+        except Exception as exc:
+            print(f"Planning failed: could not reach the LLM backend ({exc}).")
+            state["status"] = "failed"
+            dispatcher.save_run(state)
+            return
         if turn["status"] != "ok":
             print(f"Planning failed: {turn.get('reason')}")
             state["status"] = "failed"
@@ -107,7 +114,13 @@ def cmd_plan(prompt: str, project_dir: str) -> None:
 
 def _breakdown_and_dispatch(state: dict) -> None:
     print("Breaking down plan into a checklist, one phase at a time (Tier 2 / Gemini)...")
-    breakdown_result = dispatcher.breakdown_plan(state)  # mutates and saves state incrementally
+    try:
+        breakdown_result = dispatcher.breakdown_plan(state)  # mutates and saves state incrementally
+    except Exception as exc:
+        print(f"Breakdown failed: could not reach the LLM backend ({exc}).")
+        state["status"] = "stopped_on_failure"
+        dispatcher.save_run(state)
+        return
     if breakdown_result["status"] != "ok":
         print(f"Breakdown failed: {breakdown_result.get('reason')}")
         # breakdown_plan() saves completed phases incrementally and resumes
@@ -127,7 +140,13 @@ def _breakdown_and_dispatch(state: dict) -> None:
         f"Dispatching one at a time...\n"
     )
 
-    state = dispatcher.dispatch(state)
+    try:
+        state = dispatcher.dispatch(state)
+    except Exception as exc:
+        print(f"Dispatching failed: could not reach the LLM backend ({exc}).")
+        state["status"] = "stopped_on_failure"
+        dispatcher.save_run(state)
+        return
 
     print(f"\nRun {state['run_id']} finished with status: {state['status']}")
     total_actual = 0.0
@@ -261,6 +280,7 @@ def main():
     p_dispatch = sub.add_parser("dispatch", help="execute an approved plan")
     p_dispatch.add_argument("run_id")
     p_dispatch.add_argument("--background", action="store_true", help="run detached, safe against SSH disconnects")
+    p_dispatch.add_argument("--no-tier1", action="store_true", help="force Tier 1 (Claude Code CLI) off for this run only, without editing config/tiers.yaml (sets TRIAPI_NO_TIER1=1)")
 
     p_status = sub.add_parser("status", help="show progress of a run")
     p_status.add_argument("run_id")
@@ -272,6 +292,8 @@ def main():
     if args.command == "plan":
         cmd_plan(args.prompt, args.project_dir)
     elif args.command == "dispatch":
+        if args.no_tier1:
+            os.environ["TRIAPI_NO_TIER1"] = "1"
         cmd_dispatch(args.run_id, args.background)
     elif args.command == "status":
         cmd_status(args.run_id)
