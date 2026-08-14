@@ -18,6 +18,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts import content_guard, edit_blocks
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
@@ -36,17 +37,28 @@ def build_stable_context(target_path: Path, context_blob: str = "") -> str:
     description references, see tier4_worker.build_context_blob) is equally
     stable across retries for the same item, so it belongs in this cached
     prefix too, not the volatile per-call user message.
+
+    target_path may not exist yet -- an item can be creating a new file
+    (e.g. a new ADR), not editing one. Found for real 2026-08-14: an
+    unconditional read_text() raised FileNotFoundError and crashed the
+    whole (potentially hours-long, unattended) dispatch run. Mirrors
+    tier1/tier2/tier4's own editing/new-file split.
     """
-    parts = [
-        f"You are a coding/writing assistant working on {target_path.name}. You will "
-        "be given the full contents of a file that fails to build/verify, followed by "
-        "the error. Respond with ONLY the complete, corrected file contents inside a "
-        "single fenced code block, using the language tag appropriate for this file "
-        "(or no tag for plain text/markdown) -- no explanation, no partial diffs.",
-    ]
+    editing = target_path.exists()
+    header = (
+        edit_blocks.build_edit_prompt_header(target_path.name) if editing else
+        f"You are a coding/writing assistant working on {target_path.name}. Output "
+        "ONLY the complete, corrected file contents inside a single fenced code "
+        "block, using the language tag appropriate for this file (or no tag for "
+        "plain text/markdown) -- no explanation."
+    )
+    parts = [header]
     if context_blob:
         parts.append(context_blob)
-    parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
+    if editing:
+        parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
+    else:
+        parts.append(f"{target_path.name} does not exist yet -- create it from scratch.")
     return "\n\n".join(parts)
 
 
@@ -101,27 +113,45 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
     stable_context = build_stable_context(target_path, context_blob)
     user_message = build_user_message(stderr)
 
-    resp = requests.post(
-        f"{tier3['endpoint']}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {secrets['deepseek_api_key']}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": stable_context},
-                {"role": "user", "content": user_message},
-            ],
-            "stream": False,
-        },
-        timeout=180,
-    )
     try:
+        resp = requests.post(
+            f"{tier3['endpoint']}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {secrets['deepseek_api_key']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": stable_context},
+                    {"role": "user", "content": user_message},
+                ],
+                "stream": False,
+            },
+            timeout=180,
+        )
         resp.raise_for_status()
-    except requests.HTTPError:
-        log.error("[%s] Tier 3 request failed: %s %s", task_id, resp.status_code, resp.text[:500])
-        raise
+    except requests.RequestException as e:
+        # Previously: the raw requests.post() call was fully unguarded, and
+        # the separate raise_for_status() catch re-raised after logging --
+        # both paths crashed the whole unattended dispatch process on any
+        # DeepSeek-side failure (found for real via the twin bug in
+        # tier2_escalate.py, 2026-08-13 -- same code shape, not yet
+        # triggered here but equally vulnerable). Now consistent with every
+        # other tier: return a normal error result so orchestrator falls
+        # through to human_handoff instead of taking the process down.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        text = getattr(getattr(e, "response", None), "text", "")[:500]
+        log.error("[%s] Tier 3 request failed: %s %s %s", task_id, e, status, text)
+        return {
+            "status": "error",
+            "reason": f"DeepSeek request failed: {e}",
+            "model": model_name,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        }
     data = resp.json()
 
     usage = data.get("usage", {})
@@ -151,7 +181,35 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
     )
 
     response_text = data["choices"][0]["message"]["content"]
-    fixed_code = extract_code(response_text)
+    if target_path.exists():
+        new_content, err = edit_blocks.apply_edit_blocks(target_path.read_text(), response_text)
+        if new_content is None:
+            log.warning("[%s] Tier 3 edit-block apply failed: %s", task_id, err)
+            return {
+                "status": "fix_rejected",
+                "reason": f"Could not apply proposed edit: {err}",
+                "model": model_name,
+                "cache_hit_tokens": cache_hit_tokens,
+                "cache_miss_tokens": cache_miss_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+            }
+        fixed_code = new_content
+    else:
+        fixed_code = extract_code(response_text)
+
+    guard = content_guard.check_write(task_id, target_path, fixed_code)
+    if not guard["ok"]:
+        return {
+            "status": "fix_rejected",
+            "reason": guard["reason"],
+            "model": model_name,
+            "cache_hit_tokens": cache_hit_tokens,
+            "cache_miss_tokens": cache_miss_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+        }
+
     target_path.write_text(fixed_code)
 
     return {

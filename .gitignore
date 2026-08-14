@@ -10,3 +10,4 @@ __pycache__/
 *.pyc
 .venv/
 samples/*/build/
+logs/rejected_writes/

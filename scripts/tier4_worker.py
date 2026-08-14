@@ -19,16 +19,33 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts import content_guard, edit_blocks
 from scripts.config_loader import load_tiers
 from scripts.state import clear_state, read_state, record_failure
 from scripts.tri_logging import get_logger
 
 log = get_logger("tier4")
+
+COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
+
+
+def log_cost(entry: dict) -> None:
+    """Tier 4 runs on local hardware (no per-token API bill), but the raw
+    token counts still matter -- they're the only record of how much work
+    the local model actually did, which is what scripts/cost_report.py
+    needs to compare against what the same work would have cost on a paid
+    tier. Mirrors the log_cost() shape used by tiers 1-3 (same file,
+    same fields where applicable) so the report script can aggregate all
+    four tiers with one code path."""
+    COST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(COST_LOG_PATH, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 CODE_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)\n(.*?)```", re.DOTALL)
 
@@ -65,23 +82,27 @@ def build_context_blob(paths: list[str], workdir: str, max_chars_per_file: int =
 
 
 def build_prompt(description: str, target_path: Path, last_stderr: str, context_blob: str = "") -> str:
-    parts = [
-        f"You are a coding/writing assistant working on {target_path.name}. Output "
-        "ONLY the complete, corrected file contents inside a single fenced code "
-        "block, using the language tag appropriate for this file (or no tag for "
-        "plain text/markdown) -- no explanation.",
-        f"Task: {description}",
-    ]
+    editing = target_path.exists()
+    if editing:
+        header = edit_blocks.build_edit_prompt_header(target_path.name)
+    else:
+        header = (
+            f"You are a coding/writing assistant working on {target_path.name}. Output "
+            "ONLY the complete, corrected file contents inside a single fenced code "
+            "block, using the language tag appropriate for this file (or no tag for "
+            "plain text/markdown) -- no explanation."
+        )
+    parts = [header, f"Task: {description}"]
     if context_blob:
         parts.append(context_blob)
-    if target_path.exists():
+    if editing:
         parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
     if last_stderr:
         parts.append(f"Previous build/verification error:\n```\n{last_stderr}\n```")
     return "\n\n".join(parts)
 
 
-def call_ollama(host: str, model: str, prompt: str) -> str:
+def call_ollama(host: str, model: str, prompt: str) -> dict:
     resp = requests.post(
         f"{host}/api/generate",
         json={"model": model, "prompt": prompt, "stream": False},
@@ -92,16 +113,37 @@ def call_ollama(host: str, model: str, prompt: str) -> str:
     except requests.HTTPError:
         log.error("Ollama request failed (model=%s): %s %s", model, resp.status_code, resp.text[:500])
         raise
-    return resp.json()["response"]
+    return resp.json()
 
 
 def run_build(build_cmd: str, workdir: str, timeout: int = 120) -> tuple[bool, str]:
-    result = subprocess.run(
-        build_cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
-    )
+    try:
+        result = subprocess.run(
+            build_cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
+        )
+    except subprocess.TimeoutExpired as e:
+        # A slow build_cmd (e.g. a test suite that cold-loads a large local
+        # model) must fail like any other build failure, not crash the
+        # whole unattended dispatch process -- found for real 2026-08-11:
+        # `./run_tests.sh` alone exceeded the 120s default and took down the
+        # entire dispatch run with an uncaught traceback, no escalation
+        # recorded, mid-run. Partial output captured before the timeout is
+        # preserved (e.g. e.stdout is bytes when text=True isn't honored on
+        # a timeout -- decode defensively) so the human_handoff/escalation
+        # path still shows what ran before it hung.
+        partial_out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        partial_err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        log.error("Build command timed out after %ds: %s", timeout, build_cmd)
+        return False, f"Command timed out after {timeout}s: {build_cmd}\n{partial_out}{partial_err}"
     ok = result.returncode == 0
     output = (result.stdout or "") + (result.stderr or "")
     return ok, output
+
+
+def _tier4_fail(task_id: str, threshold: int, reason: str) -> dict:
+    state = record_failure(task_id, reason)
+    status = "escalate" if state["consecutive_failures"] >= threshold else "build_failed"
+    return {"status": status, "consecutive_failures": state["consecutive_failures"], "stderr": reason}
 
 
 def run(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, model: str | None = None, context_blob: str = "") -> dict:
@@ -114,14 +156,54 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
 
     target_arg = Path(target)
     target_path = target_arg if target_arg.is_absolute() else Path(workdir) / target_arg
+    editing = target_path.exists()
 
     state = read_state(task_id)
     prompt = build_prompt(description, target_path, state.get("last_stderr", ""), context_blob)
 
     log.info("[%s] Tier 4 (Ollama/%s) drafting %s", task_id, model, target_path)
 
-    response_text = call_ollama(tier4["endpoint"], model, prompt)
-    code = extract_code(response_text)
+    try:
+        ollama_response = call_ollama(tier4["endpoint"], model, prompt)
+    except requests.RequestException as e:
+        # Ollama unreachable/down (connection refused, timeout, HTTP error --
+        # already logged inside call_ollama for the HTTPError case). Treat
+        # like a build failure so the existing consecutive-failure/escalation
+        # counter handles it, instead of an uncaught exception that crashes
+        # the whole (potentially hours-long, unattended) dispatch run.
+        log.error("[%s] Tier 4 request to Ollama failed: %s", task_id, e)
+        return _tier4_fail(task_id, threshold, str(e))
+
+    response_text = ollama_response["response"]
+    log_cost({
+        "timestamp": time.time(),
+        "tier": "tier_4",
+        "model": model,
+        "task_id": task_id,
+        # Ollama's own names for prompt/completion tokens -- kept as-is
+        # (not renamed to input_tokens/output_tokens) so a raw log line is
+        # traceable back to the Ollama API docs without a translation step.
+        "prompt_eval_count": ollama_response.get("prompt_eval_count", 0),
+        "eval_count": ollama_response.get("eval_count", 0),
+        "cost_usd": 0.0,  # local inference -- no per-token bill
+    })
+
+    if editing:
+        # Existing file: apply a targeted patch, never a full-file overwrite
+        # (see edit_blocks.py -- asking for the whole file back is what
+        # caused real, large, silent content loss on 2026-08-10).
+        new_content, err = edit_blocks.apply_edit_blocks(target_path.read_text(), response_text)
+        if new_content is None:
+            log.warning("[%s] Tier 4 edit-block apply failed: %s", task_id, err)
+            return _tier4_fail(task_id, threshold, f"Could not apply proposed edit: {err}")
+        code = new_content
+    else:
+        code = extract_code(response_text)
+
+    guard = content_guard.check_write(task_id, target_path, code)
+    if not guard["ok"]:
+        return _tier4_fail(task_id, threshold, guard["reason"])
+
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(code)
 

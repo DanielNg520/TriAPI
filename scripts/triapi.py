@@ -33,6 +33,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import dispatcher, planner, resource_guard
 from scripts.config_loader import load_resource_guard_services
+from scripts.cost_report import (
+    DEFAULT_ELECTRICITY_USD_PER_KWH,
+    DEFAULT_GPU_LIFETIME_YEARS,
+    DEFAULT_GPU_POWER_WATTS,
+    DEFAULT_GPU_PRICE_USD,
+    format_run_report,
+    load_entries,
+)
 from scripts.cost_report import report as cost_report
 from scripts.tri_logging import get_logger
 
@@ -102,7 +110,14 @@ def _breakdown_and_dispatch(state: dict) -> None:
     breakdown_result = dispatcher.breakdown_plan(state)  # mutates and saves state incrementally
     if breakdown_result["status"] != "ok":
         print(f"Breakdown failed: {breakdown_result.get('reason')}")
-        state["status"] = "failed"
+        # breakdown_plan() saves completed phases incrementally and resumes
+        # past them on re-entry, so a breakdown failure is not terminal --
+        # "failed" previously blocked `triapi dispatch <run_id>` from ever
+        # resuming (cmd_dispatch only accepts planned/dispatching/
+        # stopped_on_failure), forcing a hand-patch of the stored run JSON
+        # to retry a condition (e.g. a daily Gemini quota) that clears on
+        # its own. "stopped_on_failure" is already in that accepted set.
+        state["status"] = "stopped_on_failure"
         dispatcher.save_run(state)
         return
 
@@ -122,13 +137,45 @@ def _breakdown_and_dispatch(state: dict) -> None:
         print(f"  [{r['phase']}] {r['item']}: {r['status']} ({r['resolved_by']})")
     print(f"\nTotal actual spend across this run: ${total_actual:.6f}")
 
+    print()
+    print(format_run_report(
+        load_entries(state["run_id"]),
+        argparse.Namespace(
+            run_id=state["run_id"],
+            gpu_price=DEFAULT_GPU_PRICE_USD,
+            gpu_lifetime_years=DEFAULT_GPU_LIFETIME_YEARS,
+            gpu_power_watts=DEFAULT_GPU_POWER_WATTS,
+            electricity_rate=DEFAULT_ELECTRICITY_USD_PER_KWH,
+            gpu_hours=0.0,
+        ),
+    ))
+
     if state["status"] == "stopped_on_failure":
-        last = state["results"][-1]
-        print(
-            f"\nStopped: '{last['item']}' could not be resolved automatically. "
-            f"See logs/escalation_{last['task_id']}.md for details. Fix it manually, "
-            f"then resume with: triapi dispatch {state['run_id']}"
-        )
+        unresolved = [f for f in state.get("regression_flags", []) if not f["resolved"]]
+        if unresolved:
+            # Each flag bundles a LIST of regressed items (a single later
+            # item can revert several earlier ones at once), not one
+            # task_id/target directly on the flag -- found for real
+            # 2026-08-13, crashed here with KeyError the first time this
+            # code path actually fired against a real multi-item regression.
+            reg_ids = ', '.join(
+                f"{b['task_id']}({b['target']})"
+                for f in unresolved
+                for b in f["regressed_items"]
+            )
+            after_ids = ', '.join(str(f['after_task_id']) for f in unresolved)
+            print(
+                f"\nStopped: regression flag(s) on task(s): {reg_ids} triggered by {after_ids}. "
+                f"See logs/escalation_{unresolved[0]['after_task_id']}-regression-check.md. "
+                f"Fix it manually, then resume with: triapi dispatch {state['run_id']}"
+            )
+        else:
+            last = state["results"][-1]
+            print(
+                f"\nStopped: '{last['item']}' could not be resolved automatically. "
+                f"See logs/escalation_{last['task_id']}.md for details. Fix it manually, "
+                f"then resume with: triapi dispatch {state['run_id']}"
+            )
 
 
 def cmd_dispatch(run_id: str, background: bool) -> None:
@@ -184,6 +231,12 @@ def cmd_status(run_id: str) -> None:
         print(f"Progress: {len(state['results'])}/{total_items} step(s) completed")
     for r in state["results"]:
         print(f"  [{r['phase']}] {r['item']}: {r['status']} ({r['resolved_by']})")
+    unresolved = [f for f in state.get("regression_flags", []) if not f["resolved"]]
+    if unresolved:
+        print(f"\n{len(unresolved)} unresolved regression flag(s):")
+        for f in unresolved:
+            for b in f["regressed_items"]:
+                print(f"  {b['task_id']}({b['target']}) => logs/escalation_{f['after_task_id']}-regression-check.md")
 
 
 def cmd_list() -> None:

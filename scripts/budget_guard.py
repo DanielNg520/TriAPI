@@ -53,10 +53,13 @@ def _read_gemini_usage_window(window_seconds: float) -> int:
     return count
 
 
-def record_gemini_call() -> None:
+def record_gemini_call(model: str | None = None) -> None:
     GEMINI_USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"timestamp": time.time()}
+    if model:
+        entry["model"] = model
     with open(GEMINI_USAGE_LOG, "a") as f:
-        f.write(json.dumps({"timestamp": time.time()}) + "\n")
+        f.write(json.dumps(entry) + "\n")
 
 
 def check_tier2_ok() -> dict:

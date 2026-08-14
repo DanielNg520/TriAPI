@@ -18,8 +18,26 @@ tier_2_manager:
   endpoint: "https://generativelanguage.googleapis.com"
   models:
     flash: "gemini-3.5-flash"
-    pro: "gemini-3.5-pro"
+    pro: "gemini-2.5-pro"  # was "gemini-3.5-pro", confirmed 2026-08-10 via GET /v1beta/models that no such model exists
   default_model: flash
+  # Tried in order whenever the current model's free-tier quota is
+  # exhausted for the day -- confirmed live 2026-08-10 that Google buckets
+  # this per model (error body: quotaId
+  # "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue 20 for
+  # gemini-3.5-flash specifically), so a different model has its own
+  # separate, unexhausted allowance. Per user direction: falls DOWN to
+  # older/lighter models, never up to a newer one -- a newer model (e.g.
+  # gemini-3.6-flash, version-wise above the default) is left for a
+  # deliberate manual choice, not silently substituted by this reactive
+  # chain. List verified against the real available models (GET
+  # /v1beta/models) on 2026-08-10, flash-tier only (no -preview/-image/-tts
+  # variants, no "-latest" aliases since their underlying quota bucket is
+  # ambiguous).
+  fallback_chain:
+    - "gemini-3.5-flash"
+    - "gemini-3.1-flash-lite"
+    - "gemini-2.5-flash"
+    - "gemini-2.5-flash-lite"
   role: "task orchestration, context isolation, high-level architectural correction"
   automatable: true
   pricing:

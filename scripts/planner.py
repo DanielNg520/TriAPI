@@ -95,9 +95,14 @@ def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
     if session_id:
         cmd += ["--resume", session_id]
 
-    result = subprocess.run(
-        cmd, capture_output=True, text=True, timeout=300, cwd=project_dir, stdin=subprocess.DEVNULL
-    )
+    timeout_s = 600
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s, cwd=project_dir, stdin=subprocess.DEVNULL
+        )
+    except subprocess.TimeoutExpired:
+        log.error("Planning turn timed out after %ds (project_dir=%s)", timeout_s, project_dir)
+        return {"status": "error", "reason": f"Planning turn timed out after {timeout_s}s"}
     if result.returncode != 0:
         log.error("Planning turn failed (returncode=%d): %s", result.returncode, result.stderr.strip()[:500])
         return {"status": "error", "reason": result.stderr.strip()}

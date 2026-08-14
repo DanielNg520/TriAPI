@@ -75,7 +75,14 @@ def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
     whatever an earlier item changed, not in this verification command
     itself, so this goes straight to human_handoff on the first failure."""
     log.info("[%s] verify_task starting: %s", task_id, build_cmd)
-    ok, output = run_build(build_cmd, workdir)
+    # A verify_only step is a single one-shot check with no per-tier-attempt
+    # budget to protect (unlike a draft/build loop that retries repeatedly),
+    # so it can afford a longer timeout than run_build()'s 120s default --
+    # e.g. a project's full test suite can legitimately take a few minutes
+    # if it cold-loads a large local model. Found for real 2026-08-11: the
+    # 120s default made `./run_tests.sh` time out and crash the whole
+    # dispatch process (see tier4_worker.run_build()'s TimeoutExpired fix).
+    ok, output = run_build(build_cmd, workdir, timeout=300)
     cost_rep = report(task_id)
     if ok:
         clear_state(task_id)
@@ -120,7 +127,9 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
 
     if resolved_by is None:
         # Tier 3: DeepSeek
-        tier3_escalate(task_id, resolved_target, context_blob=context_blob)
+        result3 = tier3_escalate(task_id, resolved_target, context_blob=context_blob)
+        if result3.get("status") == "fix_rejected":
+            log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
         if _rebuild_after_patch(task_id, build_cmd, workdir):
             resolved_by = "tier_3"
 
@@ -128,7 +137,9 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # Tier 1: Claude Code CLI (budget-guarded)
         guard1 = check_tier1_ok()
         if guard1["ok"]:
-            tier1_escalate(task_id, resolved_target, context_blob=context_blob)
+            result1 = tier1_escalate(task_id, resolved_target, context_blob=context_blob)
+            if result1.get("status") == "fix_rejected":
+                log.warning("[%s] Tier 1 fix rejected: %s", task_id, result1.get("reason"))
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_1"
         else:
@@ -138,7 +149,9 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # Tier 2: Gemini API (budget-guarded)
         guard2 = check_tier2_ok()
         if guard2["ok"]:
-            tier2_escalate(task_id, resolved_target, context_blob=context_blob)
+            result2 = tier2_escalate(task_id, resolved_target, context_blob=context_blob)
+            if result2.get("status") == "fix_rejected":
+                log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_2"
         else:

@@ -19,7 +19,8 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.budget_guard import check_tier2_ok, record_gemini_call
+from scripts import content_guard, edit_blocks, gemini_fallback
+from scripts.budget_guard import check_tier2_ok
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
@@ -30,21 +31,19 @@ log = get_logger("tier2")
 
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
-SYSTEM_INSTRUCTION = (
-    "You are a coding/writing assistant. Given a file's contents and a "
-    "build/verification error, respond with ONLY the complete, corrected file "
-    "contents inside a single fenced code block, using the language tag "
-    "appropriate for the file (or no tag for plain text/markdown) -- no "
-    "explanation, no partial diffs."
-)
-
-
 def build_user_content(target_path: Path, stderr: str, context_blob: str = "") -> str:
     parts = []
     if context_blob:
         parts.append(context_blob)
+    # target_path may not exist yet (a new file, e.g. a new ADR) -- see
+    # tier1_escalate.py's build_prompt for the same fix and why.
+    if target_path.exists():
+        current = f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
+    else:
+        current = (f"{target_path.name} does not exist yet -- output ONLY the complete "
+                   "new file contents inside a single fenced code block, no explanation.\n\n")
     parts.append(
-        f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
+        f"{current}"
         f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
     )
     return "\n\n".join(parts)
@@ -66,31 +65,58 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
     tier2 = config["tier_2_manager"]
     secrets = load_secrets()
 
-    model_key = model or tier2["default_model"]
-    model_name = tier2["models"][model_key]
+    default_model = tier2["models"][tier2["default_model"]]
+    models = [tier2["models"][model]] if model else (tier2.get("fallback_chain") or [default_model])
 
     target_path = Path(target)
+    editing = target_path.exists()
     state = read_state(task_id)
     stderr = state.get("last_stderr", "")
     user_content = build_user_content(target_path, stderr, context_blob)
-
-    log.info("[%s] Tier 2 (Gemini/%s) escalating for %s", task_id, model_name, target_path)
-
-    resp = requests.post(
-        f"{tier2['endpoint']}/v1beta/models/{model_name}:generateContent",
-        params={"key": secrets["google_ai_studio_api_key"]},
-        json={
-            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-            "contents": [{"role": "user", "parts": [{"text": user_content}]}],
-        },
-        timeout=180,
+    system_instruction = (
+        edit_blocks.build_edit_prompt_header(target_path.name) if editing else
+        f"You are a coding/writing assistant working on {target_path.name}. Output "
+        "ONLY the complete, corrected file contents inside a single fenced code "
+        "block, using the language tag appropriate for this file (or no tag for "
+        "plain text/markdown) -- no explanation."
     )
-    record_gemini_call()
+
+    log.info("[%s] Tier 2 (Gemini/%s) escalating for %s", task_id, models[0], target_path)
+
+    try:
+        resp, model_name = gemini_fallback.post_generate_content(
+            requests.post,
+            tier2["endpoint"],
+            secrets["google_ai_studio_api_key"],
+            {
+                "systemInstruction": {"parts": [{"text": system_instruction}]},
+                "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+            },
+            models,
+            timeout=180,
+        )
+    except requests.RequestException as e:
+        # A raw connection/timeout failure from post_generate_content's own
+        # requests.post() call -- previously uncaught here, crashing the
+        # whole unattended dispatch process. Same fix as the raise_for_status
+        # case below: treat it as an ordinary escalation failure.
+        log.error("[%s] Tier 2 request failed: %s", task_id, e)
+        return {"status": "error", "reason": f"Gemini request failed: {e}"}
+    if model_name != models[0]:
+        log.info("[%s] Tier 2 used fallback model %s (default %s exhausted for today)", task_id, model_name, models[0])
     try:
         resp.raise_for_status()
-    except requests.HTTPError:
+    except requests.HTTPError as e:
+        # Previously re-raised after logging -- propagated uncaught through
+        # orchestrator.run_task()/dispatcher.dispatch(), crashing the whole
+        # unattended dispatch process on a transient Gemini-side error (a
+        # real 503 killed a run 2026-08-13). Tier 1/Tier 4 already treat
+        # their own request failures as an ordinary escalation failure
+        # instead of a crash; Tier 2 didn't. Now consistent: return a
+        # normal error result so orchestrator falls through to human_handoff
+        # like any other failed tier, instead of taking the process down.
         log.error("[%s] Tier 2 request failed: %s %s", task_id, resp.status_code, resp.text[:500])
-        raise
+        return {"status": "error", "reason": f"Gemini request failed: {e}"}
     data = resp.json()
 
     usage = data.get("usageMetadata", {})
@@ -118,7 +144,33 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
     )
 
     response_text = data["candidates"][0]["content"]["parts"][0]["text"]
-    fixed_code = extract_code(response_text)
+    if editing:
+        new_content, err = edit_blocks.apply_edit_blocks(target_path.read_text(), response_text)
+        if new_content is None:
+            log.warning("[%s] Tier 2 edit-block apply failed: %s", task_id, err)
+            return {
+                "status": "fix_rejected",
+                "reason": f"Could not apply proposed edit: {err}",
+                "model": model_name,
+                "prompt_tokens": prompt_tokens,
+                "cached_tokens": cached_tokens,
+                "output_tokens": output_tokens,
+            }
+        fixed_code = new_content
+    else:
+        fixed_code = extract_code(response_text)
+
+    guard = content_guard.check_write(task_id, target_path, fixed_code)
+    if not guard["ok"]:
+        return {
+            "status": "fix_rejected",
+            "reason": guard["reason"],
+            "model": model_name,
+            "prompt_tokens": prompt_tokens,
+            "cached_tokens": cached_tokens,
+            "output_tokens": output_tokens,
+        }
+
     target_path.write_text(fixed_code)
 
     return {
