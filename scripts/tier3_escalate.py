@@ -19,6 +19,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks
+from scripts import lessons
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
@@ -30,7 +31,12 @@ log = get_logger("tier3")
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
 
-def build_stable_context(target_path: Path, context_blob: str = "") -> str:
+def build_stable_context(
+    target_path: Path,
+    context_blob: str = "",
+    current_contents: str | None = None,
+    description: str = "",
+) -> str:
     """Deterministic, byte-stable across calls for the same file contents.
     No timestamps or run-specific data allowed here -- that's what kills
     the prefix-cache hit rate. context_blob (other repo files a task
@@ -43,10 +49,24 @@ def build_stable_context(target_path: Path, context_blob: str = "") -> str:
     unconditional read_text() raised FileNotFoundError and crashed the
     whole (potentially hours-long, unattended) dispatch run. Mirrors
     tier1/tier2/tier4's own editing/new-file split.
+
+    current_contents lets the caller pass the exact file snapshot that was
+    shown to the model; if omitted, the file is read here. Callers should
+    pass the same snapshot when later applying edit blocks so the SEARCH text
+    the model saw is guaranteed to match the file being edited (avoids races
+    where the file changes between prompt construction and response handling).
     """
-    editing = target_path.exists()
+    if current_contents is None:
+        editing = target_path.exists()
+    else:
+        editing = True
+    lessons_block = ""
+    if editing:
+        lessons_block = lessons.format_lessons_for_prompt(
+            lessons.select_relevant(target_path.name, description)
+        )
     header = (
-        edit_blocks.build_edit_prompt_header(target_path.name) if editing else
+        edit_blocks.build_edit_prompt_header(target_path.name, lessons_block=lessons_block) if editing else
         f"You are a coding/writing assistant working on {target_path.name}. Output "
         "ONLY the complete, corrected file contents inside a single fenced code "
         "block, using the language tag appropriate for this file (or no tag for "
@@ -56,13 +76,19 @@ def build_stable_context(target_path: Path, context_blob: str = "") -> str:
     if context_blob:
         parts.append(context_blob)
     if editing:
-        parts.append(f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```")
+        current = current_contents if current_contents is not None else target_path.read_text()
+        parts.append(f"Current contents of {target_path.name}:\n```\n{current}\n```")
     else:
         parts.append(f"{target_path.name} does not exist yet -- create it from scratch.")
     return "\n\n".join(parts)
 
 
-def build_user_message(stderr: str) -> str:
+def build_user_message(stderr: str, revision_note: str = "") -> str:
+    if revision_note:
+        return (
+            "The current file already passes its build/verification. Improve only the "
+            f"following quality issues without regressing behavior: {revision_note}"
+        )
     return f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
 
 
@@ -95,7 +121,14 @@ def log_cost(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def escalate(task_id: str, target: str, model: str | None = None, context_blob: str = "") -> dict:
+def escalate(
+    task_id: str,
+    target: str,
+    model: str | None = None,
+    context_blob: str = "",
+    revision_note: str = "",
+    description: str = "",
+) -> dict:
     config = load_tiers()
     tier3 = config["tier_3_debugger"]
     secrets = load_secrets()
@@ -110,8 +143,18 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
 
     log.info("[%s] Tier 3 (DeepSeek/%s) escalating for %s", task_id, model_name, target_path)
 
-    stable_context = build_stable_context(target_path, context_blob)
-    user_message = build_user_message(stderr)
+    # Snapshot the file once and reuse the same bytes for the prompt and the
+    # later edit-block application. Re-checking existence or re-reading after
+    # the API call would let a concurrent change desync the model's SEARCH
+    # blocks from the file we apply them to.
+    current_contents = target_path.read_text() if target_path.exists() else None
+    stable_context = build_stable_context(
+        target_path,
+        context_blob,
+        current_contents=current_contents,
+        description=description,
+    )
+    user_message = build_user_message(stderr, revision_note)
 
     try:
         resp = requests.post(
@@ -181,8 +224,8 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
     )
 
     response_text = data["choices"][0]["message"]["content"]
-    if target_path.exists():
-        new_content, err = edit_blocks.apply_edit_blocks(target_path.read_text(), response_text)
+    if current_contents is not None:
+        new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
         if new_content is None:
             log.warning("[%s] Tier 3 edit-block apply failed: %s", task_id, err)
             return {
@@ -210,6 +253,7 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
             "cost_usd": cost_usd,
         }
 
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(fixed_code)
 
     return {

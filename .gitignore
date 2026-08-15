@@ -11,3 +11,5 @@ __pycache__/
 .venv/
 samples/*/build/
 logs/rejected_writes/
+logs/triapi_bugs/*
+!logs/triapi_bugs/.gitkeep

@@ -52,11 +52,14 @@ EDIT_INSTRUCTION = (
 )
 
 
-def build_edit_prompt_header(target_name: str) -> str:
-    return (
+def build_edit_prompt_header(target_name: str, lessons_block: str = "") -> str:
+    header = (
         f"You are a coding/writing assistant working on {target_name}. "
         + EDIT_INSTRUCTION
     )
+    if lessons_block:
+        header += "\n\n" + lessons_block
+    return header
 
 
 def apply_edit_blocks(original: str, response_text: str) -> tuple[str | None, str]:

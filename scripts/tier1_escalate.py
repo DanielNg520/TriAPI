@@ -25,14 +25,20 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks
+from scripts import content_guard, edit_blocks, lessons
 from scripts.budget_guard import check_tier1_ok
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
 
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
-def build_prompt(target_path: Path, stderr: str, context_blob: str = "") -> str:
+def build_prompt(
+    target_path: Path,
+    stderr: str,
+    context_blob: str = "",
+    revision_note: str = "",
+    current_contents: str | None = None,
+) -> str:
     parts = []
     if context_blob:
         parts.append(context_blob)
@@ -43,15 +49,21 @@ def build_prompt(target_path: Path, stderr: str, context_blob: str = "") -> str:
     # tier4_worker.build_prompt's own editing/new-file split -- SEARCH/
     # REPLACE blocks (edit_blocks.py) only make sense against existing
     # content, so a new file must ask for the full contents instead.
-    if target_path.exists():
-        current = f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
+    if current_contents is None and target_path.exists():
+        current_contents = target_path.read_text()
+    if current_contents is not None:
+        current = f"Current contents of {target_path.name}:\n```\n{current_contents}\n```\n\n"
     else:
         current = (f"{target_path.name} does not exist yet -- output ONLY the complete "
                    "new file contents inside a single fenced code block, no explanation.\n\n")
-    parts.append(
-        f"{current}"
-        f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
-    )
+    if revision_note:
+        instruction = (
+            "The current file already passes its build/verification. Improve only the "
+            f"following quality issues without regressing behavior: {revision_note}"
+        )
+    else:
+        instruction = f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
+    parts.append(f"{current}{instruction}")
     return "\n\n".join(parts)
 
 
@@ -61,23 +73,38 @@ def log_cost(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def escalate(task_id: str, target: str, context_blob: str = "") -> dict:
+def escalate(
+    task_id: str,
+    target: str,
+    context_blob: str = "",
+    revision_note: str = "",
+    description: str = "",
+) -> dict:
     guard = check_tier1_ok()
     if not guard["ok"]:
         return {"status": "skipped", "reason": guard["reason"]}
 
     target_path = Path(target)
-    editing = target_path.exists()
+    current_contents = target_path.read_text() if target_path.exists() else None
+    editing = current_contents is not None
     state = read_state(task_id)
     stderr = state.get("last_stderr", "")
-    prompt = build_prompt(target_path, stderr, context_blob)
-    system_prompt = (
-        edit_blocks.build_edit_prompt_header(target_path.name) if editing else
-        f"You are a coding/writing assistant working on {target_path.name}. Output "
-        "ONLY the complete, corrected file contents inside a single fenced code "
-        "block, using the language tag appropriate for this file (or no tag for "
-        "plain text/markdown) -- no explanation."
+    prompt = build_prompt(
+        target_path,
+        stderr,
+        context_blob,
+        revision_note,
+        current_contents=current_contents,
     )
+    if editing:
+        selected = lessons.select_relevant(target_path.name, description)
+        lessons_block = lessons.format_lessons_for_prompt(selected)
+        system_prompt = edit_blocks.build_edit_prompt_header(target_path.name, lessons_block=lessons_block)
+    else:
+        system_prompt = f"You are a coding/writing assistant working on {target_path.name}. Output " \
+            "ONLY the complete, corrected file contents inside a single fenced code " \
+            "block, using the language tag appropriate for this file (or no tag for " \
+            "plain text/markdown) -- no explanation."
 
     # `prompt` (target file contents + context_blob, up to 20K chars/file --
     # tier4_worker.build_context_blob()'s own cap -- times however many
@@ -134,7 +161,7 @@ def escalate(task_id: str, target: str, context_blob: str = "") -> dict:
     )
 
     if editing:
-        new_content, err = edit_blocks.apply_edit_blocks(target_path.read_text(), data["result"])
+        new_content, err = edit_blocks.apply_edit_blocks(current_contents, data["result"])
         if new_content is None:
             return {
                 "status": "fix_rejected",
@@ -153,6 +180,7 @@ def escalate(task_id: str, target: str, context_blob: str = "") -> dict:
             "notional_cost_usd": data.get("total_cost_usd", 0.0),
         }
 
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(fixed_code)
 
     return {

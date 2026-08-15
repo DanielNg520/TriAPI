@@ -161,7 +161,7 @@ def _tier_tokens(entry: dict) -> tuple[int, int]:
     escalate script uses its own upstream API's vocabulary -- see this
     file's docstring)."""
     tier = entry.get("tier")
-    if tier == "tier_1":
+    if tier in ("tier_1", "critique"):
         input_tok = (
             entry.get("input_tokens", 0)
             + entry.get("cache_creation_input_tokens", 0)

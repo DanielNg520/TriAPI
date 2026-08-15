@@ -26,26 +26,39 @@ from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
 from scripts.tri_logging import get_logger
+from scripts import lessons
 
 log = get_logger("tier2")
 
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
-def build_user_content(target_path: Path, stderr: str, context_blob: str = "") -> str:
+def build_user_content(
+    target_path: Path,
+    stderr: str,
+    context_blob: str = "",
+    revision_note: str = "",
+    current_contents: str | None = None,
+) -> str:
     parts = []
     if context_blob:
         parts.append(context_blob)
     # target_path may not exist yet (a new file, e.g. a new ADR) -- see
     # tier1_escalate.py's build_prompt for the same fix and why.
-    if target_path.exists():
-        current = f"Current contents of {target_path.name}:\n```\n{target_path.read_text()}\n```\n\n"
+    if current_contents is None and target_path.exists():
+        current_contents = target_path.read_text()
+    if current_contents is not None:
+        current = f"Current contents of {target_path.name}:\n```\n{current_contents}\n```\n\n"
     else:
         current = (f"{target_path.name} does not exist yet -- output ONLY the complete "
                    "new file contents inside a single fenced code block, no explanation.\n\n")
-    parts.append(
-        f"{current}"
-        f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
-    )
+    if revision_note:
+        instruction = (
+            "The current file already passes its build/verification. Improve only the "
+            f"following quality issues without regressing behavior: {revision_note}"
+        )
+    else:
+        instruction = f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
+    parts.append(f"{current}{instruction}")
     return "\n\n".join(parts)
 
 
@@ -55,7 +68,14 @@ def log_cost(entry: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-def escalate(task_id: str, target: str, model: str | None = None, context_blob: str = "") -> dict:
+def escalate(
+    task_id: str,
+    target: str,
+    model: str | None = None,
+    context_blob: str = "",
+    revision_note: str = "",
+    description: str = "",
+) -> dict:
     guard = check_tier2_ok()
     if not guard["ok"]:
         log.warning("[%s] Tier 2 skipped: %s", task_id, guard["reason"])
@@ -69,12 +89,24 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
     models = [tier2["models"][model]] if model else (tier2.get("fallback_chain") or [default_model])
 
     target_path = Path(target)
-    editing = target_path.exists()
+    current_contents = target_path.read_text() if target_path.exists() else None
+    editing = current_contents is not None
     state = read_state(task_id)
     stderr = state.get("last_stderr", "")
-    user_content = build_user_content(target_path, stderr, context_blob)
+    user_content = build_user_content(
+        target_path,
+        stderr,
+        context_blob,
+        revision_note,
+        current_contents=current_contents,
+    )
     system_instruction = (
-        edit_blocks.build_edit_prompt_header(target_path.name) if editing else
+        edit_blocks.build_edit_prompt_header(
+            target_path.name,
+            lessons_block=lessons.format_lessons_for_prompt(
+                lessons.select_relevant(target_path.name, description)
+            ),
+        ) if editing else
         f"You are a coding/writing assistant working on {target_path.name}. Output "
         "ONLY the complete, corrected file contents inside a single fenced code "
         "block, using the language tag appropriate for this file (or no tag for "
@@ -145,7 +177,7 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
 
     response_text = data["candidates"][0]["content"]["parts"][0]["text"]
     if editing:
-        new_content, err = edit_blocks.apply_edit_blocks(target_path.read_text(), response_text)
+        new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
         if new_content is None:
             log.warning("[%s] Tier 2 edit-block apply failed: %s", task_id, err)
             return {
@@ -171,6 +203,7 @@ def escalate(task_id: str, target: str, model: str | None = None, context_blob: 
             "output_tokens": output_tokens,
         }
 
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(fixed_code)
 
     return {

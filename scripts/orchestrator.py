@@ -9,6 +9,7 @@ across process invocations, matching how Tier 4 is expected to run.
 """
 
 import argparse
+import difflib
 import json
 import sys
 import time
@@ -26,6 +27,8 @@ from scripts.tier4_worker import build_context_blob
 from scripts.tier4_worker import run as tier4_run
 from scripts.tier4_worker import run_build
 from scripts.tri_logging import get_logger
+from scripts import critique
+from scripts import lessons
 
 log = get_logger("orchestrator")
 
@@ -43,7 +46,123 @@ def _rebuild_after_patch(task_id: str, build_cmd: str, workdir: str) -> bool:
     return ok
 
 
-def human_handoff(task_id: str, reason: str, detail: str = "") -> None:
+def _read_target_text(path: str) -> str:
+    try:
+        return Path(path).read_text()
+    except Exception:
+        return ""
+
+
+def _critique_and_maybe_revise(task_id: str, resolved_target: str, description: str,
+                                tier_name: str, escalate_fn, build_cmd: str, workdir: str,
+                                context_blob: str, config: dict, before_content: str) -> None:
+    """Advisory diff-quality critique after a Tier 3/1/2 fix already passed
+    rebuild. Never changes resolved_by / never calls human_handoff / never
+    forces fall-through to the next tier. On a below-threshold score, makes
+    at most one revision pass with critique feedback folded into
+    revision_note; reverts if that revision breaks the build."""
+    critique_cfg = config.get("critique", {})
+    if not critique_cfg.get("enabled", False):
+        return
+    if tier_name not in critique_cfg.get("applies_to_tiers", []):
+        return
+    if critique_cfg.get("critic", "tier_1") != "tier_1":
+        log.warning("[%s] Unsupported critique critic %r; skipping", task_id, critique_cfg.get("critic"))
+        return
+    try:
+        max_revision_attempts = int(critique_cfg.get("max_revision_attempts", 1))
+        threshold = int(critique_cfg.get("score_threshold", 7))
+    except (TypeError, ValueError):
+        log.warning("[%s] Invalid critique numeric configuration; skipping critique", task_id)
+        return
+    if max_revision_attempts < 1:
+        return
+
+    after_content = _read_target_text(resolved_target)
+    diff_text = "".join(
+        difflib.unified_diff(
+            before_content.splitlines(keepends=True),
+            after_content.splitlines(keepends=True),
+            fromfile=resolved_target,
+            tofile=resolved_target,
+        )
+    )
+    if not diff_text.strip():
+        return
+
+    try:
+        result = critique.critique_diff(
+            task_id,
+            Path(resolved_target).name,
+            description,
+            diff_text,
+            tier_name,
+            score_threshold=threshold,
+        )
+    except Exception as exc:
+        log.warning("[%s] Critique failed unexpectedly for %s: %s", task_id, tier_name, exc)
+        return
+    if result.get("status") != "ok":
+        level = log.warning if result.get("status") == "error" else log.info
+        level("[%s] Critique %s for %s: %s", task_id, result.get("status"), tier_name, result.get("reason"))
+        return
+
+    try:
+        score = int(result.get("score"))
+    except (TypeError, ValueError):
+        log.warning("[%s] Critique returned an invalid score; keeping passing fix", task_id)
+        return
+    issues = result.get("issues") or []
+    if score >= threshold:
+        log.info("[%s] Critique passed (score=%s)", task_id, score)
+        return
+    if not issues:
+        log.warning(
+            "[%s] Critique scored %s below threshold but supplied no actionable issues; "
+            "keeping original passing fix",
+            task_id,
+            score,
+        )
+        return
+
+    log.warning(
+        "[%s] Critique flagged %s's fix (score=%s/10): %s -- attempting one revision pass",
+        task_id, tier_name, score, issues,
+    )
+    pre_revision_content = after_content
+    rev = escalate_fn(
+        task_id,
+        resolved_target,
+        context_blob=context_blob,
+        revision_note="; ".join(str(i) for i in issues),
+        description=description,
+    )
+    if rev.get("status") != "fix_applied":
+        log.warning(
+            "[%s] Critique revision attempt failed (%s) -- kept original passing fix",
+            task_id, rev.get("reason") or rev.get("status"),
+        )
+        return
+
+    ok, _output = run_build(build_cmd, workdir)
+    if not ok:
+        Path(resolved_target).write_text(pre_revision_content)
+        log.warning(
+            "[%s] Critique revision broke the build -- reverted to pre-revision fix, kept unresolved critique warning",
+            task_id,
+        )
+        return
+
+    log.info("[%s] Critique revision applied and build still passes", task_id)
+
+
+def human_handoff(
+    task_id: str,
+    reason: str,
+    detail: str = "",
+    *,
+    component: str = "",
+) -> None:
     """Writes a human-handoff record. Public and reusable by any dispatcher
     (not just the file-fix chain below) that needs to report an unresolved
     item -- e.g. dispatcher.py's git steps use this too."""
@@ -60,6 +179,17 @@ def human_handoff(task_id: str, reason: str, detail: str = "") -> None:
         f"This task could not be resolved automatically. Review manually -- e.g. "
         f"in Antigravity or a normal editor.\n"
     )
+    try:
+        lessons.add_lesson(
+            bug_description=f"Task '{task_id}' needs human review",
+            what_went_wrong=reason,
+            fix_description="(unresolved — needs human review; see " + str(summary_path) + ")",
+            category="unresolved_pattern",
+            component=component or task_id,
+            tags=["human_handoff"],
+        )
+    except Exception as exc:
+        log.warning("[%s] Could not record handoff lesson: %s", task_id, exc)
     print(f"[HUMAN HANDOFF] Task '{task_id}' needs manual review: {reason}")
     print(f"[HUMAN HANDOFF] See {summary_path}")
     log.warning("[%s] Human handoff: %s", task_id, reason)
@@ -116,33 +246,54 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
 
     # Tier 4: draft + build loop, until success or escalate.
     while True:
-        result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
+        try:
+            result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
+        except Exception as e:
+            # An exception here (e.g. Ollama connection/read timeout) shouldn't
+            # crash the whole dispatch or trigger an endless retry loop. Record
+            # the failure so later tiers have context, then escalate.
+            log.warning("[%s] Tier 4 raised %s; escalating", task_id, e)
+            record_failure(task_id, str(e))
+            break
         log.info("[%s] Tier 4 attempt: %s (consecutive_failures=%s)", task_id, result["status"], result.get("consecutive_failures"))
         if result["status"] == "success":
             resolved_by = "tier_4"
             break
-        if result["status"] == "escalate":
+        if result["status"] != "build_failed":
+            # Covers "escalate" as well as unexpected statuses returned by
+            # tier4_run (e.g. "error" from a timed-out Ollama request). Only
+            # "build_failed" should loop around for another Tier 4 attempt.
+            log.warning("[%s] Tier 4 returned status %s; escalating", task_id, result["status"])
             break
-        # status == "build_failed": loop again (another Tier 4 attempt)
 
     if resolved_by is None:
         # Tier 3: DeepSeek
-        result3 = tier3_escalate(task_id, resolved_target, context_blob=context_blob)
+        before_content = _read_target_text(resolved_target)
+        result3 = tier3_escalate(
+            task_id, resolved_target, context_blob=context_blob, description=description
+        )
         if result3.get("status") == "fix_rejected":
             log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
         if _rebuild_after_patch(task_id, build_cmd, workdir):
             resolved_by = "tier_3"
+            _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
+                                        tier3_escalate, build_cmd, workdir, context_blob, config, before_content)
 
     if resolved_by is None:
         # Tier 1: Claude Code CLI (budget-guarded)
         guard1 = check_tier1_ok()
         guard1m = check_tier1_manager_ok(config)
         if guard1["ok"] and guard1m["ok"]:
-            result1 = tier1_escalate(task_id, resolved_target, context_blob=context_blob)
+            before_content = _read_target_text(resolved_target)
+            result1 = tier1_escalate(
+                task_id, resolved_target, context_blob=context_blob, description=description
+            )
             if result1.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 1 fix rejected: %s", task_id, result1.get("reason"))
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_1"
+                _critique_and_maybe_revise(task_id, resolved_target, description, "tier_1",
+                                            tier1_escalate, build_cmd, workdir, context_blob, config, before_content)
         elif not guard1["ok"]:
             print(f"[BUDGET GUARD] Tier 1 skipped: {guard1['reason']}")
         else:
@@ -152,11 +303,16 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # Tier 2: Gemini API (budget-guarded)
         guard2 = check_tier2_ok()
         if guard2["ok"]:
-            result2 = tier2_escalate(task_id, resolved_target, context_blob=context_blob)
+            before_content = _read_target_text(resolved_target)
+            result2 = tier2_escalate(
+                task_id, resolved_target, context_blob=context_blob, description=description
+            )
             if result2.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
             if _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_2"
+                _critique_and_maybe_revise(task_id, resolved_target, description, "tier_2",
+                                            tier2_escalate, build_cmd, workdir, context_blob, config, before_content)
         else:
             print(f"[BUDGET GUARD] Tier 2 skipped: {guard2['reason']}")
 
@@ -166,7 +322,12 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             f"**Consecutive failures recorded:** {handoff_state.get('consecutive_failures')}\n\n"
             f"**Last build error:**\n```\n{handoff_state.get('last_stderr', '')}\n```"
         )
-        human_handoff(task_id, "unresolved after Tier 4 -> Tier 3 -> Tier 1 -> Tier 2", detail)
+        human_handoff(
+            task_id,
+            "unresolved after Tier 4 -> Tier 3 -> Tier 1 -> Tier 2",
+            detail,
+            component=target,
+        )
         status = "human_handoff"
     else:
         status = "success"

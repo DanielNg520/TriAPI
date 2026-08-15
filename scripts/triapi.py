@@ -32,8 +32,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import dispatcher, planner, resource_guard
-from scripts.config_loader import load_resource_guard_services
+from scripts import dispatcher, planner, resource_guard, self_fix
+from scripts.config_loader import load_resource_guard_services, load_tiers
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
     DEFAULT_GPU_LIFETIME_YEARS,
@@ -66,15 +66,17 @@ def cmd_plan(prompt: str, project_dir: str) -> None:
         try:
             turn = planner.plan_turn(message, project_dir, session_id)
         except Exception as exc:
-            print(f"Planning failed: could not reach the LLM backend ({exc}).")
+            log.warning("Planning failed: %s", exc)
+            print("Planning failed: could not reach the LLM backend.")
             state["status"] = "failed"
             dispatcher.save_run(state)
-            return
+            raise SystemExit(1)
         if turn["status"] != "ok":
-            print(f"Planning failed: {turn.get('reason')}")
+            log.warning("Planning failed: %s", turn.get("reason"))
+            print("Planning failed: could not complete planning.")
             state["status"] = "failed"
             dispatcher.save_run(state)
-            return
+            raise SystemExit(1)
 
         session_id = turn["session_id"]
         total_notional += turn.get("notional_cost_usd", 0.0)
@@ -117,12 +119,14 @@ def _breakdown_and_dispatch(state: dict) -> None:
     try:
         breakdown_result = dispatcher.breakdown_plan(state)  # mutates and saves state incrementally
     except Exception as exc:
-        print(f"Breakdown failed: could not reach the LLM backend ({exc}).")
+        log.warning("Breakdown failed: %s", exc)
+        print("Breakdown failed: could not reach the LLM backend.")
         state["status"] = "stopped_on_failure"
         dispatcher.save_run(state)
-        return
+        raise
     if breakdown_result["status"] != "ok":
-        print(f"Breakdown failed: {breakdown_result.get('reason')}")
+        log.warning("Breakdown failed: %s", breakdown_result.get("reason"))
+        print("Breakdown failed: could not complete the breakdown.")
         # breakdown_plan() saves completed phases incrementally and resumes
         # past them on re-entry, so a breakdown failure is not terminal --
         # "failed" previously blocked `triapi dispatch <run_id>` from ever
@@ -132,7 +136,7 @@ def _breakdown_and_dispatch(state: dict) -> None:
         # its own. "stopped_on_failure" is already in that accepted set.
         state["status"] = "stopped_on_failure"
         dispatcher.save_run(state)
-        return
+        raise SystemExit(1)
 
     total_items = sum(len(p["items"]) for p in state["breakdown"]["phases"])
     print(
@@ -143,10 +147,11 @@ def _breakdown_and_dispatch(state: dict) -> None:
     try:
         state = dispatcher.dispatch(state)
     except Exception as exc:
-        print(f"Dispatching failed: could not reach the LLM backend ({exc}).")
+        log.warning("Dispatching failed: %s", exc)
+        print("Dispatching failed: could not reach the LLM backend.")
         state["status"] = "stopped_on_failure"
         dispatcher.save_run(state)
-        return
+        raise
 
     print(f"\nRun {state['run_id']} finished with status: {state['status']}")
     total_actual = 0.0
@@ -199,11 +204,15 @@ def _breakdown_and_dispatch(state: dict) -> None:
 
 def cmd_dispatch(run_id: str, background: bool) -> None:
     state = dispatcher.load_run(run_id)
+    # self_fix_drafted is intentionally NOT accepted — only self-fix approve
+    # flips a queued self-fix run to planned / dispatchable.
     if state["status"] not in ("planned", "dispatching", "stopped_on_failure"):
         log.warning("[%s] Dispatch refused: status=%s", run_id, state["status"])
         print(f"Run {run_id} is not ready to dispatch (status: {state['status']}).")
         if state["status"] in ("planning", None):
             print(f"Finish planning first: triapi plan is still in progress for this run.")
+        elif state["status"] == "self_fix_drafted":
+            print(f"Approve it first: triapi self-fix approve <bug_id-or-run_id>")
         return
     if state["plan_text"] is None:
         print(f"Run {run_id} has no approved plan yet.")
@@ -234,10 +243,49 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
     # foreground path and the --background path, since the detached child
     # re-execs `dispatch <run_id>` without --background and lands here too.
     paused = resource_guard.pause_services(load_resource_guard_services())
+    crash: tuple[Exception, object] | None = None
+    bug_path: Path | None = None
     try:
         _breakdown_and_dispatch(state)
+    except Exception as exc:
+        bug_path = self_fix.capture_crash(exc, run_id=run_id, context="cmd_dispatch:foreground")
+        crash = (exc, exc.__traceback__)
     finally:
         resource_guard.resume_services(paused)
+
+    if crash is not None:
+        exc, original_tb = crash
+        # Queue only after resource-competing services have resumed. Planning
+        # can take minutes and must not extend the resource_guard critical section.
+        is_self_fix_run = (
+            "self_fix_bug_report" in state
+            or Path(state.get("project_dir") or "").resolve() == self_fix.TRIAPI_ROOT.resolve()
+        )
+        try:
+            self_fix_enabled = load_tiers().get("self_fix", {}).get("enabled", True)
+        except Exception as config_exc:
+            self_fix_enabled = False
+            log.warning(
+                "[%s] Could not load self-fix configuration during crash recovery: %s",
+                run_id,
+                config_exc,
+            )
+        if is_self_fix_run:
+            log.warning(
+                "[%s] Crash occurred inside a self-fix run itself; not auto-queuing a nested "
+                "self-fix (bug report saved: %s)",
+                run_id,
+                bug_path,
+            )
+        elif not self_fix_enabled:
+            log.info("[%s] Self-fix auto-queue disabled (bug report saved: %s)", run_id, bug_path)
+        elif bug_path is not None:
+            try:
+                queued = self_fix.queue_self_fix(bug_path)
+                log.info("[%s] Self-fix queued: %s", run_id, queued)
+            except Exception as queue_exc:
+                log.warning("[%s] Self-fix auto-queue failed: %s", run_id, queue_exc)
+        raise exc.with_traceback(original_tb)
 
 
 def cmd_status(run_id: str) -> None:
@@ -269,6 +317,131 @@ def cmd_list() -> None:
         print(f"{r['run_id']}  [{r['status']:>18}]  {started}  {prompt_preview}")
 
 
+def _find_self_fix_run(bug_id: str) -> dict | None:
+    """Resolve a bug_id (report stem) or run_id to a queued/approved self-fix run."""
+    # Direct run_id hit.
+    try:
+        state = dispatcher.load_run(bug_id)
+        if "self_fix_bug_report" in state or state.get("status") == "self_fix_drafted":
+            return state
+    except FileNotFoundError:
+        pass
+
+    bug_path = self_fix.BUGS_DIR / f"{bug_id}.json"
+    for summary in dispatcher.list_runs():
+        try:
+            full = dispatcher.load_run(summary["run_id"])
+        except FileNotFoundError:
+            continue
+        ref = full.get("self_fix_bug_report") or ""
+        if not ref:
+            continue
+        if Path(ref).name == f"{bug_id}.json" or Path(ref).stem == bug_id:
+            return full
+        if bug_path.exists() and Path(ref).resolve() == bug_path.resolve():
+            return full
+    return None
+
+
+def _resolve_bug_report(bug_id: str) -> Path | None:
+    """Resolve a report stem without allowing traversal outside BUGS_DIR."""
+    candidate = (self_fix.BUGS_DIR / f"{bug_id}.json").resolve()
+    if not candidate.is_relative_to(self_fix.BUGS_DIR.resolve()):
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def cmd_self_fix_list() -> None:
+    """List unqueued bug reports and drafted-but-unapproved self-fix runs."""
+    runs = []
+    referenced = set()
+    for summary in dispatcher.list_runs():
+        try:
+            full = dispatcher.load_run(summary["run_id"])
+        except FileNotFoundError:
+            continue
+        ref = full.get("self_fix_bug_report")
+        if ref:
+            referenced.add(Path(ref).resolve())
+            referenced.add(Path(ref).name)
+            referenced.add(Path(ref).stem)
+        if full.get("status") == "self_fix_drafted":
+            runs.append(full)
+
+    print("Unqueued bug reports:")
+    bugs = sorted(self_fix.BUGS_DIR.glob("*.json")) if self_fix.BUGS_DIR.exists() else []
+    shown = 0
+    for path in bugs:
+        if path.resolve() in referenced or path.name in referenced or path.stem in referenced:
+            continue
+        print(f"  {path.stem}")
+        shown += 1
+    if shown == 0:
+        print("  (none)")
+
+    print("Drafted self-fix runs (awaiting approve):")
+    if not runs:
+        print("  (none)")
+        return
+    for state in runs:
+        print(f"  {state['run_id']}  {state.get('prompt', '')[:80]}")
+
+
+def cmd_self_fix_show(bug_id: str) -> None:
+    """Print a bug report and any drafted plan text."""
+    bug_path = _resolve_bug_report(bug_id)
+    state = _find_self_fix_run(bug_id)
+    if state and "self_fix_bug_report" in state:
+        bug_path = Path(state["self_fix_bug_report"])
+
+    if bug_path is not None and bug_path.is_file():
+        import json
+        data = json.loads(bug_path.read_text())
+        print(f"Bug report: {bug_path.name}")
+        print(json.dumps(data, indent=2))
+    else:
+        print(f"No bug report file found for id {bug_id!r} under {self_fix.BUGS_DIR}")
+
+    if state is None:
+        print("\nNo drafted self-fix run linked to this id.")
+        return
+    print(f"\nLinked run: {state['run_id']}  status={state['status']}")
+    print(state.get("plan_text") or "(no plan_text)")
+
+
+def cmd_self_fix_queue(bug_id: str) -> None:
+    """Draft a self-fix run for a captured but unqueued bug report."""
+    bug_path = _resolve_bug_report(bug_id)
+    if bug_path is None:
+        print(f"No bug report file found for id {bug_id!r} under {self_fix.BUGS_DIR}")
+        raise SystemExit(1)
+    existing = _find_self_fix_run(bug_id)
+    if existing is not None:
+        print(f"Bug {bug_id!r} is already linked to run {existing['run_id']}.")
+        return
+    result = self_fix.queue_self_fix(bug_path)
+    if result.get("status") != "queued":
+        print(f"Could not draft self-fix: {result.get('reason', result.get('status'))}")
+        raise SystemExit(1)
+    print(f"Self-fix drafted. Linked run: {result['run_id']}")
+    print(f"Review it: triapi self-fix show {bug_id}")
+
+
+def cmd_self_fix_approve(bug_id: str) -> None:
+    """Flip a self_fix_drafted run to planned (dispatchable)."""
+    state = _find_self_fix_run(bug_id)
+    if state is None:
+        print(f"No self-fix run found for {bug_id!r}")
+        raise SystemExit(1)
+    if state["status"] not in ("self_fix_drafted", "planned"):
+        print(f"Run {state['run_id']} is not approvable (status: {state['status']})")
+        raise SystemExit(1)
+    state["status"] = "planned"
+    dispatcher.save_run(state)
+    print(f"\nPlan approved.")
+    print(f"Run it: triapi dispatch {state['run_id']}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="TriAPI natural-language pipeline entry point")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -287,6 +460,16 @@ def main():
 
     sub.add_parser("list", help="list all runs")
 
+    p_self_fix = sub.add_parser("self-fix", help="review/approve TriAPI-internal auto-drafted bug fixes")
+    selffix_sub = p_self_fix.add_subparsers(dest="self_fix_action", required=True)
+    selffix_sub.add_parser("list", help="list captured bugs and drafted/unapproved self-fix runs")
+    p_sf_queue = selffix_sub.add_parser("queue", help="draft a self-fix run for a captured bug")
+    p_sf_queue.add_argument("bug_id")
+    p_sf_show = selffix_sub.add_parser("show", help="show a bug report and its drafted plan")
+    p_sf_show.add_argument("bug_id")
+    p_sf_approve = selffix_sub.add_parser("approve", help="approve a drafted self-fix run for dispatch")
+    p_sf_approve.add_argument("bug_id")
+
     args = parser.parse_args()
 
     if args.command == "plan":
@@ -297,6 +480,15 @@ def main():
         cmd_dispatch(args.run_id, args.background)
     elif args.command == "status":
         cmd_status(args.run_id)
+    elif args.command == "self-fix":
+        if args.self_fix_action == "list":
+            cmd_self_fix_list()
+        elif args.self_fix_action == "queue":
+            cmd_self_fix_queue(args.bug_id)
+        elif args.self_fix_action == "show":
+            cmd_self_fix_show(args.bug_id)
+        elif args.self_fix_action == "approve":
+            cmd_self_fix_approve(args.bug_id)
     elif args.command == "list":
         cmd_list()
 

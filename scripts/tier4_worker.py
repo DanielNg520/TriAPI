@@ -25,7 +25,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks
+from scripts import content_guard, edit_blocks, lessons
 from scripts.config_loader import load_tiers
 from scripts.state import clear_state, read_state, record_failure
 from scripts.tri_logging import get_logger
@@ -84,7 +84,12 @@ def build_context_blob(paths: list[str], workdir: str, max_chars_per_file: int =
 def build_prompt(description: str, target_path: Path, last_stderr: str, context_blob: str = "") -> str:
     editing = target_path.exists()
     if editing:
-        header = edit_blocks.build_edit_prompt_header(target_path.name)
+        lessons_text = lessons.format_lessons_for_prompt(
+            lessons.select_relevant(target_path.name, description)
+        )
+        header = edit_blocks.build_edit_prompt_header(
+            target_path.name, lessons_block=lessons_text
+        )
     else:
         header = (
             f"You are a coding/writing assistant working on {target_path.name}. Output "

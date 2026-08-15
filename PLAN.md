@@ -474,3 +474,31 @@ Planned and dispatched via `triapi plan`/`triapi dispatch` against TriAPI's own 
 Only after all of the above did the run's own reported `completed` status get trusted.
 
 **Supervision note:** the actual oh-my-llama refactor work (Phase 3 gap, Phase 4+ dispatch) stayed strictly TriAPI's job throughout — per direct user correction mid-session after an initial wrong instinct to hand-edit oh-my-llama's leftover Todoist call sites myself. Fixed TriAPI's own tooling (the grep-generation instruction, the cost accounting) instead; the target repo's refactor itself is only ever touched by the dispatch pipeline's own tiers.
+
+## Phase 21 — Failure-pattern knowledge store + diff-quality critique ✅
+
+Landed via dispatch run `20260812-202927-aa0e40` (2026-08-14/15), part 2 of CARRYOVER.md's "Third queued item".
+
+**Phase A — knowledge store**
+- `knowledge/lessons.jsonl` seeded with 3 real historical bugs (edit_blocks empty-REPLACE regex, breakdown RPM resumability, tautological verify-grep).
+- `scripts/lessons.py`: load/add/select_relevant/format_lessons_for_prompt + CLI.
+- `edit_blocks.build_edit_prompt_header(..., lessons_block="")`; all four tiers fold relevant lessons into edit prompts.
+- `orchestrator.human_handoff()` auto-captures `unresolved_pattern` lessons.
+
+**Phase B — advisory critique**
+- `config/tiers.yaml` `critique:` block (enabled, applies_to_tiers tier_3/1/2, critic tier_1, score_threshold 7, max_revision_attempts 1).
+- `scripts/critique.py` mirrors Tier 1's `claude -p`/stdin pattern.
+- `revision_note=""` on tier1/2/3 `escalate()`.
+- `orchestrator._critique_and_maybe_revise()` after successful Tier 3/1/2 rebuilds — score-gated, one revision pass, revert-on-rebuild-fail, never changes pipeline flow.
+
+**Also fixed while supervising:** Tiers 1/2/3 now `mkdir(parents=True)` before writing new files (Tier 4 already did; Tier 3 crash on `knowledge/lessons.jsonl` was the discovery). Flash-lite breakdown had produced `cat`/`sed` build_cmds for Phase A — replaced with real verifies before resume.
+
+## Phase 22 — Worked-case implementation audit and hardening ✅
+
+Independent branch audit after all four `AGENT_GUIDE.md` worked runs completed:
+
+- Self-fix crash capture no longer replaces `sys.excepthook`, cannot mask the original exception, records source frames, and queues only after resource-guarded services resume. Added explicit `self-fix queue` and `self_fix.enabled`.
+- Lessons now tolerate malformed JSONL, lock/deduplicate appends, use stronger relevance scoring, and isolate handoff-recording failures.
+- Critique parsing is fail-open/advisory for malformed model output, uses one YAML threshold, logs every outcome, and sends quality-specific revision prompts rather than an empty build error.
+- Added `tests/test_branch_features.py` regression coverage.
+- Audited and hardened the related oh-my-llama ghostwriter/Amazon ingestion changes; full details and verification are recorded in `agent_evalution.md`.

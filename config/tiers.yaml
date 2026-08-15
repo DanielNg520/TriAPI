@@ -118,3 +118,11 @@ escalation_rules:
     trigger: gemini_unresolved
     threshold: 1
     action: log_and_notify
+critique:
+  enabled: true
+  applies_to_tiers: ["tier_3", "tier_1", "tier_2"]
+  critic: "tier_1"
+  score_threshold: 7
+  max_revision_attempts: 1
+self_fix:
+  enabled: true
