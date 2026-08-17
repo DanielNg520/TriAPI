@@ -133,3 +133,16 @@ critique:
   max_revision_attempts: 1
 self_fix:
   enabled: true
+
+jules_tester:
+  # Google Jules REST API, confirmed live 2026-08-16/17 against the real
+  # API (public docs were wrong on one field, see below). Advisory-only
+  # post-dispatch verification -- never a repair tier, never blocks.
+  enabled: true
+  source: "sources/github/DanielNg520/TriAPI"  # confirmed-live REST source name (GET /sources), NOT "owner/repo" form
+  daily_task_limit: 15  # Free tier: 15 tasks/24h, 3 concurrent -- confirmed by absence of Pro/Ultra indicator on this account
+  poll_timeout_s: 900   # 15 min; live discovery sessions took several minutes incl. plan-approval delay
+  poll_interval_s: 15
+  # CORRECTED FIELD PATH (2026-08-17, live verification): POST /sessions body
+  # uses sourceContext.githubRepoContext.startingBranch. Public docs claim
+  # sourceContext.githubBranch -- confirmed WRONG via live 400: "Unknown name\n  # \"githubBranch\" at 'session.source_context': Cannot find field."

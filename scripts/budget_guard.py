@@ -165,3 +165,47 @@ def check_tier3_peak_hours_ok() -> dict:
         "reason": "outside DeepSeek peak billing hours "
         f"(LA local {now_la.isoformat()}, UTC {now_utc.isoformat()})",
     }
+
+
+JULES_USAGE_LOG = Path(__file__).resolve().parent.parent / "logs" / "jules_usage.jsonl"
+
+DEFAULT_JULES_DAILY_TASK_LIMIT = 15
+
+
+def _read_jules_usage_window(window_seconds: float) -> int:
+    if not JULES_USAGE_LOG.exists():
+        return 0
+    cutoff = time.time() - window_seconds
+    count = 0
+    with open(JULES_USAGE_LOG) as f:
+        for line in f:
+            entry = json.loads(line)
+            if entry["timestamp"] >= cutoff:
+                count += 1
+    return count
+
+
+def record_jules_call() -> None:
+    JULES_USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"timestamp": time.time()}
+    with open(JULES_USAGE_LOG, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def check_jules_ok() -> dict:
+    """Refuses if the next Jules task would exceed the configured daily task
+    limit. Advisory-only elsewhere in the pipeline, but this check itself is
+    a hard stop -- callers must not proceed on refusal."""
+    config = load_tiers()
+    limit = config.get("jules_tester", {}).get("daily_task_limit", DEFAULT_JULES_DAILY_TASK_LIMIT)
+
+    tasks_last_day = _read_jules_usage_window(86400)
+
+    if tasks_last_day >= limit:
+        log.warning("Jules refused: daily task limit reached (%d/%d in last 24h)", tasks_last_day, limit)
+        return {
+            "ok": False,
+            "reason": f"would exceed Jules daily task limit ({tasks_last_day}/{limit} in the last 24h)",
+        }
+    log.debug("Jules budget check passed (%d/%d tasks in last 24h)", tasks_last_day, limit)
+    return {"ok": True, "reason": f"within daily task limit ({tasks_last_day}/{limit} in the last 24h)"}

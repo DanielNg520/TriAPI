@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import dispatcher, planner, resource_guard, self_fix
+from scripts import budget_guard, dispatcher, git_ops, jules_client, planner, resource_guard, self_fix
 from scripts.config_loader import load_resource_guard_services, load_tiers
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
@@ -173,6 +173,43 @@ def _breakdown_and_dispatch(state: dict) -> None:
             gpu_hours=0.0,
         ),
     ))
+
+    if state["status"] == "completed":
+        jules_check = budget_guard.check_jules_ok()
+        if not jules_check["ok"]:
+            print(f"\nSkipping Jules advisory test: {jules_check['reason']}")
+            log.info("[%s] Skipping Jules advisory test: %s", state["run_id"], jules_check["reason"])
+        else:
+            push_result = git_ops.push(state["project_dir"], f"TriAPI run {state['run_id']}: {state['prompt'][:72]}")
+            if not push_result["ok"]:
+                print(f"\nJules advisory test skipped: push failed: {push_result['output'][:500]}")
+                log.warning("[%s] Jules advisory test skipped: push failed: %s", state["run_id"], push_result["output"][:500])
+            else:
+                budget_guard.record_jules_call()
+                jules_config = load_tiers().get("jules_tester", {})
+                source = jules_config.get("source", "")
+                jules_result = jules_client.run_jules_test(
+                    prompt=(
+                        "This branch was just produced by an automated TriAPI dispatch run "
+                        f"(run {state['run_id']}, original task: {state['prompt']}). "
+                        "Read AGENTS.md if present for the documented test command, then run "
+                        "this repository's existing test suite/build commands and reply with "
+                        "a clear pass/fail summary, including failure details if any tests "
+                        "failed. Do NOT modify, commit, or push any files, and do NOT open a "
+                        "pull request -- this is a read-only verification pass only."
+                    ),
+                    source=source,
+                    title=f"TriAPI advisory test: {state['run_id']}",
+                    starting_branch=push_result.get("branch", "main"),
+                )
+                status = jules_result.get("status")
+                if status == "completed":
+                    print(f"\nJules advisory test completed: {jules_result.get('final_message')}")
+                elif status == "error":
+                    print(f"\nJules advisory test errored (advisory only, not blocking): {jules_result.get('reason')}")
+                else:
+                    print(f"\nJules advisory test finished with status: {status} (advisory only, not blocking)")
+                log.info("[%s] Jules advisory test result: %s", state["run_id"], jules_result)
 
     if state["status"] == "stopped_on_failure":
         unresolved = [f for f in state.get("regression_flags", []) if not f["resolved"]]
