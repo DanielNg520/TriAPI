@@ -6,6 +6,7 @@ logs/runs/
 logs/resource_guard_lock.json
 !logs/state/.gitkeep
 config/secrets.yaml
+config/secrets.enc.yaml
 __pycache__/
 *.pyc
 .venv/

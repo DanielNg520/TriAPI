@@ -154,15 +154,17 @@ pip install -r requirements.txt
 
 ### 2. Secrets (sops + age)
 
-Secrets live encrypted at `config/secrets.enc.yaml`, safe to commit as ciphertext — never a plaintext `.env`. Requires the `sops` and `age` binaries and a usable age key (this repo's `.sops.yaml` already points at one).
+Secrets live encrypted at `config/secrets.enc.yaml` — sops/age ciphertext, never a plaintext `.env`. **As of 2026-08-17 this file is local-only and gitignored, not committed** (the project previously committed the ciphertext, reasoning that AES-256-GCM was safe to publish; the convention changed to keep it off the public repo entirely regardless). Requires the `sops` and `age` binaries and a usable age key (this repo's `.sops.yaml` already points at one). You must create this file yourself on any new machine — it won't come from `git clone`.
 
-Fill in the real values:
+Create it from the template and fill in the real values:
 
 ```bash
-sops config/secrets.enc.yaml
+cp config/secrets.example.yaml config/secrets.enc.yaml
+sops -e -i config/secrets.enc.yaml
+sops config/secrets.enc.yaml   # edit values afterward
 ```
 
-This decrypts to your `$EDITOR`, and re-encrypts automatically on save. Required keys (see `config/secrets.example.yaml` for the template): `deepseek_api_key`, `google_ai_studio_api_key`, `ollama_host`.
+This decrypts to your `$EDITOR`, and re-encrypts automatically on save. Required keys (see `config/secrets.example.yaml` for the template): `deepseek_api_key`, `google_ai_studio_api_key`, `ollama_host`; `google_jules_apikey` is optional (Jules advisory testing falls back to local verification if unset).
 
 ### 3. Ollama (Tier 4)
 
