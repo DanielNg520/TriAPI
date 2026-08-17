@@ -108,7 +108,7 @@ partly automated:
   when a tier has genuinely and repeatedly failed on that exact item, not
   a shortcut to avoid supervising.
 - **Documentation in TriAPI's own repo** (this file, `README.md`,
-  `PLAN.md`, `mapping.md`, `CARRYOVER.md`) is always fine to edit directly
+  `PLAN.md`, `AGENTS.md`, `CARRYOVER.md`) is always fine to edit directly
   — it's not target-repo work and doesn't need to go through dispatch.
 - **Verify, don't trust status.** The single most repeated lesson across
   this project: read the real file diff, the real escalation log, the real
@@ -311,7 +311,7 @@ exact item. **Self-modification raises the stakes of "verify before
 resuming"** — a bad automated edit here doesn't just break a test feature,
 it can break the pipeline that's supposed to keep working correctly for
 every future run, including the ability to detect and fix its own next
-bug. Read every diff against the real files in `mapping.md`'s
+bug. Read every diff against the real files in `AGENTS.md`'s
 `scripts/` section before trusting a `success`.
 
 **Grounded against the real repo** (verified 2026-08-14, re-check before
@@ -334,7 +334,7 @@ relying on any of this if it's been a while):
   `triapi plan` already uses — reuse it verbatim for auto-drafting a
   self-fix plan, don't build a second planning path. It already returns
   `{"status": "error", ...}` on its own internal timeout instead of
-  raising (Phase 13-era fix, see `mapping.md`), so the self-fix drafter
+  raising (Phase 13-era fix, see `AGENTS.md`), so the self-fix drafter
   can treat that the same way `cmd_plan()` already does.
 - `scripts/dispatcher.py`'s `new_run(prompt: str, project_dir: str) ->
   dict` (line ~541) and `load_run`/`list_runs` (lines ~515/520) are the
@@ -490,12 +490,12 @@ relying on any of this if it's been a while):
 
 9. Full real test suite: `bash run_tests.sh` if this repo has one at
    dispatch time, otherwise this project's actual test runner as named
-   in `README.md`/`mapping.md` — never a partial subset.
+   in `README.md`/`AGENTS.md` — never a partial subset.
 10. `python3 -m py_compile scripts/self_fix.py scripts/triapi.py` —
     confirms no syntax errors across every touched file.
 11. Manual smoke test (documented as a verify step, not skipped):
     on a throwaway branch/copy, deliberately reintroduce one of the
-    already-fixed real crashes documented in `mapping.md` (e.g.
+    already-fixed real crashes documented in `AGENTS.md` (e.g.
     temporarily remove `tier1_escalate.py`'s `try/except (OSError,
     subprocess.TimeoutExpired)` guard around its `subprocess.run()`
     call), trigger a dispatch that hits it, confirm a bug report lands
@@ -510,7 +510,7 @@ relying on any of this if it's been a while):
 
 **When using this as a test**: expect this to surface real edge cases in
 how cleanly TriAPI's own exceptions are currently caught — per
-`mapping.md`, most of the individual tier scripts (`tier1_escalate.py`,
+`AGENTS.md`, most of the individual tier scripts (`tier1_escalate.py`,
 `tier2_escalate.py`, `tier3_escalate.py`, `tier4_worker.py`) already wrap
 their own request/subprocess failures and return a normal `status:
 "error"` result rather than raising, which means Phase 1's crash-capture
@@ -856,7 +856,7 @@ print('ok, committed store unchanged')
 "` then delete the matching `logs/escalations.jsonl`/
      `logs/escalation_plan-test-task.md` / `logs/handoff_lessons.jsonl`
      artifacts afterward.
-9. `mapping.md` — add a `## knowledge/` section documenting
+9. `AGENTS.md` — add a `## knowledge/` section documenting
    `lessons.jsonl`'s schema and purpose, and update the `scripts/`
    section's entries for `lessons.py`, `edit_blocks.py` (new
    `lessons_block` param), `orchestrator.py` (auto-capture on handoff),
@@ -1024,7 +1024,7 @@ assert r['status'] in ('ok', 'skipped', 'error')
     '"tier": "critique"' logs/cost_log.jsonl`) that it was cost-logged.
     This is a one-off manual dispatch-time check, not a permanent
     addition to the fixture.
-18. `mapping.md` — add `scripts/critique.py` to the `scripts/` section
+18. `AGENTS.md` — add `scripts/critique.py` to the `scripts/` section
     (schema of its JSON, the `revision_note` addition to the three
     escalation clients, and the new `_critique_and_maybe_revise()`
     helper in `orchestrator.py`), and add a `critique:` bullet to the

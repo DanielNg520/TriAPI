@@ -1,10 +1,15 @@
-# Project Mapping
+# AGENTS.md
 
-Living index of every file/dir in this repo. Read this before exploring — updated at the end of every phase.
+Repo-root reference for coding agents: codebase conventions, test commands, architecture, and guidelines, plus a living index of every file/dir in this repo. Read this before exploring — updated at the end of every phase. (Renamed from `mapping.md` 2026-08-17; conventions/test-commands/architecture content is being folded in incrementally as it's touched, not as a one-time rewrite — see `AGENT_GUIDE.md`/`ARCHITECTURE.md`/`README.md` for the fuller versions of each until then.)
+
+## Conventions, test commands, architecture (quick reference)
+- **Conventions/guidelines:** full detail in `AGENT_GUIDE.md` (agent operating manual — what's safe to hand-edit vs. must route through the dispatch pipeline, phase discipline, verification requirements).
+- **Test commands:** `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v` (full regression suite); `python3 -m py_compile <file>` before any script change is considered done.
+- **Architecture:** full detail in `ARCHITECTURE.md` (4-tier escalation state machine, budget guard rationale, DeepSeek cache-hit economics).
 
 ## Root
 - `PLAN.md` — phase-by-phase implementation plan with checklists and end-of-phase tests. Progress tracker.
-- `mapping.md` — this file.
+- `AGENTS.md` — this file (formerly `mapping.md`).
 - `agent_evalution.md` — independent post-run audit of the four `AGENT_GUIDE.md` worked cases across TriAPI and oh-my-llama: findings, corrections, verification commands/results, and residual risks.
 - `ARCHITECTURE.md` — system design: the 4-tier escalation state machine, DeepSeek cache-hit economics, budget guard rationale, and what changed during the build (Tier 2 redesign, MCP server dropped, Jules deferred).
 - `README.md` — step-by-step walkthrough (first-time run, reading output/cost report, human-handoff files, common gotchas) plus setup (Python deps, sops/age, Ollama systemd service, Claude Code subscription login) and command reference (standalone task, smoke test, cost report).

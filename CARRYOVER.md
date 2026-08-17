@@ -2309,6 +2309,7 @@ and `feedback_fallback_chains_go_down`, both still load-bearing.
 
 ## 5. Things to remember, not re-derive
 
+- **`mapping.md` was renamed to `AGENTS.md` on 2026-08-17** (repo-root convention change, applies to every repo going forward per the user's global CLAUDE.md instruction — not TriAPI-specific). Same file, same "living index" content, but the header now frames it as the root reference for conventions/test-commands/architecture/guidelines too, folded in incrementally. Every doc reference (`AGENT_GUIDE.md`, etc.) was updated to point at the new name; historical narrative in `PLAN.md`/this file that says "mapping.md" is describing what was true *at the time* and was left as-is — don't "fix" those, they're accurate history.
 - Sudo pre-approved, not yet used. Git: always SSH, never HTTPS.
 - `com.duy.recorder.service` must never be paused/stopped by anything
   TriAPI does. `oh-my-llama-telegram.service`/`oh-my-llama-discord.service`
