@@ -21,7 +21,7 @@ tier_2_manager:
   endpoint: "https://generativelanguage.googleapis.com"
   models:
     flash: "gemini-3.5-flash"
-    pro: "gemini-2.5-pro"  # was "gemini-3.5-pro", confirmed 2026-08-10 via GET /v1beta/models that no such model exists
+    pro: "gemini-2.5-pro"  # was "gemini-3.5-pro", confirmed 2026-08-10 via GET /v1beta/models that no such model exists. Re-checked 2026-08-16: no plain "gemini-3-pro" exists either (only gemini-3.1-pro-preview and image-only gemini-3-pro-image variants) -- default_model change to a Gemini 3 Pro model was reverted pending a stable (non-preview) release.
   default_model: flash
   # Tried in order whenever the current model's free-tier quota is
   # exhausted for the day -- confirmed live 2026-08-10 that Google buckets
@@ -63,6 +63,13 @@ tier_3_debugger:
   default_model: flash
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
+  peak_hours_utc:
+    # DeepSeek V4 pricing (effective 2026-08-16T16:00 UTC): 2x cost during
+    # these UTC windows (verified by hand against America/Los_Angeles
+    # PDT/PST wall-clock; see budget_guard.check_tier3_peak_hours_ok(),
+    # which reads this list instead of hardcoding the windows).
+    - ["01:00", "04:00"]
+    - ["06:00", "10:00"]
   pricing:
     # Verify against DeepSeek's live pricing page periodically -- these
     # numbers WILL drift. Cost logging stores raw token counts precisely

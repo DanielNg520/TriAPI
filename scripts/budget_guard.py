@@ -9,7 +9,9 @@ callers must skip the tier or fall through to the next one on refusal.
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from scripts.config_loader import load_tiers
 from scripts.tri_logging import get_logger
@@ -23,6 +25,16 @@ GEMINI_USAGE_LOG = Path(__file__).resolve().parent.parent / "logs" / "gemini_usa
 # model and change over time -- see the "unverified" note in tiers.yaml.
 DEFAULT_FREE_TIER_RPM = 10
 DEFAULT_FREE_TIER_RPD = 250
+
+# DeepSeek V4 applies 2x pricing during these UTC windows (verified against
+# America/Los_Angeles PDT/PST wall-clock; see check_tier3_peak_hours_ok).
+# Used only when tier_3_debugger.peak_hours_utc is absent from tiers.yaml.
+DEFAULT_TIER3_PEAK_HOURS_UTC = [
+    ["01:00", "04:00"],
+    ["06:00", "10:00"],
+]
+
+LA_TZ = ZoneInfo("America/Los_Angeles")
 
 def check_tier1_ok() -> dict:
     """Refuses if ANTHROPIC_API_KEY is set -- its presence routes `claude -p`
@@ -106,3 +118,50 @@ def check_tier2_ok() -> dict:
         }
     log.debug("Tier 2 budget check passed (%d/%d rpm, %d/%d rpd)", calls_last_minute, rpm_limit, calls_last_day, rpd_limit)
     return {"ok": True, "reason": f"within free tier ({calls_last_minute}/{rpm_limit} rpm, {calls_last_day}/{rpd_limit} rpd)"}
+
+def check_tier3_peak_hours_ok() -> dict:
+    """Refuses if the current UTC time falls inside a DeepSeek peak-hour
+    window (2x pricing). Peak windows are read from config/tiers.yaml and
+    fall back to DEFAULT_TIER3_PEAK_HOURS_UTC when not configured."""
+    config = load_tiers()
+    peak_windows = config.get("tier_3_debugger", {}).get("peak_hours_utc")
+    if peak_windows is None:
+        peak_windows = DEFAULT_TIER3_PEAK_HOURS_UTC
+
+    now_utc = datetime.now(timezone.utc)
+    now_la = now_utc.astimezone(LA_TZ)
+    now_minutes = now_utc.hour * 60 + now_utc.minute
+
+    for start, end in peak_windows:
+        start_hh, start_mm = map(int, start.split(":"))
+        end_hh, end_mm = map(int, end.split(":"))
+        start_minutes = start_hh * 60 + start_mm
+        end_minutes = end_hh * 60 + end_mm
+
+        if start_minutes <= end_minutes:
+            in_peak = start_minutes <= now_minutes <= end_minutes
+        else:
+            in_peak = now_minutes >= start_minutes or now_minutes <= end_minutes
+
+        if in_peak:
+            la_time = now_la.isoformat()
+            utc_time = now_utc.isoformat()
+            log.info(
+                "Tier 3 refused: DeepSeek peak hours active (LA %s / UTC %s)",
+                la_time,
+                utc_time,
+            )
+            return {
+                "ok": False,
+                "reason": (
+                    f"Tier 3 is in DeepSeek peak billing hours {start}-{end} UTC "
+                    f"(LA local {la_time}, UTC {utc_time})"
+                ),
+            }
+
+    log.debug("Tier 3 budget check passed (outside DeepSeek peak hours)")
+    return {
+        "ok": True,
+        "reason": "outside DeepSeek peak billing hours "
+        f"(LA local {now_la.isoformat()}, UTC {now_utc.isoformat()})",
+    }

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.budget_guard import check_tier1_ok, check_tier1_manager_ok, check_tier2_ok
+from scripts.budget_guard import check_tier1_ok, check_tier1_manager_ok, check_tier2_ok, check_tier3_peak_hours_ok
 from scripts.config_loader import load_tiers
 from scripts.cost_report import format_report, report
 from scripts.state import clear_state, read_state, record_failure
@@ -326,15 +326,19 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     if resolved_by is None:
         # Tier 3: DeepSeek
         before_content = _read_target_text(resolved_target)
-        result3 = tier3_escalate(
-            task_id, resolved_target, context_blob=context_blob, description=description
-        )
-        if result3.get("status") == "fix_rejected":
-            log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
-        if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
-            resolved_by = "tier_3"
-            _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
-                                        tier3_escalate, build_cmd, workdir, context_blob, config, before_content)
+        guard3 = check_tier3_peak_hours_ok()
+        if not guard3["ok"]:
+            log.info("[%s] Tier 3 skipped: %s", task_id, guard3["reason"])
+        else:
+            result3 = tier3_escalate(
+                task_id, resolved_target, context_blob=context_blob, description=description
+            )
+            if result3.get("status") == "fix_rejected":
+                log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
+            if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
+                resolved_by = "tier_3"
+                _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
+                                            tier3_escalate, build_cmd, workdir, context_blob, config, before_content)
 
     if resolved_by is None:
         # Tier 1: Claude Code CLI (budget-guarded)

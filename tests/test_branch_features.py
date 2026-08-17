@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -606,6 +607,137 @@ class CritiqueTests(unittest.TestCase):
                 )
             self.assertEqual(len(calls), 2)
             self.assertEqual(target.read_text(encoding="utf-8"), "revised\n")
+
+
+class Tier3PeakHoursTests(unittest.TestCase):
+    def _check_at(self, utc_dt: datetime) -> dict:
+        with (
+            mock.patch("scripts.budget_guard.load_tiers", return_value={}),
+            mock.patch("scripts.budget_guard.datetime") as fake_dt,
+        ):
+            fake_dt.now.return_value = utc_dt
+            return orchestrator.check_tier3_peak_hours_ok()
+
+    def test_start_of_first_peak_window_refuses(self) -> None:
+        result = self._check_at(datetime(2026, 8, 17, 1, 0, tzinfo=timezone.utc))
+        self.assertFalse(result["ok"])
+        self.assertIn("01:00", result["reason"])
+        self.assertIn("LA local", result["reason"])
+
+    def test_mid_off_peak_hour_passes(self) -> None:
+        result = self._check_at(datetime(2026, 8, 17, 13, 0, tzinfo=timezone.utc))
+        self.assertTrue(result["ok"])
+
+    def test_mid_second_peak_window_refuses(self) -> None:
+        result = self._check_at(datetime(2026, 8, 17, 8, 0, tzinfo=timezone.utc))
+        self.assertFalse(result["ok"])
+        self.assertIn("06:00-10:00", result["reason"])
+
+
+class OrchestratorTier3PeakSkipTests(unittest.TestCase):
+    def _run_task_with_guards(
+        self,
+        task_id: str,
+        description: str,
+        target: str,
+        tmp: str,
+        *,
+        tier3_ok: bool,
+        tier3_result: dict | None = None,
+        tier1_result: dict | None = None,
+        tier2_result: dict | None = None,
+    ):
+        config = {
+            "tier_4_worker": {"build_commands": ["true"]},
+            "tier_1_manager": {"enabled": True},
+            "critique": {"enabled": False},
+        }
+        tier3_escalate = mock.Mock(
+            return_value=tier3_result or {"status": "fix_rejected", "reason": "no"}
+        )
+        tier1_escalate = mock.Mock(
+            return_value=tier1_result or {"status": "fix_rejected", "reason": "no"}
+        )
+        tier2_escalate = mock.Mock(
+            return_value=tier2_result or {"status": "fix_rejected", "reason": "no"}
+        )
+        with (
+            mock.patch.object(orchestrator, "load_tiers", return_value=config),
+            mock.patch.object(orchestrator, "build_context_blob", return_value="ctx"),
+            mock.patch.object(
+                orchestrator,
+                "tier4_run",
+                side_effect=[
+                    {"status": "build_failed", "consecutive_failures": 1},
+                    {"status": "escalate"},
+                ],
+            ),
+            mock.patch.object(
+                orchestrator,
+                "check_tier3_peak_hours_ok",
+                return_value={
+                    "ok": tier3_ok,
+                    "reason": "outside peak hours" if tier3_ok else "inside peak hours",
+                },
+            ),
+            mock.patch.object(orchestrator, "tier3_escalate", new=tier3_escalate),
+            mock.patch.object(orchestrator, "check_tier1_ok", return_value={"ok": True}),
+            mock.patch.object(
+                orchestrator, "check_tier1_manager_ok", return_value={"ok": True}
+            ),
+            mock.patch.object(orchestrator, "tier1_escalate", new=tier1_escalate),
+            mock.patch.object(orchestrator, "check_tier2_ok", return_value={"ok": True}),
+            mock.patch.object(orchestrator, "tier2_escalate", new=tier2_escalate),
+            mock.patch.object(orchestrator, "read_state", return_value={}),
+            mock.patch.object(orchestrator, "report", return_value={}),
+            mock.patch.object(orchestrator, "human_handoff"),
+        ):
+            result = orchestrator.run_task(
+                task_id, description, target, workdir=tmp, build_cmd="true"
+            )
+        return result, tier3_escalate, tier1_escalate, tier2_escalate
+
+    def test_run_task_skips_tier3_escalate_when_peak_hours_not_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "target.py")
+            result, tier3_escalate, tier1_escalate, _tier2_escalate = (
+                self._run_task_with_guards("task-1", "fix it", target, tmp, tier3_ok=False)
+            )
+        tier3_escalate.assert_not_called()
+        tier1_escalate.assert_called_once()
+        self.assertEqual(result["status"], "human_handoff")
+
+    def test_run_task_calls_tier3_escalate_when_peak_hours_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "target.py")
+            result, tier3_escalate, _tier1_escalate, _tier2_escalate = (
+                self._run_task_with_guards("task-2", "fix it", target, tmp, tier3_ok=True)
+            )
+        tier3_escalate.assert_called_once()
+        self.assertEqual(result["status"], "human_handoff")
+
+    def test_run_task_falls_through_to_tier2_when_tier3_skipped_and_tier1_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "target.py")
+            result, tier3_escalate, tier1_escalate, tier2_escalate = (
+                self._run_task_with_guards(
+                    "task-3",
+                    "fix it",
+                    target,
+                    tmp,
+                    tier3_ok=False,
+                    tier1_result={"status": "fix_rejected", "reason": "no"},
+                )
+            )
+        tier3_escalate.assert_not_called()
+        tier1_escalate.assert_called_once()
+        tier2_escalate.assert_called_once_with(
+            "task-3",
+            target,
+            context_blob="ctx",
+            description="fix it",
+        )
+        self.assertEqual(result["status"], "human_handoff")
 
 
 if __name__ == "__main__":
