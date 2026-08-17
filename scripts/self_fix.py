@@ -27,7 +27,8 @@ def _source_files_from_report(bug_report: dict) -> list[str]:
     root = TRIAPI_ROOT.resolve()
     for candidate in candidates:
         try:
-            path = Path(candidate).expanduser().resolve()
+            raw = Path(candidate).expanduser()
+            path = raw.resolve() if raw.is_absolute() else (root / raw).resolve()
             if path.is_relative_to(root):
                 relative = str(path.relative_to(root))
                 if relative not in source_files:

@@ -11,6 +11,7 @@ tiers.yaml's pricing block goes stale.
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -23,7 +24,6 @@ from scripts import lessons
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
-from scripts.tier4_worker import extract_code
 from scripts.tri_logging import get_logger
 
 log = get_logger("tier3")
@@ -73,6 +73,8 @@ def build_stable_context(
         "plain text/markdown) -- no explanation."
     )
     parts = [header]
+    if description:
+        parts.append(f"Task description:\n{description}")
     if context_blob:
         parts.append(context_blob)
     if editing:
@@ -90,6 +92,23 @@ def build_user_message(stderr: str, revision_note: str = "") -> str:
             f"following quality issues without regressing behavior: {revision_note}"
         )
     return f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
+
+
+def extract_code(text: str) -> str:
+    """Extract the fenced code block from a model response.
+
+    The new-file prompt asks for exactly one fenced code block. This parser
+    returns the first fenced block's contents, or the whole response trimmed
+    if no fence is present. Defined locally (instead of importing from
+    tier4_worker) so tier3 can rescue new-file creation even when Ollama --
+    tier4_worker's backing service -- is down, which is exactly when tier3 is
+    invoked. Importing tier4_worker at that point could try to reach Ollama's
+    /api/generate endpoint and crash with a connection error.
+    """
+    match = re.search(r"```(?:\w+)?\s*\n(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
 
 
 def compute_cost(model_pricing: dict, cache_hit_tokens: int, cache_miss_tokens: int, output_tokens: int):

@@ -38,8 +38,11 @@ def build_prompt(
     context_blob: str = "",
     revision_note: str = "",
     current_contents: str | None = None,
+    description: str = "",
 ) -> str:
     parts = []
+    if description:
+        parts.append(f"Task:\n{description}")
     if context_blob:
         parts.append(context_blob)
     # target_path may not exist yet -- an item can be creating a new file
@@ -95,6 +98,7 @@ def escalate(
         context_blob,
         revision_note,
         current_contents=current_contents,
+        description=description,
     )
     if editing:
         selected = lessons.select_relevant(target_path.name, description)
@@ -141,8 +145,15 @@ def escalate(
     if result.returncode != 0:
         return {"status": "error", "reason": result.stderr.strip()}
 
-    data = json.loads(result.stdout)
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        return {"status": "error", "reason": f"Failed to parse CLI output: {e}"}
+    if not isinstance(data, dict):
+        return {"status": "error", "reason": "Claude CLI output must be a JSON object"}
     usage = data.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
 
     log_cost(
         {
@@ -160,8 +171,12 @@ def escalate(
         }
     )
 
+    raw_result = data.get("result")
+    if not isinstance(raw_result, str):
+        return {"status": "error", "reason": "Claude CLI result missing or not a string"}
+
     if editing:
-        new_content, err = edit_blocks.apply_edit_blocks(current_contents, data["result"])
+        new_content, err = edit_blocks.apply_edit_blocks(current_contents, raw_result)
         if new_content is None:
             return {
                 "status": "fix_rejected",
@@ -170,7 +185,7 @@ def escalate(
             }
         fixed_code = new_content
     else:
-        fixed_code = extract_code(data["result"])
+        fixed_code = extract_code(raw_result)
 
     guard = content_guard.check_write(task_id, target_path, fixed_code)
     if not guard["ok"]:

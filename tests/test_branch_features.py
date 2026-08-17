@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -160,6 +162,126 @@ class SelfFixTests(unittest.TestCase):
                 triapi.cmd_dispatch("run-4", background=False)
         queue_self_fix.assert_not_called()
 
+    def _dispatch_crash(self, state: dict, queue):
+        with (
+            mock.patch.object(triapi.dispatcher, "load_run", return_value=state),
+            mock.patch.object(triapi.resource_guard, "pause_services", return_value=[]),
+            mock.patch.object(triapi.resource_guard, "resume_services"),
+            mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
+            mock.patch.object(triapi, "load_tiers", return_value={"self_fix": {"enabled": True}}),
+            mock.patch.object(
+                triapi, "_breakdown_and_dispatch", side_effect=RuntimeError("dispatch crash")
+            ),
+            mock.patch.object(
+                triapi.self_fix, "capture_crash", return_value=Path("/tmp/bug.json")
+            ),
+            mock.patch.object(triapi.self_fix, "queue_self_fix", side_effect=queue) as queued,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "dispatch crash"):
+                triapi.cmd_dispatch(state["run_id"], background=False)
+        return queued
+
+    def test_self_fix_marker_skips_auto_queue(self) -> None:
+        events: list[str] = []
+        state = {
+            "run_id": "run-sf",
+            "status": "planned",
+            "plan_text": "approved",
+            "project_dir": str(self_fix.TRIAPI_ROOT.resolve()),
+            "self_fix_bug_report": "/tmp/prior.json",
+        }
+        queued = self._dispatch_crash(state, lambda _p: events.append("queue") or {"status": "queued"})
+        queued.assert_not_called()
+        self.assertEqual(events, [])
+
+    def test_triapi_rooted_run_without_marker_still_auto_queues(self) -> None:
+        events: list[str] = []
+        state = {
+            "run_id": "run-triapi-feature",
+            "status": "planned",
+            "plan_text": "approved",
+            "project_dir": str(self_fix.TRIAPI_ROOT.resolve()),
+        }
+        queued = self._dispatch_crash(
+            state, lambda _p: events.append("queue") or {"status": "queued", "run_id": "fix"}
+        )
+        queued.assert_called_once()
+        self.assertEqual(events, ["queue"])
+
+    def test_relative_source_files_resolve_against_repo_root_not_cwd(self) -> None:
+        report = {
+            "exception_type": "RuntimeError",
+            "exception_message": "boom",
+            "context": "dispatch",
+            "traceback": "",
+            "source_files": ["scripts/tier1_escalate.py"],
+        }
+        with mock.patch.object(
+            self_fix.planner, "plan_turn", return_value={"status": "ok", "text": "plan"}
+        ) as plan_turn:
+            with tempfile.TemporaryDirectory() as tmp:
+                previous = os.getcwd()
+                os.chdir(tmp)
+                try:
+                    result = self_fix.draft_self_fix_plan(report)
+                finally:
+                    os.chdir(previous)
+        self.assertEqual(result["status"], "ok")
+        self.assertIn("scripts/tier1_escalate.py", plan_turn.call_args.args[0])
+        self.assertNotIn("(none identified)", plan_turn.call_args.args[0])
+
+    def test_show_ignores_bug_report_outside_bugs_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "secret.json"
+            outside.write_text('{"secret": true}\n', encoding="utf-8")
+            state = {
+                "run_id": "r1",
+                "status": "self_fix_drafted",
+                "self_fix_bug_report": str(outside),
+                "plan_text": "draft plan",
+            }
+            buf = io.StringIO()
+            with (
+                mock.patch.object(triapi, "_find_self_fix_run", return_value=state),
+                mock.patch.object(triapi, "_resolve_bug_report", return_value=None),
+                mock.patch("sys.stdout", buf),
+            ):
+                triapi.cmd_self_fix_show("r1")
+            out = buf.getvalue()
+            self.assertNotIn("secret", out)
+            self.assertIn("No bug report file found", out)
+            self.assertIn("draft plan", out)
+
+    def test_approve_flips_drafted_run_to_planned(self) -> None:
+        state = {
+            "run_id": "r-approve",
+            "status": "self_fix_drafted",
+            "plan_text": "plan",
+        }
+        with (
+            mock.patch.object(triapi, "_find_self_fix_run", return_value=state),
+            mock.patch.object(triapi.dispatcher, "save_run") as save_run,
+            mock.patch("sys.stdout", io.StringIO()),
+        ):
+            triapi.cmd_self_fix_approve("r-approve")
+        self.assertEqual(state["status"], "planned")
+        save_run.assert_called_once_with(state)
+
+    def test_list_shows_unqueued_bug_stems(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bugs = Path(tmp)
+            (bugs / "20260815-bug.json").write_text("{}\n", encoding="utf-8")
+            buf = io.StringIO()
+            with (
+                mock.patch.object(triapi.self_fix, "BUGS_DIR", bugs),
+                mock.patch.object(triapi.dispatcher, "list_runs", return_value=[]),
+                mock.patch("sys.stdout", buf),
+            ):
+                triapi.cmd_self_fix_list()
+            out = buf.getvalue()
+            self.assertIn("20260815-bug", out)
+            self.assertIn("(none)", out)
+
 
 class LessonsTests(unittest.TestCase):
     def test_malformed_lines_are_skipped(self) -> None:
@@ -201,6 +323,48 @@ class LessonsTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(lines), 1)
         self.assertEqual(selected[0]["id"], first["id"])
+
+    def test_select_relevant_skips_unresolved_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lessons.jsonl"
+            with mock.patch.object(lessons, "LESSONS_PATH", path):
+                lessons.add_lesson(
+                    "SEARCH/REPLACE regex failed",
+                    "empty replacement did not match",
+                    "make newline optional",
+                    component="scripts/edit_blocks.py",
+                    tags=["regex"],
+                )
+                lessons.add_lesson(
+                    "Task x needs human review",
+                    "unresolved after tiers",
+                    "see log",
+                    category="unresolved_pattern",
+                    component="scripts/edit_blocks.py",
+                    tags=["human_handoff"],
+                )
+                selected = lessons.select_relevant(
+                    "edit_blocks.py", "repair SEARCH replace regex"
+                )
+        self.assertEqual(len(selected), 1)
+        self.assertNotEqual(selected[0]["category"], "unresolved_pattern")
+
+    def test_handoff_writes_runtime_store_not_committed_lessons(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            committed = Path(tmp) / "lessons.jsonl"
+            committed.write_text("", encoding="utf-8")
+            handoff = Path(tmp) / "handoffs.jsonl"
+            with (
+                mock.patch.object(lessons, "LESSONS_PATH", committed),
+                mock.patch.object(lessons, "HANDOFF_LESSONS_PATH", handoff),
+                mock.patch.object(orchestrator, "ESCALATIONS_LOG", Path(tmp) / "esc.jsonl"),
+                mock.patch.object(orchestrator, "ESCALATIONS_DIR", Path(tmp)),
+            ):
+                orchestrator.human_handoff("t1", "reason", component="foo.py")
+            self.assertEqual(committed.read_text(encoding="utf-8"), "")
+            row = json.loads(handoff.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(row["category"], "unresolved_pattern")
+            self.assertEqual(row["component"], "foo.py")
 
 
 class CritiqueTests(unittest.TestCase):
@@ -339,6 +503,109 @@ class CritiqueTests(unittest.TestCase):
                 "before",
             )
         critique_diff.assert_not_called()
+
+    def _low_score_config(self, attempts: int) -> dict:
+        return {
+            "critique": {
+                "enabled": True,
+                "applies_to_tiers": ["tier_3"],
+                "critic": "tier_1",
+                "score_threshold": 7,
+                "max_revision_attempts": attempts,
+            }
+        }
+
+    def test_revision_exception_keeps_passing_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.py"
+            target.write_text("passing\n", encoding="utf-8")
+
+            def explode(*args, **kwargs):
+                target.write_text("partial\n", encoding="utf-8")
+                raise json.JSONDecodeError("bad", "x", 0)
+
+            with (
+                mock.patch.object(
+                    orchestrator.critique,
+                    "critique_diff",
+                    return_value={"status": "ok", "score": 3, "issues": ["quality issue"]},
+                ),
+                mock.patch.object(orchestrator, "run_build", return_value=(True, "")),
+            ):
+                orchestrator._critique_and_maybe_revise(
+                    "task",
+                    str(target),
+                    "task description",
+                    "tier_3",
+                    explode,
+                    "check",
+                    tmp,
+                    "",
+                    self._low_score_config(1),
+                    "before\n",
+                )
+            self.assertEqual(target.read_text(encoding="utf-8"), "passing\n")
+
+    def test_zero_revision_attempts_still_scores_but_does_not_revise(self) -> None:
+        escalate = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.py"
+            target.write_text("passing\n", encoding="utf-8")
+            with mock.patch.object(
+                orchestrator.critique,
+                "critique_diff",
+                return_value={"status": "ok", "score": 3, "issues": ["quality issue"]},
+            ) as critique_diff:
+                orchestrator._critique_and_maybe_revise(
+                    "task",
+                    str(target),
+                    "desc",
+                    "tier_3",
+                    escalate,
+                    "check",
+                    tmp,
+                    "",
+                    self._low_score_config(0),
+                    "before\n",
+                )
+        critique_diff.assert_called_once()
+        escalate.assert_not_called()
+
+    def test_max_revision_attempts_retries_after_failed_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.py"
+            target.write_text("passing\n", encoding="utf-8")
+            calls: list[str] = []
+
+            def escalate(*args, **kwargs):
+                calls.append("escalate")
+                if len(calls) == 1:
+                    return {"status": "fix_rejected", "reason": "no blocks"}
+                target.write_text("revised\n", encoding="utf-8")
+                return {"status": "fix_applied"}
+
+            with (
+                mock.patch.object(
+                    orchestrator.critique,
+                    "critique_diff",
+                    return_value={"status": "ok", "score": 3, "issues": ["quality issue"]},
+                ),
+                mock.patch.object(orchestrator, "run_build", return_value=(True, "")),
+            ):
+                orchestrator._critique_and_maybe_revise(
+                    "task",
+                    str(target),
+                    "desc",
+                    "tier_3",
+                    escalate,
+                    "check",
+                    tmp,
+                    "",
+                    self._low_score_config(2),
+                    "before\n",
+                )
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(target.read_text(encoding="utf-8"), "revised\n")
 
 
 if __name__ == "__main__":

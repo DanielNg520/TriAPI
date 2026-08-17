@@ -415,14 +415,17 @@ relying on any of this if it's been a while):
    `draft_self_fix_plan()`, and if it returns a usable `plan_text`,
    creates a normal run via `dispatcher.new_run(prompt=<the bug-fix
    framing text>, project_dir=<TriAPI's own repo root>)` and stores the
-   drafted `plan_text` on it with `status="planned"` — **but does not
-   call `dispatch()`**. This is the queuing step only; a human still
-   explicitly approves before anything executes, same discipline as
+   drafted `plan_text` on it with `status="self_fix_drafted"` — **but does
+   not call `dispatch()`**. `triapi self-fix approve` is the only
+   transition from `self_fix_drafted` to `planned`. This is the queuing
+   step only; a human still explicitly approves before anything executes,
+   same discipline as
    `triapi plan`'s existing "nothing is built until approved" rule
    (`planner.py`'s own docstring/comment already states this — don't
    weaken it for self-fix).
    - Verify: given the same fixture bug report, `queue_self_fix()`
-     produces a real `logs/runs/<run_id>.json` with `status="planned"`,
+     produces a real `logs/runs/<run_id>.json` with
+     `status="self_fix_drafted"`,
      non-null `plan_text`, and `project_dir` equal to TriAPI's own repo
      root (assert the actual path, not just "is a string").
 5. `scripts/triapi.py` — new `self-fix` subcommand group:
@@ -468,15 +471,20 @@ relying on any of this if it's been a while):
      against TriAPI's real root, never the bogus one — assert the
      resulting run's `project_dir` directly.
 8. **No recursive self-fix.** If a dispatch run that is *itself* a
-   self-fix run (i.e. its own `project_dir` already equals TriAPI's repo
-   root, or a `context` marker set when `queue_self_fix()` creates the
-   run) crashes, `capture_crash()` must still write the bug report (for
-   human visibility) but the auto-drafting/queuing step (`Phase 2`) must
-   not fire again for it — fall through to a plain, clearly-labeled
-   stop instead, avoiding an infinite self-fix-of-a-self-fix loop.
+   self-fix run (marked with `self_fix_bug_report` when
+   `queue_self_fix()` creates it) crashes, `capture_crash()` must still
+   write the bug report (for human visibility) but the auto-drafting/
+   queuing step (`Phase 2`) must not fire again for it — fall through
+   to a plain, clearly-labeled stop instead, avoiding an infinite
+   self-fix-of-a-self-fix loop. A crash in a normal run whose
+   `project_dir` happens to be TriAPI's own root still auto-queues —
+   that is the intended capture path for bugs found while working on
+   TriAPI itself. The marker, not the project_dir, is the recursion
+   guard.
    - Verify: a fixture crash inside a run whose state carries that
      self-fix marker produces exactly one bug report and zero new
-     queued runs — assert `logs/runs/` didn't grow.
+     queued runs — assert `logs/runs/` didn't grow. A fixture crash
+     in a TriAPI-rooted run *without* the marker does auto-queue.
 
 ### Phase 4 — Final sweep (mandatory, same discipline as every other plan in this project)
 
@@ -824,31 +832,30 @@ against real repo state, same convention prior TriAPI phases used.
    - Verify: `python3 -m py_compile scripts/tier2_escalate.py`.
 8. `scripts/orchestrator.py` — in `human_handoff(task_id, reason,
    detail="")`, after the existing `escalations.jsonl`/summary-file
-   writes, add one call to `scripts.lessons.add_lesson(
-   bug_description=f"Task '{task_id}' exhausted all tiers",
-   what_went_wrong=reason, fix_description="(unresolved — needs human
-   review; see " + str(summary_path) + ")", category=
-   "unresolved_pattern", component=task_id, tags=["human_handoff"])` —
-   auto-captures the near-term, low-risk case: a task hitting
-   `human_handoff` after all four tiers. Add `from scripts import
-   lessons` import. This function is already reused by `run_task()`'s
-   tier-2-exhausted case, `verify_task()`'s verification-failure case,
-   and `dispatcher.py`'s git-item failures — correct for all three, all
-   genuine "the pipeline couldn't handle this" patterns worth capturing.
+   writes, add one call to `scripts.lessons.add_lesson(...,
+   path=lessons.HANDOFF_LESSONS_PATH)` with `category=
+   "unresolved_pattern"` — auto-captures the near-term, low-risk case
+   to gitignored `logs/handoff_lessons.jsonl`, not the committed
+   `knowledge/lessons.jsonl` store. `select_relevant()` skips
+   `unresolved_pattern` so these cannot crowd prompt injection. Add
+   `from scripts import lessons` import. This function is already reused
+   by `run_task()`'s tier-2-exhausted case, `verify_task()`'s
+   verification-failure case, and `dispatcher.py`'s git-item failures —
+   correct for all three, all genuine "the pipeline couldn't handle
+   this" patterns worth capturing.
    - Verify: `python3 -m py_compile scripts/orchestrator.py && python3
      -c "
 from scripts.orchestrator import human_handoff
-from scripts.lessons import load_lessons
+from scripts.lessons import load_lessons, HANDOFF_LESSONS_PATH
 before = len(load_lessons())
 human_handoff('plan-test-task', 'test reason for verification only')
 after = len(load_lessons())
-assert after == before + 1, (before, after)
-print('ok, lesson auto-captured')
-"` then manually delete the test entry from `knowledge/lessons.jsonl`
-     and the matching `logs/escalations.jsonl`/
-     `logs/escalation_plan-test-task.md` artifacts afterward — this test
-     writes real state, clean it up rather than leaving a fake lesson in
-     the committed knowledge store.
+assert after == before, (before, after)
+assert HANDOFF_LESSONS_PATH.exists()
+print('ok, committed store unchanged')
+"` then delete the matching `logs/escalations.jsonl`/
+     `logs/escalation_plan-test-task.md` / `logs/handoff_lessons.jsonl`
+     artifacts afterward.
 9. `mapping.md` — add a `## knowledge/` section documenting
    `lessons.jsonl`'s schema and purpose, and update the `scripts/`
    section's entries for `lessons.py`, `edit_blocks.py` (new

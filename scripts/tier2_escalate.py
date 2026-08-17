@@ -38,8 +38,11 @@ def build_user_content(
     context_blob: str = "",
     revision_note: str = "",
     current_contents: str | None = None,
+    description: str = "",
 ) -> str:
     parts = []
+    if description:
+        parts.append(f"Task:\n{description}")
     if context_blob:
         parts.append(context_blob)
     # target_path may not exist yet (a new file, e.g. a new ADR) -- see
@@ -76,7 +79,11 @@ def escalate(
     revision_note: str = "",
     description: str = "",
 ) -> dict:
-    guard = check_tier2_ok()
+    try:
+        guard = check_tier2_ok()
+    except requests.RequestException as e:
+        log.warning("[%s] Tier 2 budget guard check failed: %s", task_id, e)
+        return {"status": "skipped", "reason": f"Tier 2 budget guard check failed: {e}"}
     if not guard["ok"]:
         log.warning("[%s] Tier 2 skipped: %s", task_id, guard["reason"])
         return {"status": "skipped", "reason": guard["reason"]}
@@ -99,6 +106,7 @@ def escalate(
         context_blob,
         revision_note,
         current_contents=current_contents,
+        description=description,
     )
     system_instruction = (
         edit_blocks.build_edit_prompt_header(

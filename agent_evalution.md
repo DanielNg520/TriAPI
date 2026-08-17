@@ -2,6 +2,9 @@
 
 Date: 2026-08-15  
 Branch: `cursor`  
+Follow-up (same day): a second independent TriAPI-only re-audit found remaining
+defects after Phase 22; they were fixed and are recorded at the end of this
+file.  
 Repositories reviewed:
 
 - `/home/dyne/Documents/Coding/TriAPI`
@@ -321,10 +324,128 @@ suite were used instead.
 - The unrelated 92-file oh-my-llama overhaul was explicitly outside this audit.
 - No commits were created.
 
-## Final assessment
+## Final assessment (Phase 22, morning)
 
 The four worked cases are now implemented substantially more safely and match
 their documented contracts. The highest-risk control flow—TriAPI crash
 recovery and post-success critique—is fail-safe and regression-tested. The
 remaining risks are portability/live-integration concerns rather than known
 blocking correctness defects in the audited implementation.
+
+That last sentence was stale by the afternoon re-audit below.
+
+---
+
+## Follow-up: TriAPI-only re-audit and eight fixes (2026-08-15, afternoon)
+
+A later session on the same `cursor` branch re-read `AGENT_GUIDE.md`,
+`agent_testrun.md`, this file, and `git log main..HEAD`, then independently
+re-checked only the new TriAPI implementation (self-fix, lessons, critique,
+orchestrator/tier wiring). oh-my-llama was out of scope.
+
+The Phase 22 harden had closed the holes it named (no `sys.excepthook`,
+fail-safe `capture_crash`, resume-before-queue, critique JSON validation,
+failed-rebuild revert when `run_build` returns false). Eight remaining
+issues were still real. All eight were fixed in this follow-up. Branch
+regression tests went from 14 to 25, all passing.
+
+### Findings that were still open
+
+| ID | Severity | Location | Finding |
+|----|----------|----------|---------|
+| H1 | high | `scripts/orchestrator.py`, `scripts/tier1_escalate.py` | Advisory critique revision was not fail-safe. `_critique_and_maybe_revise` wrapped `critique_diff` but not `escalate_fn` / `run_build` / revert `write_text`. `tier1_escalate` still did uncaught `json.loads(result.stdout)`. A malformed Claude CLI envelope after a passing rebuild aborted `run_task`, so dispatcher never recorded success and resume could retry from Tier 4 and overwrite the good fix. Contradicted AGENT_GUIDE (“a broken critique call must never block”) and this file’s earlier claim that revision exceptions stay advisory. |
+| M1 | medium | `scripts/triapi.py` | Auto-queue skipped every run whose `project_dir` was the TriAPI root, not only runs created by `queue_self_fix`. Crashes during learning / self-fix / any TriAPI-targeted feature produced a bug report and then stopped. Tests covered the foreign-repo queue path, not this skip. |
+| M2 | medium | `scripts/orchestrator.py`, `knowledge/lessons.jsonl` | Every `human_handoff` appended to the committed lessons store, including git and verify_only failures. Unique task IDs kept growing the file; `select_relevant(max_n=3)` could prefer `unresolved_pattern` noise over the three seeded real bugs. Phase 22 had already had to strip two run-specific artifacts. |
+| M3 | medium | `scripts/self_fix.py` | `capture_crash` stores repo-relative `source_files`. `draft_self_fix_plan` then `Path(candidate).resolve()`d them against CWD. `triapi self-fix queue` from a directory other than the repo root dropped file grounding and prompted “(none identified)”. Background auto-queue was safe because the child cwd is the repo root. |
+| L1 | low | `scripts/orchestrator.py` | `max_revision_attempts` was treated as a boolean. `0` skipped scoring entirely. Values greater than 1 still performed a single pass. |
+| L2 | low | `AGENT_GUIDE.md` vs `scripts/self_fix.py` | Guide Phase 2 item 4 still said `queue_self_fix` stores `status=planned`. Code correctly used `self_fix_drafted`; approve is the only flip to `planned`. |
+| L3 | low | `scripts/triapi.py` | `cmd_self_fix_show` replaced the traversal-safe `_resolve_bug_report` path with `state["self_fix_bug_report"]` unchecked. A hand-patched run JSON could point outside `logs/triapi_bugs/`. |
+| L4 | low | `tests/test_branch_features.py` | 14 tests covered the Phase 22 fixes they named. Missing: recursion-guard skip, revision-path exceptions, CWD source-file resolution, CLI list/show/approve, `max_revision_attempts` 0 and >1. |
+
+### Fixes applied (TriAPI only)
+
+**H1.** `_critique_and_maybe_revise` now has an outer try/except so unexpected
+exceptions cannot abort a passing item. Revision `escalate()` / `run_build` /
+revert `write_text` are each guarded; a failed attempt restores the
+pre-revision file. `tier1_escalate` parses the Claude CLI envelope the same
+way critique does: `JSONDecodeError` or a non-dict / missing `result` returns
+`{"status": "error", ...}` instead of raising.
+
+**M1.** Auto-queue recursion guard is the `self_fix_bug_report` marker only. A
+normal dispatch whose `project_dir` is the TriAPI root still auto-queues.
+AGENT_GUIDE Phase 3 item 8 was updated to match (marker, not project_dir).
+
+**M2.** `human_handoff` writes `unresolved_pattern` rows to gitignored
+`logs/handoff_lessons.jsonl` via `lessons.add_lesson(...,
+path=HANDOFF_LESSONS_PATH)`, not `knowledge/lessons.jsonl`.
+`select_relevant()` skips `unresolved_pattern` so leftover committed rows
+cannot crowd prompt injection. Manual `python3 -m scripts.lessons add` still
+targets the curated store.
+
+**M3.** Relative `source_files` resolve against `TRIAPI_ROOT`, not CWD.
+
+**L1.** `max_revision_attempts: 0` still scores but does not revise. Values
+greater than 1 retry after a failed apply, then stop after a successful
+rebuild (no further retries regardless of a revised score).
+
+**L2.** AGENT_GUIDE Phase 2 item 4 now says queue stores `self_fix_drafted`
+and `triapi self-fix approve` is the only transition to `planned`.
+
+**L3.** `cmd_self_fix_show` only follows a run’s `self_fix_bug_report` if that
+path resolves inside `logs/triapi_bugs/` and is a real file.
+
+**L4.** Added tests for: revision exceptions keeping passing content; marker
+skips auto-queue vs TriAPI-rooted run without marker still queues; CWD-independent
+source-file grounding; list/show/approve CLI; handoff isolation from the
+committed store; `select_relevant` skipping unresolved patterns;
+`max_revision_attempts` 0 and 2.
+
+`mapping.md` was updated for the same contracts (handoff path, marker-only
+recursion guard, exception-safe critique revision).
+
+### Files touched in this follow-up
+
+- `scripts/orchestrator.py`
+- `scripts/tier1_escalate.py`
+- `scripts/triapi.py`
+- `scripts/self_fix.py`
+- `scripts/lessons.py`
+- `tests/test_branch_features.py`
+- `AGENT_GUIDE.md`
+- `mapping.md`
+- `agent_evalution.md` (this follow-up section)
+
+### Verification (follow-up)
+
+```text
+python3 -m py_compile scripts/orchestrator.py scripts/tier1_escalate.py \
+  scripts/self_fix.py scripts/triapi.py scripts/lessons.py
+passed
+
+PYTHONPATH=. python3 -m unittest tests.test_branch_features -v
+25 tests passed
+
+git diff --check -- <touched files above>
+passed
+```
+
+No live Claude / Ollama calls, no oh-my-llama re-check, no commit.
+
+### Residual after this follow-up
+
+Unchanged from Phase 22 where they still apply: critique and self-fix
+planning are mock-tested, not live-CLI-tested; no deliberate live crash was
+injected into a background production dispatch; breakdown `status != ok`
+still `SystemExit`s without a bug report (intentional for quota/backend
+failures, not uncaught TriAPI exceptions). Pre-existing first-attempt JSON
+parsing in Tier 2/3 was not expanded in this pass — Tier 1’s CLI envelope
+is now guarded because critique revision newly invokes it after a passing
+fix.
+
+### Assessment after this follow-up
+
+The eight remaining TriAPI contract gaps from the afternoon re-audit are
+closed and regression-tested. Crash capture stays fail-safe; auto-queue now
+fires for ordinary TriAPI-targeted work and only refuses nested self-fix
+runs; critique revision can no longer turn a passing item into a dispatch
+crash; the committed lessons store stays curated.

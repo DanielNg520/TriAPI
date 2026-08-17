@@ -59,8 +59,21 @@ def _critique_and_maybe_revise(task_id: str, resolved_target: str, description: 
     """Advisory diff-quality critique after a Tier 3/1/2 fix already passed
     rebuild. Never changes resolved_by / never calls human_handoff / never
     forces fall-through to the next tier. On a below-threshold score, makes
-    at most one revision pass with critique feedback folded into
-    revision_note; reverts if that revision breaks the build."""
+    at most ``max_revision_attempts`` revision passes with critique feedback
+    folded into revision_note; reverts if a revision breaks the build.
+    Any unexpected exception is swallowed so a passing item cannot be aborted."""
+    try:
+        _critique_and_maybe_revise_inner(
+            task_id, resolved_target, description, tier_name, escalate_fn,
+            build_cmd, workdir, context_blob, config, before_content,
+        )
+    except Exception as exc:
+        log.warning("[%s] Critique/revision failed unexpectedly for %s: %s", task_id, tier_name, exc)
+
+
+def _critique_and_maybe_revise_inner(task_id: str, resolved_target: str, description: str,
+                                tier_name: str, escalate_fn, build_cmd: str, workdir: str,
+                                context_blob: str, config: dict, before_content: str) -> None:
     critique_cfg = config.get("critique", {})
     if not critique_cfg.get("enabled", False):
         return
@@ -75,7 +88,8 @@ def _critique_and_maybe_revise(task_id: str, resolved_target: str, description: 
     except (TypeError, ValueError):
         log.warning("[%s] Invalid critique numeric configuration; skipping critique", task_id)
         return
-    if max_revision_attempts < 1:
+    if max_revision_attempts < 0:
+        log.warning("[%s] Invalid max_revision_attempts %s; skipping critique", task_id, max_revision_attempts)
         return
 
     after_content = _read_target_text(resolved_target)
@@ -124,36 +138,78 @@ def _critique_and_maybe_revise(task_id: str, resolved_target: str, description: 
             score,
         )
         return
+    if max_revision_attempts < 1:
+        log.warning(
+            "[%s] Critique flagged %s's fix (score=%s/10): %s -- no revision "
+            "(max_revision_attempts=0); keeping original passing fix",
+            task_id, tier_name, score, issues,
+        )
+        return
 
     log.warning(
-        "[%s] Critique flagged %s's fix (score=%s/10): %s -- attempting one revision pass",
-        task_id, tier_name, score, issues,
+        "[%s] Critique flagged %s's fix (score=%s/10): %s -- attempting up to %s revision pass(es)",
+        task_id, tier_name, score, issues, max_revision_attempts,
     )
     pre_revision_content = after_content
-    rev = escalate_fn(
-        task_id,
-        resolved_target,
-        context_blob=context_blob,
-        revision_note="; ".join(str(i) for i in issues),
-        description=description,
+    revision_note = "; ".join(str(i) for i in issues)
+
+    def _revert() -> None:
+        try:
+            Path(resolved_target).write_text(pre_revision_content)
+        except OSError as revert_exc:
+            log.warning("[%s] Could not revert after failed revision: %s", task_id, revert_exc)
+
+    for attempt in range(1, max_revision_attempts + 1):
+        try:
+            rev = escalate_fn(
+                task_id,
+                resolved_target,
+                context_blob=context_blob,
+                revision_note=revision_note,
+                description=description,
+            )
+        except Exception as exc:
+            log.warning(
+                "[%s] Critique revision attempt %s/%s raised %s -- reverting",
+                task_id, attempt, max_revision_attempts, exc,
+            )
+            _revert()
+            continue
+        if rev.get("status") != "fix_applied":
+            log.warning(
+                "[%s] Critique revision attempt %s/%s failed (%s) -- reverting",
+                task_id, attempt, max_revision_attempts, rev.get("reason") or rev.get("status"),
+            )
+            _revert()
+            continue
+
+        try:
+            ok, _output = run_build(build_cmd, workdir)
+        except Exception as exc:
+            log.warning(
+                "[%s] Critique revision rebuild raised %s -- reverting",
+                task_id, exc,
+            )
+            _revert()
+            continue
+        if not ok:
+            _revert()
+            log.warning(
+                "[%s] Critique revision attempt %s/%s broke the build -- reverted",
+                task_id, attempt, max_revision_attempts,
+            )
+            continue
+
+        log.info(
+            "[%s] Critique revision %s/%s applied and build still passes",
+            task_id, attempt, max_revision_attempts,
+        )
+        return
+
+    log.warning(
+        "[%s] Critique revisions exhausted (%s) -- kept original passing fix",
+        task_id, max_revision_attempts,
     )
-    if rev.get("status") != "fix_applied":
-        log.warning(
-            "[%s] Critique revision attempt failed (%s) -- kept original passing fix",
-            task_id, rev.get("reason") or rev.get("status"),
-        )
-        return
-
-    ok, _output = run_build(build_cmd, workdir)
-    if not ok:
-        Path(resolved_target).write_text(pre_revision_content)
-        log.warning(
-            "[%s] Critique revision broke the build -- reverted to pre-revision fix, kept unresolved critique warning",
-            task_id,
-        )
-        return
-
-    log.info("[%s] Critique revision applied and build still passes", task_id)
 
 
 def human_handoff(
@@ -187,6 +243,7 @@ def human_handoff(
             category="unresolved_pattern",
             component=component or task_id,
             tags=["human_handoff"],
+            path=lessons.HANDOFF_LESSONS_PATH,
         )
     except Exception as exc:
         log.warning("[%s] Could not record handoff lesson: %s", task_id, exc)
@@ -274,7 +331,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         )
         if result3.get("status") == "fix_rejected":
             log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
-        if _rebuild_after_patch(task_id, build_cmd, workdir):
+        if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
             resolved_by = "tier_3"
             _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
                                         tier3_escalate, build_cmd, workdir, context_blob, config, before_content)
@@ -290,7 +347,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             )
             if result1.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 1 fix rejected: %s", task_id, result1.get("reason"))
-            if _rebuild_after_patch(task_id, build_cmd, workdir):
+            if result1.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_1"
                 _critique_and_maybe_revise(task_id, resolved_target, description, "tier_1",
                                             tier1_escalate, build_cmd, workdir, context_blob, config, before_content)
@@ -309,7 +366,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             )
             if result2.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
-            if _rebuild_after_patch(task_id, build_cmd, workdir):
+            if result2.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_2"
                 _critique_and_maybe_revise(task_id, resolved_target, description, "tier_2",
                                             tier2_escalate, build_cmd, workdir, context_blob, config, before_content)

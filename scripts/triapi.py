@@ -257,10 +257,7 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
         exc, original_tb = crash
         # Queue only after resource-competing services have resumed. Planning
         # can take minutes and must not extend the resource_guard critical section.
-        is_self_fix_run = (
-            "self_fix_bug_report" in state
-            or Path(state.get("project_dir") or "").resolve() == self_fix.TRIAPI_ROOT.resolve()
-        )
+        is_self_fix_run = "self_fix_bug_report" in state
         try:
             self_fix_enabled = load_tiers().get("self_fix", {}).get("enabled", True)
         except Exception as config_exc:
@@ -392,7 +389,17 @@ def cmd_self_fix_show(bug_id: str) -> None:
     bug_path = _resolve_bug_report(bug_id)
     state = _find_self_fix_run(bug_id)
     if state and "self_fix_bug_report" in state:
-        bug_path = Path(state["self_fix_bug_report"])
+        linked = Path(state["self_fix_bug_report"]).expanduser()
+        try:
+            linked = linked.resolve()
+        except OSError:
+            linked = None
+        else:
+            if (
+                linked.is_relative_to(self_fix.BUGS_DIR.resolve())
+                and linked.is_file()
+            ):
+                bug_path = linked
 
     if bug_path is not None and bug_path.is_file():
         import json

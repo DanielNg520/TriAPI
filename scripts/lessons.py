@@ -22,6 +22,11 @@ log = get_logger("lessons")
 LESSONS_PATH = (
     Path(__file__).resolve().parent.parent / "knowledge" / "lessons.jsonl"
 )
+# Runtime handoff captures — gitignored with the rest of logs/*.jsonl so they
+# cannot dirty the committed curated store or crowd prompt injection.
+HANDOFF_LESSONS_PATH = (
+    Path(__file__).resolve().parent.parent / "logs" / "handoff_lessons.jsonl"
+)
 
 # Helper Functions ----------------------------------------------
 
@@ -65,11 +70,13 @@ def add_lesson(
     category: str = "bug_fix",
     component: str = "",
     tags: Optional[List[str]] = None,
+    path: Optional[Path] = None,
 ) -> Dict:
     """Append a lesson safely, deduplicating identical records."""
     import fcntl
 
-    _ensure_file_exists(LESSONS_PATH)
+    dest = path or LESSONS_PATH
+    _ensure_file_exists(dest)
 
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y%m%d%H%M%S%f")
@@ -87,7 +94,7 @@ def add_lesson(
         "fix_description": fix_description,
     }
 
-    with LESSONS_PATH.open("a+", encoding="utf-8") as fp:
+    with dest.open("a+", encoding="utf-8") as fp:
         fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
         fp.seek(0)
         for line in fp:
@@ -121,6 +128,10 @@ def select_relevant(
     scored: List[tuple] = []
 
     for lesson in load_lessons():
+        if not isinstance(lesson, dict):
+            continue
+        if lesson.get("category") == "unresolved_pattern":
+            continue
         # Extract relevant tokens
         component_toks = set(_tokenize(lesson.get("component", "")))
         tags_toks = set(_tokenize(" ".join(str(t) for t in lesson.get("tags", []))))
