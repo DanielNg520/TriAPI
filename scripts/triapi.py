@@ -29,10 +29,11 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import budget_guard, dispatcher, git_ops, jules_client, planner, resource_guard, self_fix
+from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, planner, resource_guard, self_fix
 from scripts.config_loader import load_resource_guard_services, load_tiers
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
@@ -53,7 +54,25 @@ APPROVE_WORDS = {"approve", "approved", "looks good", "lgtm", "yes", "go", "proc
 CANCEL_WORDS = {"cancel", "abort", "stop", "no"}
 
 
-def cmd_plan(prompt: str, project_dir: str) -> None:
+def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
+    if not refactor:
+        incomplete = agents_md_gate.find_incomplete_plan(project_dir)
+        if incomplete:
+            print(
+                f"Refusing to plan: this repo's AGENTS.md already has an appended "
+                f"TriAPI plan (run {incomplete['run_id']}) with {incomplete['unchecked_count']} "
+                f"unchecked step(s) left. Finish it first -- resume with "
+                f"`triapi dispatch {incomplete['run_id']}`, or check `triapi status "
+                f"{incomplete['run_id']}` if it's stuck on a human_handoff -- or pass "
+                f"`triapi plan ... --refactor` if this goal is a deliberate refactor/pivot "
+                f"that supersedes it."
+            )
+            log.info(
+                "[plan] Refused: incomplete plan run_id=%s unchecked=%d project_dir=%s",
+                incomplete["run_id"], incomplete["unchecked_count"], project_dir,
+            )
+            return
+
     state = dispatcher.new_run(prompt, project_dir)
     log.info("[%s] triapi plan started: project_dir=%s", state["run_id"], project_dir)
     print(f"Run ID: {state['run_id']}\n")
@@ -98,6 +117,10 @@ def cmd_plan(prompt: str, project_dir: str) -> None:
             state["plan_text"] = turn["text"]
             state["status"] = "planned"
             dispatcher.save_run(state)
+            agents_md_gate.append_plan(
+                project_dir, state["run_id"], turn["text"],
+                datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            )
             log.info("[%s] Plan approved (total notional cost $%.4f)", state["run_id"], total_notional)
             print(f"\nPlan approved. Planning cost (notional, subscription-covered): ${total_notional:.4f}")
             print(f"Run it: triapi dispatch {state['run_id']}")
@@ -175,6 +198,7 @@ def _breakdown_and_dispatch(state: dict) -> None:
     ))
 
     if state["status"] == "completed":
+        agents_md_gate.mark_plan_complete(state["project_dir"], state["run_id"])
         jules_check = budget_guard.check_jules_ok()
         if not jules_check["ok"]:
             print(f"\nSkipping Jules advisory test: {jules_check['reason']}")
@@ -493,6 +517,11 @@ def main():
     p_plan = sub.add_parser("plan", help="interactively define and approve an execution plan")
     p_plan.add_argument("prompt")
     p_plan.add_argument("--project-dir", default=".")
+    p_plan.add_argument(
+        "--refactor", action="store_true",
+        help="override the one-plan-per-repo gate: proceed even if this repo's AGENTS.md "
+        "has an incomplete TriAPI plan, because this goal is a deliberate refactor/pivot",
+    )
 
     p_dispatch = sub.add_parser("dispatch", help="execute an approved plan")
     p_dispatch.add_argument("run_id")
@@ -517,7 +546,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "plan":
-        cmd_plan(args.prompt, args.project_dir)
+        cmd_plan(args.prompt, args.project_dir, args.refactor)
     elif args.command == "dispatch":
         if args.no_tier1:
             os.environ["TRIAPI_NO_TIER1"] = "1"

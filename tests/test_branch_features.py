@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from scripts import (
+    agents_md_gate,
     budget_guard,
     cost_report,
     critique,
@@ -993,6 +994,95 @@ class BreakdownDispatchJulesHookTests(unittest.TestCase):
             triapi._breakdown_and_dispatch(state)
         push_mock.assert_called_once()
         run_jules_test.assert_not_called()
+
+
+class AgentsMdGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.project_dir = self.tmpdir.name
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def test_no_agents_md_means_no_incomplete_plan(self) -> None:
+        self.assertIsNone(agents_md_gate.find_incomplete_plan(self.project_dir))
+
+    def test_append_then_find_incomplete(self) -> None:
+        plan = "## Phase 1\n- [ ] step one\n- [ ] step two\n"
+        agents_md_gate.append_plan(self.project_dir, "run-1", plan, "2026-08-16")
+        incomplete = agents_md_gate.find_incomplete_plan(self.project_dir)
+        self.assertIsNotNone(incomplete)
+        self.assertEqual(incomplete["run_id"], "run-1")
+        self.assertEqual(incomplete["unchecked_count"], 2)
+
+    def test_append_creates_file_with_header(self) -> None:
+        agents_md_gate.append_plan(self.project_dir, "run-1", "- [ ] a step", "2026-08-16")
+        text = Path(self.project_dir, "AGENTS.md").read_text()
+        self.assertIn("# AGENTS.md", text)
+        self.assertIn("run_id=run-1", text)
+
+    def test_mark_plan_complete_clears_gate(self) -> None:
+        plan = "- [ ] step one\n- [ ] step two\n"
+        agents_md_gate.append_plan(self.project_dir, "run-1", plan, "2026-08-16")
+        ok = agents_md_gate.mark_plan_complete(self.project_dir, "run-1")
+        self.assertTrue(ok)
+        self.assertIsNone(agents_md_gate.find_incomplete_plan(self.project_dir))
+        text = Path(self.project_dir, "AGENTS.md").read_text()
+        self.assertNotIn("[ ]", text)
+        self.assertIn("[x]", text)
+
+    def test_mark_plan_complete_unknown_run_is_noop(self) -> None:
+        agents_md_gate.append_plan(self.project_dir, "run-1", "- [ ] step", "2026-08-16")
+        ok = agents_md_gate.mark_plan_complete(self.project_dir, "run-nope")
+        self.assertFalse(ok)
+        self.assertIsNotNone(agents_md_gate.find_incomplete_plan(self.project_dir))
+
+    def test_only_most_recent_block_gates(self) -> None:
+        agents_md_gate.append_plan(self.project_dir, "run-1", "- [ ] step", "2026-08-16")
+        agents_md_gate.mark_plan_complete(self.project_dir, "run-1")
+        agents_md_gate.append_plan(self.project_dir, "run-2", "- [ ] another step", "2026-08-17")
+        incomplete = agents_md_gate.find_incomplete_plan(self.project_dir)
+        self.assertEqual(incomplete["run_id"], "run-2")
+
+    def test_block_with_no_checkboxes_is_not_blocking(self) -> None:
+        agents_md_gate.append_plan(self.project_dir, "run-1", "Just prose, no checklist.", "2026-08-16")
+        self.assertIsNone(agents_md_gate.find_incomplete_plan(self.project_dir))
+
+
+class CmdPlanRefactorGateTests(unittest.TestCase):
+    def test_refuses_when_incomplete_plan_exists(self) -> None:
+        with (
+            mock.patch.object(
+                triapi.agents_md_gate,
+                "find_incomplete_plan",
+                return_value={"run_id": "run-1", "unchecked_count": 3},
+            ),
+            mock.patch.object(triapi.dispatcher, "new_run") as new_run_mock,
+            mock.patch("sys.stdout", io.StringIO()) as out,
+        ):
+            triapi.cmd_plan("do something", "/some/project")
+        new_run_mock.assert_not_called()
+        self.assertIn("run-1", out.getvalue())
+        self.assertIn("--refactor", out.getvalue())
+
+    def test_refactor_flag_bypasses_gate(self) -> None:
+        with (
+            mock.patch.object(triapi.agents_md_gate, "find_incomplete_plan") as find_mock,
+            mock.patch.object(
+                triapi.dispatcher,
+                "new_run",
+                return_value={"run_id": "run-2", "prompt": "p", "project_dir": "/x"},
+            ),
+            mock.patch.object(
+                triapi.planner, "plan_turn",
+                return_value={"status": "ok", "text": "plan", "session_id": "s", "notional_cost_usd": 0.0},
+            ),
+            mock.patch("builtins.input", return_value="cancel"),
+            mock.patch.object(triapi.dispatcher, "save_run"),
+            mock.patch("sys.stdout", io.StringIO()),
+        ):
+            triapi.cmd_plan("do something", "/some/project", refactor=True)
+        find_mock.assert_not_called()
 
 
 if __name__ == "__main__":

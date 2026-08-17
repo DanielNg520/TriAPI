@@ -94,7 +94,15 @@ triapi plan "there is a plan.md in this project, follow it strictly to build the
 
 Claude (read-only access to the project) proposes a plan, or asks a clarifying question if the goal is ambiguous. You respond with feedback to revise it, or type `approve` when it's right. Nothing gets built until you approve — getting the plan wrong costs nothing (subscription quota); letting a wrong plan run costs real time and money. This step needs an interactive terminal — it can't run under `--background`.
 
-On approval it prints a run ID and the next command to run.
+On approval it prints a run ID and the next command to run, and the approved plan is appended to the target repo's own `AGENTS.md` (created if missing) as a checklist.
+
+**One plan per repo until it's done.** `triapi plan` refuses to start a new planning session for a `--project-dir` whose `AGENTS.md` still has an appended plan with unchecked steps — finish dispatching it first (`triapi dispatch <run_id>`), or diagnose a stuck `human_handoff` (`triapi status <run_id>`). This stops planning from silently drifting away from a plan that's only partly executed. Pass `--refactor` to override when the new goal is a deliberate refactor/pivot that supersedes the unfinished plan:
+
+```bash
+triapi plan "new goal" --project-dir /path/to/project --refactor
+```
+
+A successful dispatch (`state["status"] == "completed"`) checks off every step in that run's `AGENTS.md` block automatically.
 
 ### 2. Dispatch
 
