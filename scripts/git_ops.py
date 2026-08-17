@@ -36,6 +36,7 @@ log = get_logger("git_ops")
 DEFAULT_BRANCHES = {"main", "master"}
 
 _GITHUB_HTTPS_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$")
+_GITHUB_SSH_RE = re.compile(r"^git@github\.com:([^/]+)/([^/]+?)(\.git)?/?$")
 
 
 def _to_ssh_url(url: str) -> str | None:
@@ -81,6 +82,23 @@ def _ensure_ssh_remote(repo_dir: str) -> None:
     if ssh_url:
         log.info("Rewriting origin to SSH in %s: %s -> %s", repo_dir, current_url.strip(), ssh_url)
         _run(["git", "remote", "set-url", "origin", ssh_url], cwd=repo_dir)
+
+
+def get_github_owner_repo(repo_dir: str) -> tuple[str, str] | None:
+    """Returns (owner, repo) parsed from `repo_dir`'s origin remote, or
+    None if origin isn't a github.com URL (SSH or HTTPS) -- e.g. used to
+    build a Jules `sources/github/<owner>/<repo>` resource name for
+    whichever repo is actually being dispatched, instead of a hardcoded
+    config value naming a different repo."""
+    ok, current_url = _run(["git", "remote", "get-url", "origin"], cwd=repo_dir)
+    if not ok:
+        return None
+    url = current_url.strip()
+    m = _GITHUB_SSH_RE.match(url) or _GITHUB_HTTPS_RE.match(url)
+    if not m:
+        return None
+    owner, repo, _ = m.groups()
+    return owner, repo
 
 
 def clone(url: str, path: str) -> dict:

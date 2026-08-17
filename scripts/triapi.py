@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, planner, resource_guard, self_fix
-from scripts.config_loader import load_resource_guard_services, load_tiers
+from scripts.config_loader import load_resource_guard_services, load_tiers, load_unload_ollama_models_flag
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
     DEFAULT_GPU_LIFETIME_YEARS,
@@ -211,7 +211,13 @@ def _breakdown_and_dispatch(state: dict) -> None:
             else:
                 budget_guard.record_jules_call()
                 jules_config = load_tiers().get("jules_tester", {})
-                source = jules_config.get("source", "")
+                owner_repo = git_ops.get_github_owner_repo(state["project_dir"])
+                if owner_repo:
+                    source = f"sources/github/{owner_repo[0]}/{owner_repo[1]}"
+                else:
+                    # Non-github.com origin (or lookup failed): fall back to
+                    # the configured default rather than guessing further.
+                    source = jules_config.get("source", "")
                 jules_result = jules_client.run_jules_test(
                     prompt=(
                         "This branch was just produced by an automated TriAPI dispatch run "
@@ -225,6 +231,8 @@ def _breakdown_and_dispatch(state: dict) -> None:
                     source=source,
                     title=f"TriAPI advisory test: {state['run_id']}",
                     starting_branch=push_result.get("branch", "main"),
+                    poll_interval=jules_config.get("poll_interval_s", jules_client.DEFAULT_POLL_INTERVAL_SECONDS),
+                    timeout=jules_config.get("poll_timeout_s", jules_client.DEFAULT_POLL_TIMEOUT_SECONDS),
                 )
                 status = jules_result.get("status")
                 if status == "completed":
@@ -304,6 +312,17 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
     # foreground path and the --background path, since the detached child
     # re-execs `dispatch <run_id>` without --background and lands here too.
     paused = resource_guard.pause_services(load_resource_guard_services())
+    # Unload unused Ollama models if configured
+    if load_unload_ollama_models_flag():
+        try:
+            tiers_cfg = load_tiers()
+            default_model_key = tiers_cfg["tier_4_worker"]["default_model"]
+            keep_model = tiers_cfg["tier_4_worker"].get("models", {}).get(default_model_key, default_model_key)
+            ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
+            unloaded = resource_guard.unload_other_ollama_models(keep_model=keep_model, ollama_host=ollama_host)
+            log.info("Unloaded other Ollama models for this dispatch: %s", unloaded)
+        except Exception as exc:
+            log.warning("Could not unload other Ollama models before dispatch: %s", exc)
     crash: tuple[Exception, object] | None = None
     bug_path: Path | None = None
     try:

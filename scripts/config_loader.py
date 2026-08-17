@@ -39,3 +39,11 @@ def load_resource_guard_services(path: Path = RESOURCE_GUARD_PATH) -> list[str]:
     with open(path) as f:
         config = yaml.safe_load(f) or {}
     return config.get("pause_services") or []
+
+def load_unload_ollama_models_flag(path: Path = RESOURCE_GUARD_PATH) -> bool:
+    """Return True if unload_other_ollama_models is true (default), False otherwise."""
+    if not path.exists():
+        return True
+    with open(path) as f:
+        config = yaml.safe_load(f) or {}
+    return config.get("unload_other_ollama_models", True)

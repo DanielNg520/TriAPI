@@ -27,6 +27,7 @@ import signal
 import subprocess
 import sys
 import time
+import requests
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -128,3 +129,45 @@ def resume_services(paused: list[str]) -> None:
     _do_resume(paused)
     _state["resumed"] = True
     LOCK_PATH.unlink(missing_ok=True)
+
+def unload_other_ollama_models(keep_model: str, ollama_host: str) -> list[str]:
+    """
+    Unload all Ollama models except keep_model from the given host.
+
+    Parameters
+    ----------
+    keep_model : str
+        The model name to retain; all others will be unloaded.
+    ollama_host : str
+        Base URL of the Ollama server (e.g., "http://localhost:11434").
+
+    Returns
+    -------
+    list[str]
+        List of names of models successfully unloaded.
+    """
+    unloaded = []
+    try:
+        resp = requests.get(f"{ollama_host}/api/ps")
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        log.warning("Could not retrieve Ollama model list: %s", exc)
+        return []
+
+    for entry in data.get("models", []):
+        name = entry.get("name")
+        if not name or name == keep_model:
+            continue
+        try:
+            log.info("Unloading %s to free resources for TriAPI dispatch", name)
+            post_resp = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": name, "keep_alive": 0},
+            )
+            post_resp.raise_for_status()
+            unloaded.append(name)
+        except requests.RequestException as exc:
+            log.warning("Failed to unload model %s: %s", name, exc)
+
+    return unloaded

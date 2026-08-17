@@ -96,8 +96,20 @@ tier_4_worker:
   # PLAN.md Phase 11), and 5GB less footprint gives real headroom against
   # whatever else is resident. Paired with resource_guard.yaml (pauses
   # competing services during a dispatch run) as the other half of the fix.
-  # Revert to `draft` if resource pressure is no longer a concern and the
-  # extra code quality is worth it.
+  # Re-evaluated 2026-08-17 after scripts/resource_guard.py's
+  # unload_other_ollama_models() shipped (unloads every other resident
+  # Ollama model before a dispatch, removing the "other models competing"
+  # cause above): ran scripts/ollama_load_check.py for real, with nothing
+  # else loaded. Result: STILL FAILS, and it's not the "other models"
+  # theory -- ollama's own journalctl log shows tensors offloaded cleanly
+  # to the GPU (17.5GB Vulkan buffer) but llama-server never finished
+  # starting; the client-side request aborted it after a 300s timeout
+  # with "timed out waiting for llama-server to start: context canceled"
+  # having waited ~4m46s. The bottleneck is this model's size against the
+  # 780M iGPU's own memory bandwidth, not RAM contention from other
+  # processes -- the unload-rule fix doesn't address this. default_model
+  # stays `fallback`. Don't re-attempt this flip without new information
+  # (e.g. a smaller quant of the 30B model, or different hardware).
   default_model: fallback
   role: "high-volume code drafting, cmake/g++ compilation loops"
   # Local Ollama is not guaranteed to be running (build/verification fails

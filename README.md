@@ -243,3 +243,13 @@ This was built and tested against a machine with an AMD Ryzen iGPU (Radeon 780M)
 - `OLLAMA_FLASH_ATTENTION=1` / `OLLAMA_KV_CACHE_TYPE=q8_0` — memory-efficient attention and a quantized KV cache, giving more headroom for larger models/contexts within the GPU's usable memory pool.
 
 If raising the GPU-usable memory ceiling further (the amdgpu driver's GTT allocation, separate from Ollama's own config), that's a kernel module parameter requiring root and a reboot — not something this repo or Ollama controls.
+
+### Resource guarding
+
+TriAPI can temporarily suspend competing systemd user services to ensure that the local Ollama tier has enough CPU/RAM/GPU resources during a dispatch. The list of services is defined in `config/resource_guard.yaml` under the key `pause_services`. By default it includes common Ollama‑related services such as `oh-my-llama.service`. During a dispatch, these services are paused and then resumed afterward.
+
+In addition to pausing services, TriAPI can unload any running non‑Ollama services. This behaviour is controlled by the `unload_other_ollama_models` key in the same file (default: **true**). When set to `true`, all other Ollama models will be unloaded before a dispatch starts; setting it to `false` disables this unloading while keeping the pause list active. To disable unloading, edit `config/resource_guard.yaml` and change
+```yaml
+unload_other_ollama_models: false
+```
+or use the environment variable `TRIAPI_UNLOAD_OTHER_OLLAMA_MODELS=0`. 

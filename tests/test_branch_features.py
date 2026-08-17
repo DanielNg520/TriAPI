@@ -23,6 +23,7 @@ from scripts import (
     jules_client,
     lessons,
     orchestrator,
+    resource_guard,
     self_fix,
     triapi,
 )
@@ -948,6 +949,11 @@ class BreakdownDispatchJulesHookTests(unittest.TestCase):
             ) as record_call,
             mock.patch.object(
                 triapi.git_ops,
+                "get_github_owner_repo",
+                return_value=("owner", "repo"),
+            ),
+            mock.patch.object(
+                triapi.git_ops,
                 "push",
                 return_value={"ok": True, "branch": "triapi/foo"},
             ) as push_mock,
@@ -1084,6 +1090,99 @@ class CmdPlanRefactorGateTests(unittest.TestCase):
             triapi.cmd_plan("do something", "/some/project", refactor=True)
         find_mock.assert_not_called()
 
+
+class UnloadOllamaModelsTests(unittest.TestCase):
+    def test_unload_models_successful(self) -> None:
+        mock_get_resp = mock.Mock()
+        mock_get_resp.raise_for_status = mock.Mock()
+        mock_get_resp.json.return_value = {
+            "models": [
+                {"name": "keep"},
+                {"name": "other1"},
+                {"name": "other2"},
+            ]
+        }
+
+        def post_side_effect(url, json):
+            resp = mock.Mock()
+            resp.raise_for_status = mock.Mock()
+            return resp
+
+        with (
+            mock.patch.object(resource_guard.requests, "get", return_value=mock_get_resp),
+            mock.patch.object(
+                resource_guard.requests, "post", side_effect=post_side_effect
+            ) as mock_post
+        ):
+            unloaded = resource_guard.unload_other_ollama_models(
+                "keep", "http://localhost:11434"
+            )
+            self.assertEqual(set(unloaded), {"other1", "other2"})
+            mock_post.assert_has_calls(
+                [
+                    mock.call(
+                        "http://localhost:11434/api/generate",
+                        json={"model": "other1", "keep_alive": 0},
+                    ),
+                    mock.call(
+                        "http://localhost:11434/api/generate",
+                        json={"model": "other2", "keep_alive": 0},
+                    ),
+                ],
+                any_order=True,
+            )
+
+    def test_unload_models_get_exception_returns_empty(self) -> None:
+        with mock.patch.object(
+            resource_guard.requests,
+            "get",
+            side_effect=resource_guard.requests.RequestException("boom"),
+        ):
+            unloaded = resource_guard.unload_other_ollama_models(
+                "keep", "http://localhost:11434"
+            )
+            self.assertEqual(unloaded, [])
+
+    def test_unload_models_partial_failure(self) -> None:
+        mock_get_resp = mock.Mock()
+        mock_get_resp.raise_for_status = mock.Mock()
+        mock_get_resp.json.return_value = {
+            "models": [
+                {"name": "other1"},
+                {"name": "other2"},
+            ]
+        }
+
+        def post_side_effect(url, json):
+            if json["model"] == "other1":
+                raise resource_guard.requests.RequestException("fail")
+            resp = mock.Mock()
+            resp.raise_for_status = mock.Mock()
+            return resp
+
+        with (
+            mock.patch.object(resource_guard.requests, "get", return_value=mock_get_resp),
+            mock.patch.object(
+                resource_guard.requests, "post", side_effect=post_side_effect
+            ) as mock_post
+        ):
+            unloaded = resource_guard.unload_other_ollama_models(
+                "", "http://localhost:11434"
+            )
+            self.assertEqual(unloaded, ["other2"])
+            mock_post.assert_has_calls(
+                [
+                    mock.call(
+                        "http://localhost:11434/api/generate",
+                        json={"model": "other1", "keep_alive": 0},
+                    ),
+                    mock.call(
+                        "http://localhost:11434/api/generate",
+                        json={"model": "other2", "keep_alive": 0},
+                    ),
+                ],
+                any_order=True,
+            )
 
 if __name__ == "__main__":
     unittest.main()

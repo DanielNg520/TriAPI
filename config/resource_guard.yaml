@@ -21,3 +21,12 @@ pause_services:
   - "oh-my-llama-discord.service"
   - "oh-my-llama-brief.service"
   - "oh-my-llama-brief.timer"
+
+# Unload other Ollama models (default: true)
+#
+# This setting complements the systemd `pause_services` list above.
+# When set to true, any running non‑Ollama services will be unloaded
+# during a dispatch. Setting it to false disables this behavior while
+# keeping the pause list active.
+unload_other_ollama_models: true
+
