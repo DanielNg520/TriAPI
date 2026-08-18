@@ -2,25 +2,22 @@
 
 Repo-root reference for coding agents: codebase conventions, test commands, architecture, and guidelines, plus a living index of every file/dir in this repo. Read this before exploring — updated at the end of every phase. (Renamed from `mapping.md` 2026-08-17; conventions/test-commands/architecture content is being folded in incrementally as it's touched, not as a one-time rewrite — see `AGENT_GUIDE.md`/`ARCHITECTURE.md`/`README.md` for the fuller versions of each until then.)
 
-**Standing rule, effective 2026-08-18: docs stay clean, no sprawl.** What's
-actually implemented/decided goes to exactly one of two places, never a new
-standalone doc: `PLAN.md` (this repo's permanent, near-log-like build-history
-and decisions record — detail kept, not summarized away) or directly in the
-source code as a comment at the point it matters. Anything that doesn't
-contribute to the implementation or functionality of this codebase — a
-narrative of how something was built, a finished/superseded plan, a
-post-run audit — does not get to linger in any standalone doc, this one
-included. `CARRYOVER.md` stays brief by the same discipline: only what's
-needed to resume the *next* session, nothing else; fold finished-work
-narrative out of it into `PLAN.md` the moment it's resolved, in the same
-edit. (2026-08-18: `agent_evalution.md`, `agent_testrun.md`, and the stale
-`GHOSTWRITER_PLAN.md` — which still said "queued" for a capability that had
-long since shipped — were folded into `PLAN.md` and removed as standalone
-files under this rule; `CARRYOVER.md` was cut from ~2,400 lines of
-cross-session narrative to a current-state brief, with the full history
-preserved in `PLAN.md`.) **This is a standing convention across all of the
-user's repos, not unique to this one** — see oh-my-llama's own `AGENTS.md`
-and `MAPPING.md` for the same pass applied there the same day.
+**Standing rule, effective 2026-08-18: docs stay clean, no sprawl, no oversized
+files.** What's worth knowing goes in exactly one of two places, and only if
+it's actually load-bearing: `PLAN.md` (this repo's phase-by-phase record) or
+a source-code comment at the point it matters. Session narrative, per-run
+diagnostic play-by-play, and anything about a *target* repo TriAPI dispatched
+against (e.g. oh-my-llama) do not belong in TriAPI's docs at all — that
+content is the target repo's own history, not TriAPI's, and belongs in that
+repo's own docs. `CARRYOVER.md` stays brief: only what's needed to resume the
+next session. (2026-08-18: `agent_evalution.md`, `agent_testrun.md`, and
+`GHOSTWRITER_PLAN.md` were removed outright — all three were narrative about
+target-repo work, not TriAPI itself. `CARRYOVER.md` was cut from ~2,400 lines
+of cross-session play-by-play to a short current-state brief; the play-by-play
+itself was discarded, not relocated — it wasn't durable knowledge, it was
+session noise.) **Standing convention across the user's repos** — see
+oh-my-llama's own `AGENTS.md`/`MAPPING.md` for the same discipline applied
+there.
 
 ## Conventions, test commands, architecture (quick reference)
 - **Conventions/guidelines:** full detail in `AGENT_GUIDE.md` (agent operating manual — what's safe to hand-edit vs. must route through the dispatch pipeline, phase discipline, verification requirements).
@@ -28,12 +25,12 @@ and `MAPPING.md` for the same pass applied there the same day.
 - **Architecture:** full detail in `ARCHITECTURE.md` (4-tier escalation state machine, budget guard rationale, DeepSeek cache-hit economics).
 
 ## Root
-- `PLAN.md` — phase-by-phase implementation plan with checklists and end-of-phase tests, PLUS this repo's permanent build-history/decisions log (2026-08-18: absorbed `CARRYOVER.md`'s full cross-session history, `agent_evalution.md`'s independent post-run audit, `agent_testrun.md`'s worked-case run log, and the completed-but-still-said-"queued" `GHOSTWRITER_PLAN.md` — see its own "Session Carryover Log" / "Worked-Case Independent Audit" / "Agent Testrun Log" / "Ghostwriter Capability Plan" sections). The permanent record — read here for *why*, not `CARRYOVER.md`.
+- `PLAN.md` — phase-by-phase implementation plan with checklists and end-of-phase tests. The permanent record of TriAPI's own build — read here for *why*, not `CARRYOVER.md`.
 - `AGENTS.md` — this file (formerly `mapping.md`).
 - `ARCHITECTURE.md` — system design: the 4-tier escalation state machine, DeepSeek cache-hit economics, budget guard rationale, and what changed during the build (Tier 2 redesign, MCP server dropped, Jules deferred).
 - `README.md` — step-by-step walkthrough (first-time run, reading output/cost report, human-handoff files, common gotchas) plus setup (Python deps, sops/age, Ollama systemd service, Claude Code subscription login) and command reference (standalone task, smoke test, cost report).
-- `AGENT_GUIDE.md` (2026-08-14) — for an agent operating `triapi` with Tier 1 off (`--no-tier1` / `tier_1_manager.enabled: false`): what actually changes (repair chain only, `planner.py` untouched), why the agent effectively becomes planner+supervisor+monitor with one less automated repair tier, and the concrete human_handoff diagnosis/patch/resume workflow. Also carries four worked, dispatch-ready test-case plans for another agent to feed into `triapi` (never implement by hand, per the standing supervisor rule): **ghostwriter** (completed); **TriAPI self-fix** (completed; bug-detection-and-self-fix; an implemented `scripts/self_fix.py` + `triapi self-fix` subcommand that captures genuine uncaught TriAPI-level crashes and auto-drafts, but never auto-dispatches, a `triapi plan` fix against TriAPI's own repo); **clean Amazon-page ingestion for ghostwriter** (completed — target `ohmyllama/capabilities/ingestion.py`'s `_ingest_html()`: Phase 1 wires up the already-coded-but-never-installed `trafilatura` dependency (confirmed missing from `pyproject.toml`, silently falls back to noisy MarkItDown extraction today — verified 135K chars of nav junk vs. ~22K with trafilatura on a real Amazon product page), Phase 2 adds a targeted `_extract_amazon_product()` BeautifulSoup path on top for Amazon pages specifically); and **TriAPI learning** (completed; failure-pattern knowledge store + diff-quality critique — full inline phase-by-phase checklist in `AGENT_GUIDE.md` itself, reproduced from an already-approved-but-never-dispatched run `logs/runs/20260812-202927-aa0e40.json`: Phase A is `knowledge/lessons.jsonl` + `scripts/lessons.py` feeding do/don't examples into every tier's prompt, auto-captured on `human_handoff`; Phase B is `scripts/critique.py`, a Tier-1-judged diff-quality score gating one advisory revision pass on Tiers 3/1/2, never blocking or escalating). Run details for all four live in `PLAN.md`'s "Agent Testrun Log" section.
-- `CARRYOVER.md` — brief current-state resume note only (2026-08-18: cut from ~2,400 lines of cross-session narrative to a short current-state brief — full history moved to `PLAN.md`, per the standing doc-hygiene rule above). Read this first when resuming work.
+- `AGENT_GUIDE.md` (2026-08-14) — for an agent operating `triapi` with Tier 1 off (`--no-tier1` / `tier_1_manager.enabled: false`): what actually changes (repair chain only, `planner.py` untouched), why the agent effectively becomes planner+supervisor+monitor with one less automated repair tier, and the concrete human_handoff diagnosis/patch/resume workflow. Also documents `scripts/self_fix.py` (crash-triggered plan drafting, never auto-dispatched) and `knowledge/lessons.py` + `scripts/critique.py` (failure-pattern knowledge store + advisory diff-quality gate) — both TriAPI's own features, proven via worked dispatches against a target repo; target-repo specifics of those dispatches live in that repo's own docs, not here.
+- `CARRYOVER.md` — brief current-state resume note only. Read this first when resuming work.
 - `.sops.yaml` — sops encryption rule: files matching `config/secrets.enc.yaml` are encrypted to the age recipient in `~/.config/sops/age/keys.txt`.
 - `.gitignore` — excludes runtime logs/state, plaintext secrets, Python caches, venvs.
 - `requirements.txt` — Python deps: `requests`, `PyYAML`, `mcp`.
