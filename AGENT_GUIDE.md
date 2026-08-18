@@ -10,7 +10,7 @@ Only the **repair role** (`scripts/tier1_escalate.py`, called from
 `orchestrator.run_task()`'s escalation chain) is disabled. The chain becomes:
 
 ```
-Tier 4 (Ollama, local)  →  Tier 3 (DeepSeek)  →  [Tier 1 skipped]  →  Tier 2 (Gemini)  →  human_handoff
+Tier 4 (Ollama, local)  →  Tier 3 (DeepSeek)  →  Tier 2 (Gemini)  →  [Tier 1 skipped]  →  human_handoff
 ```
 
 `triapi plan`'s interactive planning step (`scripts/planner.py`) is a
@@ -118,7 +118,7 @@ partly automated:
 
 A concrete, detailed plan for exercising `--no-tier1` mode end-to-end
 against the real oh-my-llama repo. Brief rationale/scope is in
-`GHOSTWRITER_PLAN.md` — this section is the detailed, dispatch-ready
+`PLAN.md`'s "Ghostwriter Capability Plan" section — this section is the detailed, dispatch-ready
 breakdown, written specifically so another agent can hand it to
 `triapi plan` (with `--no-tier1` active) as a realistic multi-file test and
 practice the human_handoff workflow above on real escalations.
@@ -171,7 +171,7 @@ relying on any of this if it's been a while):
   only locally-resident model sized for long-form generation in this
   repo's roster; `model_fast` is triage/classification-tuned, not prose.
   Use `model_heavy` for both model calls in this pass — do not add a new
-  `model_ghostwriter` role speculatively (see `GHOSTWRITER_PLAN.md`).
+  `model_ghostwriter` role speculatively (see `PLAN.md`'s "Ghostwriter Capability Plan" section).
 - `ohmyllama/cli.py` follows a `_cmd_<name>(cfg, args) -> int` + argparse
   `sub.add_parser(...).set_defaults(fn=_cmd_<name>)` pattern (e.g.
   `_cmd_rag` at line ~316) — add the new command the same way, a plain CLI
