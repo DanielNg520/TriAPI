@@ -40,14 +40,6 @@ LOCK_PATH = Path(__file__).resolve().parent.parent / "logs" / "resource_guard_lo
 _state = {"resumed": False}
 
 
-def _is_active(service: str) -> bool:
-    result = subprocess.run(
-        ["systemctl", "--user", "is-active", service],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL,
-    )
-    return result.stdout.strip() == "active"
-
-
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -95,6 +87,97 @@ def _install_safety_net(paused: list[str]) -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
+def snapshot_ollama_state(ollama_host: str, service: str = "ollama.service") -> dict:
+    """
+    Snapshot the Ollama service state once per dispatch run, before Tier 4
+    work, so the service can be restored to exactly this state on exit.
+
+    Parameters
+    ----------
+    ollama_host : str
+        Base URL of the Ollama server (e.g., "http://localhost:11434").
+    service : str, optional
+        The systemd service name to check and control. Defaults to "ollama.service".
+
+    Returns
+    -------
+    dict
+        A dictionary containing:
+        - 'was_active': bool indicating if the Ollama service was active at snapshot.
+        - 'resident_models': list of names of currently resident/warm models.
+        - 'service': str, the name of the service checked and possibly started.
+    """
+    active_result = subprocess.run(
+        ["systemctl", "--user", "is-active", "--quiet", service],
+        stdin=subprocess.DEVNULL,
+    )
+    was_active = active_result.returncode == 0
+    resident_models = []
+
+    if was_active:
+        try:
+            resp = requests.get(f"{ollama_host}/api/ps")
+            resp.raise_for_status()
+            data = resp.json()
+            resident_models = [model["name"] for model in data.get("models", [])]
+        except requests.RequestException as exc:
+            log.warning("Could not retrieve Ollama model list: %s", exc)
+
+    else:
+        result = subprocess.run(["systemctl", "--user", "start", service], stdin=subprocess.DEVNULL)
+        if result.returncode != 0:
+            log.warning(
+                "Could not start %s before dispatch (exit %s); continuing with no resident models",
+                service,
+                result.returncode,
+            )
+
+    return {"was_active": was_active, "resident_models": resident_models, "service": service}
+
+
+def restore_ollama_state(snapshot: dict, ollama_host: str) -> None:
+    """
+    Restore the Ollama service to its pre-dispatch snapshot state.
+
+    Parameters
+    ----------
+    snapshot : dict
+        Snapshot taken by snapshot_ollama_state(). May be None, in which
+        case this function is a no-op.
+    ollama_host : str
+        Base URL of the Ollama server (e.g., "http://localhost:11434").
+
+    Returns
+    -------
+    None
+    """
+    if snapshot is None:
+        log.debug("No Ollama snapshot to restore; skipping")
+        return
+
+    for name in snapshot.get("resident_models") or []:
+        try:
+            log.info("Reloading %s to restore warm Ollama state", name)
+            post_resp = requests.post(
+                f"{ollama_host}/api/generate",
+                json={"model": name},
+            )
+            post_resp.raise_for_status()
+        except requests.RequestException as exc:
+            log.warning("Failed to reload model %s: %s", name, exc)
+
+    if not snapshot.get("was_active"):
+        service = snapshot.get("service") or "ollama.service"
+        log.info("Stopping %s back to its pre-dispatch state", service)
+        try:
+            subprocess.run(
+                ["systemctl", "--user", "stop", service],
+                stdin=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            log.warning("Failed to stop %s: %s", service, exc)
+
+
 def pause_services(services: list[str]) -> list[str]:
     """Stops each currently-active service in `services`. Returns exactly
     the subset that was actually running -- a service already stopped for
@@ -105,7 +188,11 @@ def pause_services(services: list[str]) -> list[str]:
 
     paused = []
     for service in services:
-        if _is_active(service):
+        active_result = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", service],
+            stdin=subprocess.DEVNULL,
+        )
+        if active_result.returncode == 0:
             log.info("Pausing %s for the duration of this dispatch run", service)
             subprocess.run(["systemctl", "--user", "stop", service], stdin=subprocess.DEVNULL)
             paused.append(service)

@@ -145,3 +145,26 @@ if cycle_detected(ordered, dependencies):
 ```
 
 The key lesson: don't guess ordering from names or hardcoded roles—inspect the actual dependency evidence and sort deterministically.
+
+### Self-Healing Cleanup: Layered Safety Nets Plus a Crash-Recovery Journal
+
+When a process temporarily changes external system state (stopping services, mutating config, holding a lock) and must restore it afterward, never rely on a single cleanup path. Design cleanup to survive even the death of the process that initiated the change.
+
+#### Key lessons from this pattern
+
+1. **`try/finally` is not enough.** A normal `try/finally` does not run on `SIGTERM` or a hard kill. If a stuck dispatch may be terminated with `kill`, a signal handler plus `atexit` handler must be installed as soon as the external state is mutated, so `SIGTERM`, `SIGINT`, and normal interpreter exit all trigger restoration.
+
+2. **Persist a journal/lock for hard-kill recovery.** Signal handlers still cannot run on `SIGKILL`, OOM kill, or power loss. Write a small lock/journal file containing:
+   - the owning PID,
+   - what was changed,
+   - timestamp.
+
+   On the next invocation, check whether the owning PID is still alive (`os.kill(pid, 0)`); if it is dead, treat the journal as orphaned and resume/restore the recorded state before doing new work. This gives self-healing behavior without a separate watchdog process.
+
+3. **Make restoration idempotent.** Multiple cleanup paths may race or run redundantly: the caller's `try/finally`, the signal/atexit safety net, and the next-process stale-lock recovery. Guard restoration with an in-memory `done`/`resumed` flag so it runs exactly once, then remove the journal file only after successful restore.
+
+4. **Snapshot the actual prior state, not just an on/off flag.** For services with warm state (like Ollama resident models), record both whether the service was active and which resources were loaded. On restore, reload warm resources and stop the service only if it was originally inactive. This preserves the user's real environment instead of forcing a cold state.
+
+5. **Only manage what you actually changed.** Before pausing a service, check whether it is currently active. If it was already inactive, leave it alone and do not include it in the restore list. This avoids resurrecting something the user or another process deliberately stopped before your run began.
+
+6. **Prefer exit-code checks over output parsing.** The diff replaced capturing and parsing `systemctl is-active` output with `systemctl --user is-active --quiet` and checking the return code. Exit codes are stable, locale-independent, and avoid brittle string matching.
