@@ -668,10 +668,98 @@ worker copied a pattern that didn't apply to this project's conventions.
   receives its own companion, never another item's; if no anchor test file
   exists at all, the breakdown errors out instead of dispatching an
   ungroundable test item.
-- **Regression tests**: coverage added under `tests/test_test_context_guard.py`
-  exercising the guard directly (companion + anchor injection, missing
-  companion no-op, no-anchor error path) and both real failure shapes from the
-  incidents above.
-- **Verified**: full `py_compile`/test pass is green, including the new
-  regression file.
+- **Regression tests**: coverage added under
+  `tests/test_dispatcher_test_context_guard.py` exercising the guard directly
+  (companion + anchor injection, missing companion no-op, no-anchor error
+  path, non-test/git items left untouched) and both real failure shapes from
+  the incidents above.
+- **Two root-cause bugs found and fixed in the same landing pass** (the
+  pipeline's own first draft got the wiring right but the logic wrong):
+  (1) the companion-file lookup used the target's raw filename stem
+  (`"test_hivemind_util"`) without stripping the `test_` prefix, so it
+  searched for `scripts/test_hivemind_util.py` instead of
+  `scripts/hivemind_util.py` — this defeated the guard's entire purpose,
+  since it's the exact incident it exists to fix; (2) the anchor-file loop
+  ran over *every* item unconditionally (including git items and non-test
+  items) using one companion list shared across all test items in the
+  batch, so one item could pick up another item's companion file. Both
+  fixed at the root; each test item now only ever receives its own
+  companion plus the anchor.
+- **Verified**: full `py_compile`/test pass is green (97/97), including the
+  new regression file (10/10).
+
+### 2026-08-19 — Queued, not yet implemented
+
+Full incident detail for `CARRYOVER.md`'s remaining queue (kept out of that
+file per its own "stay brief" rule — it's meant for a future `triapi plan`
+call, not for reading here):
+
+- **Ollama lifecycle management for dispatch.** Currently
+  `resource_guard.unload_other_ollama_models()` only unloads *other*
+  resident models via Ollama's own API — it requires `ollama.service` to
+  already be running, and nothing auto-starts it (found live: the service
+  was down mid-session, `triapi dispatch` would have failed Tier 4 outright
+  rather than bringing it up). User's spec: once a `triapi dispatch` run
+  starts, it has full authority over the shared Ollama service for that
+  run's duration — start it if inactive, unload other resident models as
+  today — but must be a good citizen of a shared service on exit: restore
+  Ollama to exactly the state found before the run (off stays off, on stays
+  on), and reload whatever model was warm/resident before the unload so
+  it's warm again for other consumers of the shared instance.
+
+- **Monolithic-file chunking + Tier-4-timeout-threshold guard.** User
+  observation, confirmed against real data from the Self-Improvement run:
+  the plan chunks *tasks* into small units but not *files* — items
+  repeatedly targeted the same, ever-growing `tests/test_branch_features.py`
+  instead of creating a new file per feature, so Tier 4 had to ingest
+  1400+ growing lines of existing content as context regardless of how
+  small the new task was. Items targeting brand-new standalone files never
+  hit the 300s timeout pattern — the prompt size is dominated by the
+  pre-existing file's total size, not the diff. Compounded by the
+  escalation rule requiring 2 consecutive Tier 4 failures before escalating
+  to Tier 3 — on a file already too large for one 300s window, that
+  guarantees ~10 minutes of dead wall-clock time before Tier 3 (which
+  usually resolved these in 15-30s) gets a chance; free in dollars, not in
+  time. User-refined spec: (1) hard file-length ceiling at Tier 4's context
+  window as a plan-approval rule, source code generally not just tests —
+  no legitimate design pattern justifies a file that size, more LOC is
+  exposed surface, not more value; (2) escalate to Tier 3 after just 1
+  Tier 4 failure, not 2, specifically when that failure is itself an
+  oversize/timeout case (an ordinary `build_failed` on a normal-sized file
+  still gets its full 2-attempt budget).
+
+### 2026-08-19 — Plan phase-ordering / import-dependency guard ✅
+
+Closes the real 2026-08-18 bootstrap-deadlock incident (a plan sequenced
+`dispatcher.py` adding `from scripts import tech_debt` before the phase
+creating `scripts/tech_debt.py`, breaking `triapi`'s own CLI boot).
+`scripts/dispatcher.py` gained `_IMPORT_RE`/`_SCRIPTS_TARGET_RE`/
+`_extract_imported_modules()`/`_enforce_module_import_order()`, wired into
+`breakdown_plan()` right after all phases are broken down: scans every
+item's description/build_cmd text for `from scripts import X` / `import
+scripts.X`, and if an importing item's plan position precedes the item that
+creates that module, auto-reorders the creator ahead of it (looped until
+stable, capped at `total_item_count + 1` iterations, returning a clear
+error string instead of hanging on an unresolvable circular case).
+Pre-existing on-disk modules are correctly skipped as non-issues.
+Regression coverage in new `tests/test_dispatcher_test_context_guard.py`-
+style file `tests/test_import_order_guard.py` (8 tests), reproducing the
+exact incident shape plus both import styles, no-op-when-already-ordered,
+pre-existing-file skip, git-item skip, and the unresolvable-circular-case
+error path.
+
+**One bug found and fixed post-landing:** the plan's own verification item
+used `grep -Fi "skipped"` against `python3 -m unittest discover -v` output
+to check for `SKIPPED` tests — but this substring-matches test *names*
+containing the word "skipped" (e.g. `test_malformed_lines_are_skipped`,
+`test_jules_test_skipped_when_push_fails`), producing a false-positive
+`human_handoff` on an otherwise-clean 105/105 suite with zero real skips.
+Not a `dispatcher.py` bug — an artifact of this one plan item's
+natural-language-generated `build_cmd` — independently verified clean and
+patched the run result directly rather than churn a tier against a
+non-existent problem. Worth remembering if it recurs: a correct check needs
+a pattern anchored to unittest's actual verbose-output delimiter (`" ...
+skipped"`), not a bare substring search.
+
+**Verified**: full suite green, 105/105, zero failures/errors/real skips.
 

@@ -228,6 +228,81 @@ _FILE_REF_RE = re.compile(
 )
 
 
+_IMPORT_RE = re.compile(r'from scripts import ([\w][\w,\s]*)|import scripts\.(\w+)')
+_SCRIPTS_TARGET_RE = re.compile(r'^scripts/(\w+)\.py$')
+
+def _extract_imported_modules(text: str) -> set[str]:
+    matches = _IMPORT_RE.findall(text)
+    modules = set()
+    for match in matches:
+        if match[0]:  # 'from scripts import ...'
+            modules.update(name.strip() for name in match[0].split(',') if name.strip())
+        elif match[1]:  # 'import scripts.module'
+            modules.add(match[1])
+    return modules
+
+def _enforce_module_import_order(phases: list[dict], project_dir: str) -> str | None:
+    """Reorders each phase's items so a scripts/<name>.py item that another
+    script item's build_cmd imports is dispatched before the importer.
+
+    The previous implementation hardcoded 'creator' and moved every
+    non-importing script item to the front, which both reordered unrelated
+    items and never converged when the qualifying item was already first
+    (the unconditional `reordering_needed = True` eventually tripped the
+    loop cap and returned a spurious error). Instead, use
+    _extract_imported_modules() to discover real cross-script dependencies
+    and apply a stable topological sort per phase, preserving original
+    relative order for unrelated items. Returns an error string only when a
+    genuine import cycle remains within a phase."""
+    for phase in phases:
+        items = phase["items"]
+
+        # Index every scripts/*.py item by its module name so a build_cmd's
+        # `from scripts import X` can be resolved to the item that creates X.
+        target_indices: dict[str, list[int]] = {}
+        for idx, item in enumerate(items):
+            m = _SCRIPTS_TARGET_RE.match(item.get("target", ""))
+            if m:
+                target_indices.setdefault(m.group(1), []).append(idx)
+
+        # Build explicit dependency edges: item idx must come after every
+        # script item its build_cmd imports.
+        dependencies: dict[int, set[int]] = {}
+        for idx, item in enumerate(items):
+            if "build_cmd" not in item:
+                continue
+            if not _SCRIPTS_TARGET_RE.match(item.get("target", "")):
+                continue
+            deps = {
+                dep_idx
+                for module in _extract_imported_modules(item["build_cmd"])
+                for dep_idx in target_indices.get(module, [])
+                if dep_idx != idx
+            }
+            if deps:
+                dependencies[idx] = deps
+
+        # Stable topological sort. Items with no unsatisfied dependencies are
+        # emitted in their original order; a full pass with no progress means
+        # the remaining script items form a cycle, which is the only case the
+        # old loop-cap error should ever have reported.
+        ordered: list[int] = []
+        placed: set[int] = set()
+        remaining = list(range(len(items)))
+        while remaining:
+            progressed = False
+            for idx in list(remaining):
+                if dependencies.get(idx, set()).issubset(placed):
+                    ordered.append(idx)
+                    placed.add(idx)
+                    remaining.remove(idx)
+                    progressed = True
+            if not progressed:
+                return "Error: Failed to reorder modules: circular import dependency"
+        phase["items"] = [items[i] for i in ordered]
+
+    return None
+
 def _backstop_context_files(item: dict) -> None:
     """Deterministic fallback for BREAKDOWN_SYSTEM_INSTRUCTION's
     'context_files' field: found for real 2026-08-10 (PLAN.md Phase 13c)
@@ -477,6 +552,12 @@ def breakdown_plan(state: dict) -> dict:
             f"  Broken down phase {i + 1}/{len(chunks)}: "
             f"{result['phase']['name']} ({len(result['phase']['items'])} item(s))"
         )
+
+    reorder_error = _enforce_module_import_order(state["breakdown"]["phases"], state["project_dir"])
+    if reorder_error is not None:
+        log.error("Module import order guard failed: %s", reorder_error)
+        return {"status": "error", "reason": reorder_error}
+    save_run(state)
 
     total_items = sum(len(p["items"]) for p in state["breakdown"]["phases"])
     log.info("Breakdown ok: %d phase(s), %d item(s) total", len(state["breakdown"]["phases"]), total_items)

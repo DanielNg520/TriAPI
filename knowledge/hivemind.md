@@ -117,3 +117,31 @@ When an AI tier will draft or modify a file, never rely on the task description 
 - A "verify" step that only checks existence/syntax cannot detect hallucinated content. Grounding prevents the hallucination; the build check is not the safety net.
 
 **Applies to:** any LLM-based code-generation pipeline, internal scaffolding tools, or agentic workflows where a model drafts files that must match existing conventions.
+
+### Prefer Explicit Dependency Discovery + Stable Topological Sort Over Hardcoded Ordering Heuristics
+
+When a pipeline dispatches a sequence of file-creation/editing tasks, and one task's verification command (`build_cmd`) imports another task's target module, the dispatch order must guarantee dependencies run first.
+
+A naive fix—e.g. hardcoding `"creator"` and moving all non-importing items to the front—is fragile:
+
+- It reorders unrelated items needlessly.
+- It may fail to converge when the qualifying item is already first, producing a spurious error.
+
+The robust pattern:
+
+1. **Extract the dependency relation explicitly.** Parse the actual commands/build steps for import statements (`from scripts import X`, `import scripts.X`) and map each importer to the task whose target creates that module.
+2. **Apply a stable topological sort per batch/phase.** Emit items with no unsatisfied dependencies in their original relative order; only reorder when a real edge requires it.
+3. **Only fail on a genuine cycle.** If a full pass makes no progress, the remaining items form a circular dependency—report that as the error, rather than tripping an arbitrary loop cap or order heuristic.
+4. **Preserve unrelated order.** Topological sorting should be stable: items not involved in any dependency edge keep their original order, so the plan's intended sequencing remains intact.
+
+This pattern is reusable anywhere tasks have implicit ordering constraints discoverable from their content or commands: build systems, code-generation pipelines, migration runners, or any "create file A then run B that imports A" workflow.
+
+```python
+# Shape of the pattern:
+dependencies = build_dependency_graph(items)   # explicit edges from parsed imports
+ordered = stable_topological_sort(items, dependencies)
+if cycle_detected(ordered, dependencies):
+    return error("circular dependency")
+```
+
+The key lesson: don't guess ordering from names or hardcoded roles—inspect the actual dependency evidence and sort deterministically.

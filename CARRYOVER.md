@@ -25,8 +25,11 @@ vs. must route through `triapi plan`/`dispatch`).
   Improvement feature (`hivemind_util.py`, `judge.py`, dispatcher hook +
   fix-forward, `tech_debt.py`, docs) landed 2026-08-19 — 17/17 items,
   64/64 tests, independently confirmed by a real Jules advisory pass
-  (repo-wide `py_compile` clean too). Full bug-by-bug detail in `PLAN.md`'s
-  carryover log; systemic gaps found along the way are queued below.
+  (repo-wide `py_compile` clean too). Mock-patch-target lint check,
+  context_files grounding guard, and plan phase-ordering/import-dependency
+  guard also landed 2026-08-19 (3 of 5 total queue items now done, full
+  suite 105/105 clean). Full bug-by-bug detail in `PLAN.md`'s carryover
+  log; systemic gaps found along the way are queued below.
   `config/tiers.yaml` also got two more corrections this session:
   `tier_4_worker` default model switched `q8_0` → `q6_K` with
   `num_ctx=24576` (dramatic speedup on small calls, mixed on very large
@@ -41,91 +44,27 @@ vs. must route through `triapi plan`/`dispatch`).
 ## Next up
 
 
-- **#1 IN QUEUE: plan phase-ordering / import-dependency guard.** A Tier 1-drafted plan
-  sequenced Phase 3 (edits `scripts/dispatcher.py` to add
-  `from scripts import ... tech_debt` at module load time) before Phase 4
-  (creates `scripts/tech_debt.py`). Once Phase 3's item landed, `triapi`'s
-  own CLI could no longer boot at all — `triapi` imports `dispatcher`,
-  which now imports the nonexistent `tech_debt` module — a genuine
-  bootstrap deadlock, since the pipeline needed to run to create the file
-  it required just to start running. Unblocked by moving the two
-  `scripts/tech_debt.py`-creation items from Phase 4 into Phase 3 (state
-  JSON patch, user instruction 2026-08-18) — but the run was still stuck
-  until `scripts/tech_debt.py` was hand-written directly (user-authorized
-  in the moment), since even the *reordered* dispatch couldn't run without
-  it. Spec for the durable fix: when a Tier 1 plan is approved, validate
-  that no earlier phase/item introduces a module-load-time import
-  (`from scripts import X` / `import scripts.X`) of a file first created
-  by a *later* phase/item — either reject the plan with a clear ordering
-  error, or auto-reorder so the creating item runs first. New TriAPI
-  feature work — route through `triapi plan`/`dispatch`, do not
-  hand-implement.
+Full incident detail for both items below is in `PLAN.md`'s carryover
+log (`### 2026-08-19 — Queued, not yet implemented` entry) — kept out of
+here per this file's own "stay brief" rule above.
 
-- **#2 IN QUEUE: Ollama lifecycle management for dispatch.** Currently `resource_guard.unload_other_ollama_models()`
-  only unloads *other* resident models via Ollama's own API — it requires
-  `ollama.service` to already be running, and nothing auto-starts it (found
-  live: the service was down mid-session, `triapi dispatch` would have
-  failed Tier 4 outright rather than bringing it up). User's spec for the
-  fix (2026-08-18): once a `triapi dispatch` run starts, it has **full
-  authority** over the shared Ollama service for that run's duration —
-  start `ollama.service` if it's not active, unload other resident models
-  as today. But it must be a **good citizen of a shared service**: on
-  dispatch exit (success, failure, or interruption), restore Ollama to
-  exactly the state it found it in before the run — if the service was
-  off before, stop it again after; if it was on, leave it on; and if some
-  other model was warm/resident before the unload, reload that same model
-  back onto the GPU so it's warm again for whatever else uses this shared
-  Ollama instance. Needs a "snapshot state before, restore after" wrapper
-  around the existing pause/unload logic in `scripts/triapi.py`'s
-  `cmd_dispatch` (same place `pause_services`/`unload_other_ollama_models`
-  are already called) — new TriAPI feature work, route through `triapi
-  plan`/`dispatch` per standing rule, do not hand-implement.
+- **#1 IN QUEUE: Ollama lifecycle management for dispatch.** Once a
+  `triapi dispatch` run starts it gets full authority over `ollama.service`
+  (start if inactive, unload other resident models). On exit, restore
+  exactly the state found before the run: off stays off, on stays on, and
+  any model that was warm/resident before the unload gets reloaded.
+  Snapshot-before/restore-after wrapper around `scripts/triapi.py`'s
+  `cmd_dispatch`, same place `pause_services`/`unload_other_ollama_models`
+  are already called. Route through `triapi plan`/`dispatch`.
 
-- **#3 IN QUEUE (LAST, user reprioritization 2026-08-19 — was #1, pushed to
-  last): monolithic-file chunking + Tier-4-timeout-threshold guard.** User
-  observation, confirmed against real data from the Self-Improvement run:
-  the plan chunks *tasks* into small units but not *files* — Phase 3/4's
-  items repeatedly targeted the same, ever-growing
-  `tests/test_branch_features.py` (kept saying "extend
-  tests/test_branch_features.py" instead of creating a new file per
-  feature), so Tier 4 had to ingest 1400+ and growing lines of existing
-  content as context regardless of how small the new task was. By
-  contrast, items targeting brand-new standalone files
-  (`test_hivemind_util.py`, `test_judge.py`) never hit the 300s Tier 4
-  timeout pattern (they had other bugs, but not this one) — the prompt
-  size is dominated by the pre-existing file's total size, not the diff.
-  Second, related finding: the escalation rule requires 2 consecutive
-  Tier 4 failures before escalating to Tier 3 — on a file already too
-  large for one 300s window, that guarantees ~10 minutes of dead waiting
-  (2×300s, zero output) before Tier 3 (which resolved most of these in
-  15-30s once reached) gets a chance. Free in dollars (local Ollama), not
-  free in wall-clock time.
-
-  **User-refined spec (2026-08-19), two patches:**
-  1. **Hard file-length ceiling, source code generally, not just tests**:
-     no file TriAPI generates or extends should exceed Tier 4's context
-     window (currently `num_ctx=24576`, see `tier_4_worker` in
-     `config/tiers.yaml` / `call_ollama()` in `scripts/tier4_worker.py`).
-     User's framing: a 1400+-LOC file is unproductive and unprofessional
-     regardless of whether it's a test file — no legitimate design
-     pattern or idiom justifies a single file that size; more LOC is
-     exposed surface, not more value. This should be a hard plan-approval
-     rule (reject/split at planning time), not just a soft preference —
-     likely the same validation pass in `dispatcher.py`'s breakdown
-     validation: estimate the target file's token count (existing content
-     + planned addition) against the ceiling and reject/require-split if
-     it would exceed it.
-  2. **One Tier 4 failure, not two, when the failure is itself the
-     oversize/timeout case**: if Tier 4's attempt fails specifically
-     because it couldn't fit/finish within its context/time budget
-     (distinguish from an ordinary `build_failed` on a normal-sized file,
-     which should still get its full 2-attempt budget), escalate to Tier
-     3 immediately on the first such failure — a second attempt against
-     a file already shown to be oversized is a guaranteed-repeat 300s
-     timeout, not a real second chance.
-
-  New TriAPI feature work — route through `triapi plan`/`dispatch`, do
-  not hand-implement.
+- **#2 IN QUEUE (LAST, user reprioritization 2026-08-19): monolithic-file
+  chunking + Tier-4-timeout-threshold guard.** Two patches: (1) hard
+  file-length ceiling at Tier 4's context window (`num_ctx=24576`) as a
+  plan-approval rule — reject/require-split for any file whose existing +
+  planned content would exceed it; (2) escalate to Tier 3 after just 1
+  Tier 4 failure, not 2, specifically when that failure is an
+  oversize/timeout case (a normal `build_failed` still gets its full
+  2-attempt budget). Route through `triapi plan`/`dispatch`.
 
 Otherwise: oh-my-llama's 5G once the soak clears.
 
