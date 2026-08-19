@@ -30,7 +30,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import gemini_fallback, git_ops, regression_guard, judge, tech_debt, tier3_escalate
+from scripts import gemini_fallback, git_ops, regression_guard, judge, mock_patch_lint, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.budget_guard import check_tier2_ok
 from scripts.config_loader import load_tiers
@@ -581,6 +581,12 @@ def _default_build_cmd(target: str) -> str:
     return f"test -f {shlex.quote(target)}"
 
 
+def _is_test_target(target: str) -> bool:
+    """True when `target` is a test file of the repo's standard shape
+    (`tests/test_<name>.py`), the only targets mock_patch_lint applies to."""
+    return re.match(r"^tests/test_[^/]+\.py$", target) is not None
+
+
 def _dispatch_git_item(task_id: str, git_spec: dict, project_dir: str) -> dict:
     action = git_spec.get("action")
     path = _resolve_path(git_spec.get("path", "."), project_dir)
@@ -864,6 +870,29 @@ def dispatch(state: dict) -> dict:
                 if is_regular_item and result["status"] == "success"
                 else None
             )
+            if (
+                is_regular_item
+                and result["status"] == "success"
+                and _is_test_target(item["target"])
+            ):
+                lint_issues = mock_patch_lint.find_issues(
+                    Path(state["project_dir"]) / item["target"],
+                    Path(state["project_dir"]),
+                )
+                if lint_issues:
+                    reasons = mock_patch_lint.format_issues(lint_issues)
+                    log.warning(
+                        "[%s] mock_patch_lint found issues in %s (override to build_failed):\n%s",
+                        state["run_id"],
+                        item["target"],
+                        reasons,
+                    )
+                    result = dict(result)
+                    result["status"] = "build_failed"
+                    result["resolved_by"] = None
+                    result["reason"] = reasons
+                    content_hash = None
+
             entry = {
                 "task_id": task_id,
                 "phase": phase["name"],

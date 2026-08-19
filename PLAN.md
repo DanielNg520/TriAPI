@@ -241,7 +241,8 @@ The user's stated direction: if an MCP-style integration is needed later, it poi
 ## Critical files
 - `PLAN.md`, `mapping.md`, `ARCHITECTURE.md`, `README.md` (repo root)
 - `.sops.yaml`, `config/tiers.yaml`, `config/secrets.example.yaml`, `config/secrets.enc.yaml`
-- `scripts/secrets_loader.py`, `scripts/config_loader.py`, `scripts/state.py`, `scripts/tier4_worker.py`, `scripts/tier3_escalate.py`, `scripts/tier2_escalate.py`, `scripts/tier1_escalate.py`, `scripts/budget_guard.py`, `scripts/cost_report.py`, `scripts/orchestrator.py`, `scripts/tri_logging.py`, `scripts/planner.py`, `scripts/dispatcher.py`, `scripts/triapi.py`, `scripts/git_ops.py`
+- `scripts/secrets_loader.py`, `scripts/config_loader.py`, `scripts/state.py`, `scripts/tier4_worker.py`, `scripts/tier3_escalate.py`, `scripts/tier2_escalate.py`, `scripts/tier1_escalate.py`, `scripts/budget_guard.py`, `scripts/cost_report.py`, `scripts/orchestrator.py`, `scripts/tri_logging.py`, `scripts/planner.py`, `scripts/dispatcher.py`, `scripts/triapi.py`, `scripts/git_ops.py`, `scripts/mock_patch_lint.py`
+- `tests/test_mock_patch_lint.py`
 - `samples/broken_build/main.cpp`, `samples/broken_build/CMakeLists.txt`
 
 ## Open risks (carried forward, not blocking)
@@ -519,4 +520,131 @@ load-failure writeup deleted, was specific to the purged 30b/quant, doesn't
 apply to the newly-validated `heavy` model); `scripts/ollama_load_check.py`
 now resolves its `keep_model`/test model from config instead of hardcoding;
 `AGENTS.md`/`README.md` updated to match.
+
+### 2026-08-19 — Self-Improvement feature (17/17) ✅, q6_K model swap, Jules/Tier-2 billing corrections
+
+Run `20260818-152401-a589da`, dispatched against `AGENTS.md`'s
+"Self-Improvement feature" section. Landed all 5 phases: `scripts/hivemind_util.py`
+(snippet parsing/retrieval, wired into Tier 4's prompt), `scripts/judge.py`
+(`evaluate_design`/`extract_pattern` via Tier 3, fail-closed on peak-hours
+skip/parse failure), `scripts/dispatcher.py`'s judge hook +
+`handle_fix_forward` (single-attempt Tier 3 rewrite, revert-and-log-tech-debt
+on failure) wired into the real `dispatch(state)` success path, atomic
+`save_run` (`.json.tmp` + `os.replace`), `scripts/tech_debt.py`
+(`log_tech_debt`/`read_tech_debt_entries`/`check_staleness`),
+`scripts/triapi.py`'s `--tech-debt` CLI, and `AGENTS.md`'s doc index.
+Final state: 64/64 tests passing, independently confirmed by a real Jules
+advisory session (`sessions/16732276460987641790`) that also ran a repo-wide
+`py_compile` sweep clean. Commit `e33a79c`.
+
+**Systemic bugs found and fixed along the way** (each queued for a durable
+pipeline fix in `CARRYOVER.md`'s Next up, per the standing "auto-queue
+recurring bugs" rule):
+- `extract_code()`'s truncated-response fallback (in both `tier3_escalate.py`
+  and `tier4_worker.py`, the latter shared by Tier 1/2) silently wrote a
+  truncated LLM response as if it were the complete file — fixed to fail
+  closed (detect an unclosed code fence / `finish_reason: "length"`, return
+  `None`/reject instead of writing garbage).
+- `context_files` grounding gaps (hit twice): a new test file's plan item
+  didn't include the module it was testing, so drafting tiers guessed blindly
+  at the real API shape; separately, a test item had no example test file to
+  anchor style, so tiers defaulted to `pytest` (not installed here, this repo
+  is `unittest`-only). Both patched in-run via the run's state JSON; systemic
+  fix (auto-include the tested module + a style-anchor test file) queued.
+- Plan phase-ordering / import-dependency bug: a `dispatcher.py` edit added
+  `from scripts import ... tech_debt` before the phase that creates
+  `scripts/tech_debt.py` ran — broke `triapi`'s own CLI bootstrap entirely
+  (couldn't import `dispatcher` to run anything, including the fix). Unblocked
+  by reordering the plan (move `tech_debt.py`-creation earlier) plus a direct,
+  minimal hand-write of `tech_debt.py` since even the reordered dispatch
+  couldn't boot without it existing first.
+- Mock-patch-target bug, confirmed recurring **4 times** across this run,
+  including reintroduced by the pipeline itself while "fixing" already-correct
+  code: `@mock.patch("scripts.orchestrator.run_task")` /
+  `scripts.tier4_worker.run_build` patched the wrong module — `dispatcher.py`
+  imports both via `from X import Y` (name-binding), so the mock never
+  intercepted the real call. Net effect: "unit" tests were making real,
+  billed Tier 4/2/3/1 network calls on every suite run (confirmed live: a
+  7+ minute hang with an established TCP connection to Ollama). All instances
+  fixed directly; systemic lint/plan-validation check (flag patches at the
+  defining module instead of the importing one) queued as this session's
+  top priority per user, alongside a related file-size/timeout finding (see
+  below).
+- One genuinely different bug: `scripts/triapi.py`'s new `cmd_tech_debt()`
+  called `uuid.uuid4()` without `import uuid` — simple missing import, fixed
+  directly.
+- New structural risk identified: dispatch retrying an item whose file is
+  already correct can cause a drafting tier to regress it while "fixing"
+  something that wasn't broken (observed twice, both caught by immediate
+  post-landing test-suite verification and fixed the same way).
+
+**User-driven finding, now top of the CARRYOVER.md queue**: the plan chunks
+*tasks* into small units but not *files* — `tests/test_branch_features.py`
+kept growing (items said "extend" it rather than creating new feature-scoped
+files) until Tier 4 routinely timed out just ingesting the existing content,
+regardless of diff size. Compounded by the escalation rule requiring 2
+consecutive Tier 4 failures before trying Tier 3 (~10 min of guaranteed dead
+time on an already-oversized file). User's refined spec: (1) hard file-length
+ceiling at Tier 4's context window as a plan-approval rule; (2) escalate to
+Tier 3 after just 1 Tier 4 failure when the failure is itself the
+oversize/timeout case.
+
+**q6_K model swap**: `tier_4_worker.models.default` switched from
+`qwen2.5-coder:14b-instruct-q8_0` to `qwen2.5-coder:14b-instruct-q6_K`, with
+`num_ctx=24576` added to `scripts/tier4_worker.py`'s `call_ollama()`. Reason:
+Q8_0 (18.4GB) left only ~1.6GB headroom against this machine's shared-RAM
+iGPU setup (512MB real VRAM) and was timing out on every real drafting
+prompt. Q6_K (~12GB) + 24k context KV cache (~4.6GB) lands at ~16.6GB,
+notably more headroom. Live evidence: the trivial load-check diagnostic went
+from 230s (Q8_0) to 1.57s (Q6_K) — but on the largest real files in this run,
+results were mixed: some first-attempt successes with no timeout at all,
+others still hit the 300s ceiling. Real improvement, not a complete fix —
+see the file-size/timeout queue item above.
+
+**Jules/Tier-2 billing corrections**: user confirmed the account has Google
+AI Pro (raises Jules from Free tier's 15 tasks/24h to 100/24h) and that the
+Cloud project behind the Gemini API key is billing-enabled ($10/mo +
+$300 intro credit, which auto-qualifies for Tier 1+ paid API limits, not
+free tier). `config/tiers.yaml` updated: `jules_tester.daily_task_limit`
+15→100; `tier_2_manager.pricing.free_tier_rpm/rpd` 10/250→60/1500 (a
+documented conservative floor, not an independently-verified ceiling for the
+specific flash models this repo calls — see the file's own comment for what
+to re-verify).
+
+**Also this session**: `fewer-permission-prompts` allowlist added to
+`.claude/settings.json` (codegraph explore, `journalctl --user`, `triapi
+status`, local Ollama health-check `curl`, `systemctl --user status`); two
+new standing memory rules saved (auto-queue fixes for recurring bugs found
+mid-dispatch; standing overnight authority to decide minor issues and
+fix-at-root-or-patch-and-queue without blocking on approval); oh-my-llama's
+webui fully purged as a separate user-directed cleanup (systemd units for
+web/brief/discord removed+disabled, `ohmyllama/webui.py` deleted, all
+references cleaned from `config.py`/`state.py`/`cli.py`) and `ollama`/
+`oh-my-llama-telegram` enabled for boot persistence on this always-on box.
+
+### 2026-08-19 — Mock-Patch Target Lint Check: dispatcher integration and regression tests ✅
+
+Landed the top-priority queue item from the 2026-08-19 entry (the recurring
+mock-patch-target bug, confirmed 4 times): a lint that catches `@mock.patch(...)`
+targets specified at the defining module when the code under test imports the
+name via `from module import name`, so patches like
+`@mock.patch("scripts.orchestrator.run_task")` can no longer silently fail to
+intercept the real call and let test suites make live network calls (including
+the 7+ minute Ollama hang observed in the previous session).
+
+- **Lint implementation**: new static checker in `scripts/mock_patch_lint.py` that parses test
+  files, resolves every `mock.patch`/`@mock.patch` target string, and flags any
+  target whose attribute is name-bound into the file by a `from X import Y`
+  import — i.e. a patch that cannot affect the imported alias. Fail-closed on
+  parse ambiguity so a missed check can't quietly regress.
+- **Dispatcher integration**: `dispatcher.py`'s breakdown/validation path now
+  runs the lint over test-file items before dispatch and refuses to dispatch a
+  known-bad item (returns a normal error result fed through the existing retry
+  loop) instead of handing the broken test to the tier pipeline.
+- **Regression tests**: coverage added under `tests/test_mock_patch_lint.py` exercising the lint
+  itself (patch at the defining module passes; import-binding patch is flagged)
+  and reproducing the exact `dispatcher.py`/`run_task`/`run_build` shape from
+  the 2026-08-19 failures.
+- **Verified**: the previously-failing suites now complete with zero live
+  Tier 4/2/3/1 calls, and the full `py_compile`/test pass is green.
 
