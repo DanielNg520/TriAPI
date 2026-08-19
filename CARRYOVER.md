@@ -27,9 +27,13 @@ vs. must route through `triapi plan`/`dispatch`).
   64/64 tests, independently confirmed by a real Jules advisory pass
   (repo-wide `py_compile` clean too). Mock-patch-target lint check,
   context_files grounding guard, and plan phase-ordering/import-dependency
-  guard also landed 2026-08-19 (3 of 5 total queue items now done, full
-  suite 105/105 clean). Full bug-by-bug detail in `PLAN.md`'s carryover
-  log; systemic gaps found along the way are queued below.
+  guard also landed 2026-08-19 (3 of 5 total queue items fully done, full
+  suite 105/105 clean). Ollama lifecycle management is PARTIALLY landed
+  (`resource_guard.py`'s snapshot/restore helper functions only) — its
+  dispatch run falsely reported `completed` due to the plan-completion
+  integrity bug below; wiring into `triapi.py`, tests, and docs are still
+  outstanding. Full bug-by-bug detail in `PLAN.md`'s carryover log;
+  systemic gaps found along the way are queued below.
   `config/tiers.yaml` also got two more corrections this session:
   `tier_4_worker` default model switched `q8_0` → `q6_K` with
   `num_ctx=24576` (dramatic speedup on small calls, mixed on very large
@@ -44,20 +48,42 @@ vs. must route through `triapi plan`/`dispatch`).
 ## Next up
 
 
-Full incident detail for both items below is in `PLAN.md`'s carryover
+Full incident detail for all three items below is in `PLAN.md`'s carryover
 log (`### 2026-08-19 — Queued, not yet implemented` entry) — kept out of
 here per this file's own "stay brief" rule above.
 
-- **#1 IN QUEUE: Ollama lifecycle management for dispatch.** Once a
-  `triapi dispatch` run starts it gets full authority over `ollama.service`
-  (start if inactive, unload other resident models). On exit, restore
-  exactly the state found before the run: off stays off, on stays on, and
-  any model that was warm/resident before the unload gets reloaded.
-  Snapshot-before/restore-after wrapper around `scripts/triapi.py`'s
-  `cmd_dispatch`, same place `pause_services`/`unload_other_ollama_models`
-  are already called. Route through `triapi plan`/`dispatch`.
+- **#1 IN QUEUE (URGENT — found 2026-08-19, blocks trusting any run's
+  `completed` status): plan-completion integrity bug, two compounding
+  causes.** (1) `_split_plan_by_phase()` in `scripts/dispatcher.py` only
+  recognizes `## `-style ATX headers as phase boundaries; a real Tier-1
+  plan used numbered `1. Phase 1 — ...` markers instead, so the entire
+  4-phase plan collapsed into one chunk, and Gemini's `breakdown_phase()`
+  silently extracted only 3 of ~10 real checklist items with no error
+  (the existing "zero total items" hard-error guard doesn't catch a
+  partial drop). (2) `agents_md_gate.mark_plan_complete()` unconditionally
+  flips every `- [ ]` to `- [x]` in a run's AGENTS.md block once dispatch
+  status is `"completed"`, with no check that the breakdown actually
+  covered every checklist item — so the run (`20260819-063339-9d23c7`,
+  Ollama lifecycle management) reported fully done and cleared the
+  one-plan-per-repo gate while 3 of its 4 phases silently never ran. Fix
+  both: phase-splitting must recognize numbered top-level phase markers
+  (or reject/hard-error when a plan's declared phase count doesn't match
+  the split-chunk count), and `mark_plan_complete` must only check boxes
+  for items actually present in `state["breakdown"]`, never the whole
+  block blindly. Route through `triapi plan`/`dispatch`.
 
-- **#2 IN QUEUE (LAST, user reprioritization 2026-08-19): monolithic-file
+- **#2 IN QUEUE: Ollama lifecycle management for dispatch (redo/complete).**
+  `resource_guard.py`'s `snapshot_ollama_state`/`restore_ollama_state`
+  helpers already landed; still needed: wire them into
+  `scripts/triapi.py`'s `cmd_dispatch` (start `ollama.service` if inactive,
+  unload other resident models — same place `pause_services`/
+  `unload_other_ollama_models` are already called — then restore exactly
+  the prior state via `try/finally` on exit), a dedicated regression test
+  file, and the AGENTS.md/docs update. Do this only after #1 above is
+  fixed, so completion can actually be trusted this time. Route through
+  `triapi plan`/`dispatch`.
+
+- **#3 IN QUEUE (LAST, user reprioritization 2026-08-19): monolithic-file
   chunking + Tier-4-timeout-threshold guard.** Two patches: (1) hard
   file-length ceiling at Tier 4's context window (`num_ctx=24576`) as a
   plan-approval rule — reject/require-split for any file whose existing +
