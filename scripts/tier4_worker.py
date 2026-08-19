@@ -154,9 +154,10 @@ def run_build(build_cmd: str, workdir: str, timeout: int = 120) -> tuple[bool, s
     return ok, output
 
 
-def _tier4_fail(task_id: str, threshold: int, reason: str) -> dict:
+def _tier4_fail(task_id: str, threshold: int, reason: str, is_oversize_failure: bool = False) -> dict:
+    effective_threshold = 1 if is_oversize_failure else threshold
     state = record_failure(task_id, reason)
-    status = "escalate" if state["consecutive_failures"] >= threshold else "build_failed"
+    status = "escalate" if state["consecutive_failures"] >= effective_threshold else "build_failed"
     return {"status": status, "consecutive_failures": state["consecutive_failures"], "stderr": reason}
 
 
@@ -222,7 +223,7 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     else:
         code = extract_code(response_text)
         if code is None:
-            return _tier4_fail(task_id, threshold, "Tier 4 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.")
+            return _tier4_fail(task_id, threshold, "Tier 4 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.", is_oversize_failure=True)
 
     guard = content_guard.check_write(task_id, target_path, code)
     if not guard["ok"]:
@@ -238,14 +239,8 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
         clear_state(task_id)
         return {"status": "success", "consecutive_failures": 0, "stderr": ""}
 
-    state = record_failure(task_id, build_output)
-    status = "escalate" if state["consecutive_failures"] >= threshold else "build_failed"
-    log.info("[%s] Tier 4 build failed (consecutive_failures=%d, threshold=%d)", task_id, state["consecutive_failures"], threshold)
-    return {
-        "status": status,
-        "consecutive_failures": state["consecutive_failures"],
-        "stderr": build_output,
-    }
+    is_oversize = build_output.startswith("Command timed out after")
+    return _tier4_fail(task_id, threshold, build_output, is_oversize_failure=is_oversize)
 
 
 def main():

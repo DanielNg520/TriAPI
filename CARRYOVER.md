@@ -27,10 +27,11 @@ vs. must route through `triapi plan`/`dispatch`).
   64/64 tests, independently confirmed by a real Jules advisory pass
   (repo-wide `py_compile` clean too). Mock-patch-target lint check,
   context_files grounding guard, and plan phase-ordering/import-dependency
-  guard, the plan-completion integrity fix, and Ollama lifecycle
-  management all landed 2026-08-19 (5 of 6 total queue items fully done,
-  full suite 111/111 clean). Full bug-by-bug detail in `PLAN.md`'s
-  carryover log; systemic gaps found along the way are queued below.
+  guard, the plan-completion integrity fix, Ollama lifecycle management,
+  and the file-size ceiling + oversize-escalation guard all landed
+  2026-08-19 (6 of 6 original queue items done, full suite 117/117 clean).
+  Full bug-by-bug detail in `PLAN.md`'s carryover log; one new systemic
+  gap found along the way is queued below.
   `config/tiers.yaml` also got two more corrections this session:
   `tier_4_worker` default model switched `q8_0` → `q6_K` with
   `num_ctx=24576` (dramatic speedup on small calls, mixed on very large
@@ -44,19 +45,24 @@ vs. must route through `triapi plan`/`dispatch`).
 
 ## Next up
 
+Full incident detail for the item below is in `PLAN.md`'s carryover log
+(`### 2026-08-19 — File-Size Ceiling Guard...` entry's "found post-landing"
+section) — kept out of here per this file's own "stay brief" rule above.
 
-Full incident detail for the item below is in `PLAN.md`'s carryover
-log (`### 2026-08-19 — Queued, not yet implemented` entry) — kept out of
-here per this file's own "stay brief" rule above.
-
-- **#1 IN QUEUE (LAST, user reprioritization 2026-08-19): monolithic-file
-  chunking + Tier-4-timeout-threshold guard.** Two patches: (1) hard
-  file-length ceiling at Tier 4's context window (`num_ctx=24576`) as a
-  plan-approval rule — reject/require-split for any file whose existing +
-  planned content would exceed it; (2) escalate to Tier 3 after just 1
-  Tier 4 failure, not 2, specifically when that failure is an
-  oversize/timeout case (a normal `build_failed` still gets its full
-  2-attempt budget). Route through `triapi plan`/`dispatch`.
+- **#1 IN QUEUE: AGENTS.md itself is 143,773 chars — over Tier 4's own new
+  size ceiling (73,728 chars) — and the just-landed
+  `_enforce_file_size_ceiling()` guard re-runs on every `breakdown_plan()`
+  call, including resuming an already-broken-down run, so it can
+  retroactively block a resume the moment ANY item's target (not just the
+  one currently dispatching) exceeds the ceiling.** Two independent fixes
+  needed: (a) shrink `AGENTS.md` — it has grown well past this repo's own
+  doc-hygiene rule (see `feedback_doc_hygiene_all_docs` memory) through
+  accumulated `triapi:plan` blocks and verbose file/dir index entries; (b)
+  make `breakdown_plan()`'s post-breakdown guards (file-size ceiling,
+  import-order, test-context) run once after initial breakdown, not on
+  every resume of an already-broken-down state — a resume should trust
+  the prior successful validation pass, not re-litigate it against
+  unrelated items' current disk state. Route through `triapi plan`/`dispatch`.
 
 Otherwise: oh-my-llama's 5G once the soak clears.
 

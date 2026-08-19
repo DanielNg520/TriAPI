@@ -784,33 +784,6 @@ config now correctly skips restore instead of crashing. New
 
 **Verified**: full suite green, 111/111, zero failures/errors/real skips.
 
-### 2026-08-19 — Queued, not yet implemented
-
-Full incident detail for `CARRYOVER.md`'s remaining queue (kept out of that
-file per its own "stay brief" rule — it's meant for a future `triapi plan`
-call, not for reading here):
-
-- **Monolithic-file chunking + Tier-4-timeout-threshold guard.** User
-  observation, confirmed against real data from the Self-Improvement run:
-  the plan chunks *tasks* into small units but not *files* — items
-  repeatedly targeted the same, ever-growing `tests/test_branch_features.py`
-  instead of creating a new file per feature, so Tier 4 had to ingest
-  1400+ growing lines of existing content as context regardless of how
-  small the new task was. Items targeting brand-new standalone files never
-  hit the 300s timeout pattern — the prompt size is dominated by the
-  pre-existing file's total size, not the diff. Compounded by the
-  escalation rule requiring 2 consecutive Tier 4 failures before escalating
-  to Tier 3 — on a file already too large for one 300s window, that
-  guarantees ~10 minutes of dead wall-clock time before Tier 3 (which
-  usually resolved these in 15-30s) gets a chance; free in dollars, not in
-  time. User-refined spec: (1) hard file-length ceiling at Tier 4's context
-  window as a plan-approval rule, source code generally not just tests —
-  no legitimate design pattern justifies a file that size, more LOC is
-  exposed surface, not more value; (2) escalate to Tier 3 after just 1
-  Tier 4 failure, not 2, specifically when that failure is itself an
-  oversize/timeout case (an ordinary `build_failed` on a normal-sized file
-  still gets its full 2-attempt budget).
-
 ### 2026-08-19 — Plan phase-ordering / import-dependency guard ✅
 
 Closes the real 2026-08-18 bootstrap-deadlock incident (a plan sequenced
@@ -845,4 +818,60 @@ a pattern anchored to unittest's actual verbose-output delimiter (`" ...
 skipped"`), not a bare substring search.
 
 **Verified**: full suite green, 105/105, zero failures/errors/real skips.
+
+### 2026-08-19 — File-Size Ceiling Guard + 1-Attempt Oversize Escalation ✅
+
+User observation, confirmed against real data from the Self-Improvement
+run: plan breakdown chunks *tasks* into small units but never checks file
+*size* — items repeatedly targeted the same, ever-growing
+`tests/test_branch_features.py` instead of a new file per feature, so
+Tier 4 had to ingest the whole existing file as context regardless of how
+small the new task was, hitting real 300s timeouts. Compounded by
+`escalation_rules.tier4_to_tier3`'s 2-consecutive-failure threshold — on a
+file already too large for one window, that wasted a second full ~300s
+timeout before Tier 3 (fast, no local model loading) got a chance.
+
+**Patch 1** (`scripts/dispatcher.py`): `_enforce_file_size_ceiling()` +
+`TIER4_MAX_CONTEXT_CHARS = 24576 * 3` (conservative chars/token floor over
+Tier 4's `num_ctx=24576`), wired into `breakdown_plan()` alongside the
+existing test-context/import-order guards — rejects the plan at breakdown
+time if any file item's existing on-disk content already exceeds the
+ceiling, naming the file and its size. **Patch 2**
+(`scripts/tier4_worker.py`): `_tier4_fail()` gained
+`is_oversize_failure: bool = False`, using threshold 1 instead of the
+configured 2 when set; passed `True` from the `run_build()` timeout path
+and the truncated-response path specifically, leaving every other failure
+reason (Ollama unreachable, edit-block-apply failure, content-guard
+rejection, ordinary `build_failed`) at the normal 2-attempt budget.
+
+**Two bugs found and fixed post-landing:** (1) the truncated-response call
+site never actually got `is_oversize_failure=True` added despite the plan
+explicitly calling for it — caught by the new test file's own assertion
+failing (`'build_failed' != 'escalate'`), fixed at the root. (2) The new
+test file called `_enforce_file_size_ceiling()` with the wrong signature
+(a bare item dict instead of `(phases, project_dir)`), plus dead
+copy-pasted scaffolding code and a duplicate `if __name__ == "__main__"`
+block — fixed directly. New `tests/test_file_size_ceiling_and_oversize_escalation.py`
+(6 tests), verified clean against `scripts/mock_patch_lint.py`.
+
+**Real architectural finding, not yet fixed (queued in `CARRYOVER.md`):**
+`breakdown_plan()`'s post-breakdown guards (this one, the import-order
+guard, the test-context guard) re-run on *every* call, including resuming
+an already-fully-broken-down run — not just once after initial breakdown.
+This run's own resume hit exactly that: items 1-7 had already landed, but
+resuming to dispatch items 8-14 (verify-only checks and doc edits) re-ran
+`_enforce_file_size_ceiling()` against the whole plan and found
+`AGENTS.md` itself — a *later* item's target, unrelated to what was
+actually being resumed — at 143,773 chars, over the new 73,728-char
+ceiling. `AGENTS.md` genuinely is oversized (this repo's own doc-hygiene
+rule, see `feedback_doc_hygiene_all_docs` memory) and this guard is
+working exactly as designed; the bug is that a resume re-litigates
+validation against unrelated items' *current* disk state instead of
+trusting the prior successful pass. Completed items 8-14 by hand this
+time (verify-only checks independently re-confirmed clean; doc edits are
+supervisor-owned anyway) rather than block on this. Two real follow-ups
+queued: shrink `AGENTS.md`, and make the breakdown guards run once, not
+on every resume.
+
+**Verified**: full suite green, 117/117, zero failures/errors/real skips.
 

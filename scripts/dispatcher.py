@@ -413,6 +413,30 @@ def _apply_test_context_guard(items: list[dict], project_dir: str) -> str | None
     return None
 
 
+TIER4_MAX_CONTEXT_CHARS = 24576 * 3  # tier_4_worker num_ctx=24576 tokens (config/tiers.yaml) * 3 chars/token conservative floor -- see scripts/tier4_worker.py's call_ollama() options={"num_ctx": 24576}, the source of truth
+_ESTIMATED_NEW_CONTENT_CHARS = 2000  # conservative fixed buffer: breakdown doesn't know real diff size in advance
+
+
+def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | None:
+    """Post-breakdown guard: refuse to dispatch any file item whose target
+    is already at/over the Tier 4 context ceiling before any new content is
+    added (see constants above). Nonexistent targets are skipped; files that
+    would only tip over once new content is applied are deliberately NOT
+    flagged, because the real diff size isn't known at breakdown time and
+    only the existing size is ground truth."""
+    for phase in phases:
+        for item in phase["items"]:
+            if "git" in item:
+                continue
+            target_path = Path(project_dir) / item["target"]
+            if not target_path.exists():
+                continue
+            existing_chars = len(target_path.read_text())
+            if existing_chars > TIER4_MAX_CONTEXT_CHARS:
+                return f"Error: {item['target']} is already {existing_chars} chars, over the Tier 4 context ceiling of {TIER4_MAX_CONTEXT_CHARS} chars -- breakdown must split this file's work differently or route it elsewhere before dispatch."
+    return None
+
+
 _RETRY_AFTER_RE = re.compile(r"[Rr]etry in ([\d.]+)s")
 
 
@@ -568,6 +592,11 @@ def breakdown_plan(state: dict) -> dict:
     if reorder_error is not None:
         log.error("Module import order guard failed: %s", reorder_error)
         return {"status": "error", "reason": reorder_error}
+
+    size_error = _enforce_file_size_ceiling(state["breakdown"]["phases"], state["project_dir"])
+    if size_error is not None:
+        log.error("File size ceiling guard failed: %s", size_error)
+        return {"status": "error", "reason": size_error}
     save_run(state)
 
     total_items = sum(len(p["items"]) for p in state["breakdown"]["phases"])
