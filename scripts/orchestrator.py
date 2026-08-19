@@ -1,4 +1,4 @@
-"""Ties Tier 4 -> Tier 3 -> Tier 1 -> Tier 2 -> human handoff together.
+"""Ties Tier 4 -> Tier 3 -> Tier 2 -> Tier 1 -> human handoff together.
 
 Tier 4 (Ollama) drafts AND rebuilds each attempt. Once it escalates, Tiers
 3/1/2 only patch the file and hand back to a plain rebuild (scripts.tier4_worker.run_build)
@@ -341,7 +341,27 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
                                             tier3_escalate, build_cmd, workdir, context_blob, config, before_content)
 
     if resolved_by is None:
-        # Tier 1: Claude Code CLI (budget-guarded)
+        # Tier 2: Gemini API (budget-guarded). Tried before Tier 1 so that
+        # Claude (subscription-backed, and the strongest automated repair
+        # tier) stays reserved as the last automated attempt before human
+        # handoff, not spent on problems Gemini might still resolve.
+        guard2 = check_tier2_ok()
+        if guard2["ok"]:
+            before_content = _read_target_text(resolved_target)
+            result2 = tier2_escalate(
+                task_id, resolved_target, context_blob=context_blob, description=description
+            )
+            if result2.get("status") == "fix_rejected":
+                log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
+            if result2.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
+                resolved_by = "tier_2"
+                _critique_and_maybe_revise(task_id, resolved_target, description, "tier_2",
+                                            tier2_escalate, build_cmd, workdir, context_blob, config, before_content)
+        else:
+            print(f"[BUDGET GUARD] Tier 2 skipped: {guard2['reason']}")
+
+    if resolved_by is None:
+        # Tier 1: Claude Code CLI (budget-guarded), last automated tier.
         guard1 = check_tier1_ok()
         guard1m = check_tier1_manager_ok(config)
         if guard1["ok"] and guard1m["ok"]:
@@ -361,23 +381,6 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             print(f"[BUDGET GUARD] Tier 1 skipped: {guard1m['reason']}")
 
     if resolved_by is None:
-        # Tier 2: Gemini API (budget-guarded)
-        guard2 = check_tier2_ok()
-        if guard2["ok"]:
-            before_content = _read_target_text(resolved_target)
-            result2 = tier2_escalate(
-                task_id, resolved_target, context_blob=context_blob, description=description
-            )
-            if result2.get("status") == "fix_rejected":
-                log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
-            if result2.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
-                resolved_by = "tier_2"
-                _critique_and_maybe_revise(task_id, resolved_target, description, "tier_2",
-                                            tier2_escalate, build_cmd, workdir, context_blob, config, before_content)
-        else:
-            print(f"[BUDGET GUARD] Tier 2 skipped: {guard2['reason']}")
-
-    if resolved_by is None:
         handoff_state = read_state(task_id)
         detail = (
             f"**Consecutive failures recorded:** {handoff_state.get('consecutive_failures')}\n\n"
@@ -385,7 +388,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         )
         human_handoff(
             task_id,
-            "unresolved after Tier 4 -> Tier 3 -> Tier 1 -> Tier 2",
+            "unresolved after Tier 4 -> Tier 3 -> Tier 2 -> Tier 1",
             detail,
             component=target,
         )

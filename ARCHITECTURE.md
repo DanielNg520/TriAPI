@@ -8,10 +8,10 @@ TriAPI orchestrates a C++/Edge AI debugging workflow across four tiers, cheapest
 |---|---|---|---|
 | **4 — Worker** | Local Ollama (`qwen3-coder:30b-cc`, fallback `gpt-oss:20b`) | $0, local | Drafts/fixes code, runs the build, tries repeatedly |
 | **3 — Debugger** | DeepSeek API (`deepseek-v4-flash`/`-pro`) | Metered, ~$0.0003/call in practice (prefix-cache discount) | Harder logic errors Tier 4 couldn't fix |
-| **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | High-level architectural correction |
-| **2 — Manager** | Gemini API (Google AI Studio) | Free tier (rate-limited) | Final automated attempt before human review |
+| **2 — Manager** | Gemini API (Google AI Studio) | Free tier (rate-limited) | Second automated repair attempt |
+| **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | Strongest, last automated repair attempt before human review (its `tier_1_planner` role, initial `triapi plan` authoring, is separate and always runs first regardless of this repair ordering) |
 
-If all four are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically.
+If all four are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically. Tier 1 (Claude) is deliberately ordered last in the repair chain, after Tier 2 (Gemini), so subscription quota is spent only on problems the cheaper/free tiers couldn't already resolve.
 
 ## Escalation state machine
 
@@ -29,25 +29,27 @@ Tier 4 (Ollama): draft + build
        └─ still fails
             │
             ▼
-          budget_guard.check_tier1_ok()
+          budget_guard.check_tier2_ok()
             │
-            ├─ refused (ANTHROPIC_API_KEY set) ─► skip to Tier 2
+            ├─ refused (free-tier limit) ─► skip to Tier 1
             └─ ok
                  ▼
-               Tier 1 (Claude Code CLI): patch file, plain rebuild
+               Tier 2 (Gemini API): patch file, plain rebuild
                  ├─ builds ─────────────────────────────► done
                  └─ still fails
                       │
                       ▼
-                    budget_guard.check_tier2_ok()
+                    budget_guard.check_tier1_ok()
                       │
-                      ├─ refused (free-tier limit) ─► human handoff
+                      ├─ refused (ANTHROPIC_API_KEY set) ─► human handoff
                       └─ ok
                            ▼
-                         Tier 2 (Gemini API): patch file, plain rebuild
+                         Tier 1 (Claude Code CLI): patch file, plain rebuild
                            ├─ builds ───────────────────► done
                            └─ still fails ──────────────► human handoff
 ```
+
+Claude (Tier 1) sits last in this chain, not because it's the weakest tier -- it's the strongest -- but because its subscription quota is the one worth conserving for problems nothing cheaper could resolve.
 
 State (consecutive build-failure count, last stderr) is file-backed at `logs/state/<task_id>.json`, not in-memory, because Tier 4 is designed to run as discrete process invocations rather than one long-lived loop.
 

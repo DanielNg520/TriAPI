@@ -36,13 +36,24 @@ def get_endpoint(config: dict) -> str:
         sys.exit(1)
 
 
+def get_keep_model(config: dict) -> str:
+    """Return the keep_model for tier_4_worker from config."""
+    try:
+        default_model = config["tier_4_worker"]["default_model"]
+        return config["tier_4_worker"]["models"][default_model]
+    except KeyError as e:  # pragma: no cover
+        print(f"FAILED: missing key in config {e}")
+        sys.exit(1)
+
+
 def main() -> None:
     cfg = load_config()
     endpoint = get_endpoint(cfg)
+    keep_model = get_keep_model(cfg)
 
     # Step 1: Unload all other models, keeping the fallback.
     try:
-        unload_other_ollama_models(ollama_host=endpoint, keep_model="gpt-oss:20b")
+        unload_other_ollama_models(ollama_host=endpoint, keep_model=keep_model)
     except Exception as e:  # pragma: no cover
         print(f"FAILED: error unloading models ({e})")
         sys.exit(1)
@@ -50,7 +61,7 @@ def main() -> None:
     # Step 2: Make the generate request to the draft model.
     url = f"{endpoint.rstrip('/')}/api/generate"
     payload = {
-        "model": "qwen3-coder:30b-cc",
+        "model": keep_model,
         "prompt": "Hello world",  # minimal prompt
         "stream": False,
     }

@@ -199,6 +199,15 @@ def escalate(
         fixed_code = new_content
     else:
         fixed_code = extract_code(response_text)
+        if fixed_code is None:
+            return {
+                "status": "fix_rejected",
+                "reason": "Tier 2 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.",
+                "model": model_name,
+                "prompt_tokens": prompt_tokens,
+                "cached_tokens": cached_tokens,
+                "output_tokens": output_tokens,
+            }
 
     guard = content_guard.check_write(task_id, target_path, fixed_code)
     if not guard["ok"]:

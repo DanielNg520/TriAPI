@@ -14,10 +14,15 @@ disconnect -- resume by re-reading the same run_id.
 Must only be called after budget_guard.check_tier2_ok().
 """
 
+import hashlib
 import json
+import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -25,7 +30,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import gemini_fallback, git_ops, regression_guard
+from scripts import gemini_fallback, git_ops, regression_guard, judge, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.budget_guard import check_tier2_ok
 from scripts.config_loader import load_tiers
@@ -507,9 +512,11 @@ def _run_path(run_id: str) -> Path:
 
 def save_run(state: dict) -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = _run_path(state["run_id"]).with_suffix(".json.tmp")
     state["updated_at"] = time.time()
-    with open(_run_path(state["run_id"]), "w") as f:
+    with open(temp_path, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(temp_path, _run_path(state["run_id"]))
 
 
 def load_run(run_id: str) -> dict:
@@ -651,6 +658,77 @@ def _normalize_build_cmd(build_cmd: str, project_dir: str) -> str:
     return _BARE_PYTHON_RE.sub(_sub, build_cmd)
 
 
+def _git_diff_for(target: str, project_dir: str) -> str:
+    res = subprocess.run(
+        ["git", "-C", project_dir, "diff", "--", target],
+        capture_output=True,
+        text=True,
+    )
+    return res.stdout
+
+
+def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> dict:
+    git_diff = _git_diff_for(item["target"], state["project_dir"])
+    judge_res = judge.evaluate_design(git_diff, item["description"])
+    if judge_res["approved"]:
+        try:
+            file_text = Path(state["project_dir"], item["target"]).read_text(encoding="utf-8")
+            judge.extract_pattern(file_text, git_diff)
+        except Exception as e:
+            log.warning("[%s] Best-effort pattern extraction failed: %s", task_id, e)
+    else:
+        handle_fix_forward(item, judge_res["reason"], state, task_id)
+        result = dict(result)  # Ensure result is bound and copied on this path
+    return result
+
+
+def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> None:
+    """Invokes Tier 3 to apply the design judge's refactor instructions directly."""
+    log.info("[%s] Design check failed. Running fix-forward...", task_id)
+    target_path = Path(state["project_dir"]) / item["target"]
+    target_hash = hashlib.sha256(str(target_path).encode()).hexdigest()
+    snapshot_path = Path(tempfile.gettempdir()) / f"triapi_{target_hash}"
+    shutil.copy2(target_path, snapshot_path)
+
+    # Verify signature of tier3_escalate.escalate at runtime to prevent coupling risk
+    import inspect
+    sig = inspect.signature(tier3_escalate.escalate)
+    if "revision_note" not in sig.parameters:
+        raise TypeError("tier3_escalate.escalate signature does not match expected: missing 'revision_note'")
+
+    esc_res = tier3_escalate.escalate(
+        task_id,
+        str(target_path),
+        revision_note=f"Rewrite this file to apply this refactor: {refactor_instruction}"
+    )
+
+    # Verify return shape of tier3_escalate.escalate
+    if not isinstance(esc_res, dict) or ("status" not in esc_res and "resolved_by" not in esc_res):
+        raise ValueError(f"tier3_escalate.escalate return shape invalid: {esc_res}")
+
+    build_cmd = item.get("build_cmd") or _default_build_cmd(item["target"])
+    build_cmd = _normalize_build_cmd(build_cmd, state["project_dir"])
+
+    # Verify against tier3_escalate.py's actual success-status ("status" == "fix_applied" or "resolved_by" == "fix_applied")
+    status = esc_res.get("status") or esc_res.get("resolved_by")
+    escalate_ok = (status == "fix_applied")
+
+    if escalate_ok:
+        rebuild_ok, build_output = run_build(build_cmd, state["project_dir"])
+    else:
+        rebuild_ok = False
+        build_output = ""
+
+    if not escalate_ok or not rebuild_ok:
+        shutil.copy2(snapshot_path, target_path)
+        log.info("[%s] handle_fix_forward reverted %s: rebuild still failing after Tier 3 refactor rewrite", task_id, item["target"])
+        if not escalate_ok:
+            reason = esc_res.get("reason") or "Tier 3 escalation did not apply the fix"
+        else:
+            reason = f"Rebuild failed after Tier 3 rewrite: {build_output}"
+        tech_debt.log_tech_debt(str(target_path), reason=reason)
+
+
 def _is_transient_timeout_failure(result: dict, remaining: int) -> bool:
     """True when an item's failure is a transient infrastructure timeout that
     should be retried in place instead of stopping the whole dispatch run.
@@ -778,6 +856,9 @@ def dispatch(state: dict) -> dict:
                     continue
                 break
             is_regular_item = "git" not in item and not item.get("verify_only")
+            if result["status"] == "success" and is_regular_item:
+                result = _run_design_judge(item, result, state, task_id)
+
             content_hash = (
                 regression_guard.hash_file(Path(state["project_dir"]) / item["target"])
                 if is_regular_item and result["status"] == "success"

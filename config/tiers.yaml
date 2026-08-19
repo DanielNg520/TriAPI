@@ -44,15 +44,23 @@ tier_2_manager:
   role: "task orchestration, context isolation, high-level architectural correction"
   automatable: true
   pricing:
-    # Google AI Studio offers a free tier for Gemini (rate-limited, not
-    # unlimited). free_tier_rpm/rpd below are CONSERVATIVE PLACEHOLDERS,
-    # not verified against Google's current published limits -- budget_guard.py
-    # treats these as a hard cap, so verify and tighten/loosen before relying
-    # on this for real usage.
-    last_verified: "2026-08-09"
-    free_tier_rpm: 10
-    free_tier_rpd: 250
-    notes: "free tier via Google AI Studio; RPM/RPD limits are unverified placeholders"
+    # NOT free tier: user confirmed 2026-08-19 the Cloud project behind this
+    # API key is billing-enabled ($10/mo recurring credit + $300 intro
+    # credit), which per Google's rate-limit system means this project
+    # auto-qualifies for at least Tier 1 paid limits, not the Free tier
+    # these values previously assumed. Verified externally: Gemini 2.5 Pro
+    # on Tier 1 paid is 150 RPM with no daily (RPD) cap. Could NOT
+    # independently verify the exact figure for the flash models this repo
+    # actually calls (gemini-3.5-flash / fallback_chain) -- flash limits are
+    # typically equal to or higher than Pro's, so free_tier_rpm/rpd below
+    # are raised to a deliberately conservative floor, not the real ceiling.
+    # budget_guard.py treats these as a hard cap -- re-verify the exact
+    # per-model Tier 1 numbers at https://ai.google.dev/gemini-api/docs/rate-limits
+    # (or Google AI Studio's own per-key display) before loosening further.
+    last_verified: "2026-08-19"
+    free_tier_rpm: 60
+    free_tier_rpd: 1500
+    notes: "billing-enabled Tier 1+ paid project (confirmed 2026-08-19); RPM/RPD below are a conservative floor, not independently verified for the specific flash models used here -- see comment above"
 
 tier_3_debugger:
   name: "DeepSeek"
@@ -88,29 +96,19 @@ tier_4_worker:
   name: "Ollama local"
   endpoint: "http://localhost:11434"
   models:
-    draft: "qwen3-coder:30b-cc"
-    fallback: "gpt-oss:20b"
-  # default_model set to fallback (gpt-oss:20b, MXFP4, 13GB), not draft
-  # (qwen3-coder:30b-cc, Q4_K_M, 18GB) -- the 30B model repeatedly failed to
-  # even finish loading on this machine's shared iGPU/RAM (2026-08-10,
-  # PLAN.md Phase 11), and 5GB less footprint gives real headroom against
-  # whatever else is resident. Paired with resource_guard.yaml (pauses
-  # competing services during a dispatch run) as the other half of the fix.
-  # Re-evaluated 2026-08-17 after scripts/resource_guard.py's
-  # unload_other_ollama_models() shipped (unloads every other resident
-  # Ollama model before a dispatch, removing the "other models competing"
-  # cause above): ran scripts/ollama_load_check.py for real, with nothing
-  # else loaded. Result: STILL FAILS, and it's not the "other models"
-  # theory -- ollama's own journalctl log shows tensors offloaded cleanly
-  # to the GPU (17.5GB Vulkan buffer) but llama-server never finished
-  # starting; the client-side request aborted it after a 300s timeout
-  # with "timed out waiting for llama-server to start: context canceled"
-  # having waited ~4m46s. The bottleneck is this model's size against the
-  # 780M iGPU's own memory bandwidth, not RAM contention from other
-  # processes -- the unload-rule fix doesn't address this. default_model
-  # stays `fallback`. Don't re-attempt this flip without new information
-  # (e.g. a smaller quant of the 30B model, or different hardware).
-  default_model: fallback
+    default: "qwen2.5-coder:14b-instruct-q6_K"
+    polyglot: "deepseek-coder-v2:16b"
+    heavy: "qwen2.5-coder:32b"
+  # default_model set to 'default' model. Switched Q8_0 -> Q6_K 2026-08-19
+  # (user instruction): Q8_0 (18.4GB) left only ~1.6GB headroom against this
+  # machine's ~20GB available RAM (iGPU has just 512MB real VRAM, everything
+  # else is GTT/shared system RAM) and was timing out (300s) on every real
+  # drafting prompt during this session's Self-Improvement dispatch. Q6_K
+  # (~12GB) plus 24k context (~4.6GB KV cache) lands at ~16.6GB total --
+  # notably more headroom, and roughly the same total footprint as Q5_K_M at
+  # 32k context would have been, but with better weight fidelity for equal
+  # risk. See tier4_worker.py's call_ollama() for the paired num_ctx=24576.
+  default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
   # Local Ollama is not guaranteed to be running (build/verification fails
   # with connection refused on localhost:11434), so don't auto-dispatch to
@@ -122,19 +120,24 @@ tier_4_worker:
     - "cmake --build build"
 
 escalation_rules:
+  # Claude (Tier 1) is deliberately last in the automated chain, after
+  # Gemini (Tier 2) -- reserved as the strongest/last-resort automated
+  # repair attempt before human handoff, not spent on problems Gemini
+  # might still resolve. Tier 1's separate `tier_1_planner` role (initial
+  # `triapi plan` authoring) is unaffected by this ordering.
   tier4_to_tier3:
     trigger: consecutive_build_failures
     threshold: 2
-  tier3_to_tier1:
+  tier3_to_tier2:
     trigger: deepseek_unresolved
     threshold: 1
-    action: call_claude_code
-  tier1_to_tier2:
-    trigger: claude_code_unresolved
-    threshold: 1
     action: call_gemini_api
-  tier2_to_human:
+  tier2_to_tier1:
     trigger: gemini_unresolved
+    threshold: 1
+    action: call_claude_code
+  tier1_to_human:
+    trigger: claude_code_unresolved
     threshold: 1
     action: log_and_notify
 critique:
@@ -152,7 +155,9 @@ jules_tester:
   # post-dispatch verification -- never a repair tier, never blocks.
   enabled: true
   source: "sources/github/DanielNg520/TriAPI"  # confirmed-live REST source name (GET /sources), NOT "owner/repo" form
-  daily_task_limit: 15  # Free tier: 15 tasks/24h, 3 concurrent -- confirmed by absence of Pro/Ultra indicator on this account
+  daily_task_limit: 100  # Google AI Pro tier (confirmed by user 2026-08-19: this account has AI Pro,
+  # billing-enabled Cloud project with a $10/mo recurring credit + $300 intro credit): Jules in Pro is
+  # 100 tasks/24h on Gemini 3 Pro, not the 15/24h Free tier this was previously set to. Ultra would be 300/24h.
   poll_timeout_s: 900   # 15 min; live discovery sessions took several minutes incl. plan-approval delay
   poll_interval_s: 15
   # CORRECTED FIELD PATH (2026-08-17, live verification): POST /sessions body

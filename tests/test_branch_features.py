@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -19,12 +20,14 @@ from scripts import (
     budget_guard,
     cost_report,
     critique,
+    dispatcher,
     git_ops,
     jules_client,
     lessons,
     orchestrator,
     resource_guard,
     self_fix,
+    tech_debt,
     triapi,
 )
 
@@ -713,11 +716,11 @@ class OrchestratorTier3PeakSkipTests(unittest.TestCase):
     def test_run_task_skips_tier3_escalate_when_peak_hours_not_ok(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = str(Path(tmp) / "target.py")
-            result, tier3_escalate, tier1_escalate, _tier2_escalate = (
+            result, tier3_escalate, _tier1_escalate, tier2_escalate = (
                 self._run_task_with_guards("task-1", "fix it", target, tmp, tier3_ok=False)
             )
         tier3_escalate.assert_not_called()
-        tier1_escalate.assert_called_once()
+        tier2_escalate.assert_called_once()
         self.assertEqual(result["status"], "human_handoff")
 
     def test_run_task_calls_tier3_escalate_when_peak_hours_ok(self) -> None:
@@ -729,7 +732,7 @@ class OrchestratorTier3PeakSkipTests(unittest.TestCase):
         tier3_escalate.assert_called_once()
         self.assertEqual(result["status"], "human_handoff")
 
-    def test_run_task_falls_through_to_tier2_when_tier3_skipped_and_tier1_fails(self) -> None:
+    def test_run_task_falls_through_to_tier1_when_tier3_skipped_and_tier2_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = str(Path(tmp) / "target.py")
             result, tier3_escalate, tier1_escalate, tier2_escalate = (
@@ -739,12 +742,12 @@ class OrchestratorTier3PeakSkipTests(unittest.TestCase):
                     target,
                     tmp,
                     tier3_ok=False,
-                    tier1_result={"status": "fix_rejected", "reason": "no"},
+                    tier2_result={"status": "fix_rejected", "reason": "no"},
                 )
             )
         tier3_escalate.assert_not_called()
-        tier1_escalate.assert_called_once()
-        tier2_escalate.assert_called_once_with(
+        tier2_escalate.assert_called_once()
+        tier1_escalate.assert_called_once_with(
             "task-3",
             target,
             context_blob="ctx",
@@ -1183,6 +1186,378 @@ class UnloadOllamaModelsTests(unittest.TestCase):
                 ],
                 any_order=True,
             )
+
+
+class DispatcherHookAndFixForwardTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.project_dir = self.tmpdir.name
+        self.target_file = Path(self.project_dir) / "test_file.py"
+        self.target_file.write_text("original content\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    @mock.patch("scripts.dispatcher.save_run")
+    @mock.patch("scripts.dispatcher.check_tier2_ok", return_value={"ok": True})
+    @mock.patch("scripts.dispatcher.run_task")
+    @mock.patch("scripts.judge.evaluate_design")
+    @mock.patch("scripts.judge.extract_pattern")
+    @mock.patch("scripts.dispatcher.handle_fix_forward")
+    @mock.patch("subprocess.run")
+    def test_successful_item_passing_judge_calls_extract_pattern(
+        self, mock_run, mock_handle_ff, mock_extract, mock_eval, mock_run_task, mock_check_ok, mock_save
+    ):
+        mock_run_task.return_value = {"status": "success", "resolved_by": "tier_3"}
+        mock_eval.return_value = {"status": "ok", "approved": True, "reason": "looks good", "cost_usd": 0.01}
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        state = {
+            "run_id": "run-test",
+            "project_dir": self.project_dir,
+            "status": "planned",
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "Phase 1",
+                        "items": [
+                            {
+                                "description": "Test task",
+                                "target": str(self.target_file.relative_to(self.project_dir)),
+                                "build_cmd": "echo 'built'",
+                                "verify_only": False,
+                                "context_files": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "results": []
+        }
+
+        dispatcher.dispatch(state)
+
+        mock_eval.assert_called_once()
+        mock_extract.assert_called_once()
+        mock_handle_ff.assert_not_called()
+
+    @mock.patch("scripts.dispatcher.save_run")
+    @mock.patch("scripts.dispatcher.check_tier2_ok", return_value={"ok": True})
+    @mock.patch("scripts.dispatcher.run_task")
+    @mock.patch("scripts.judge.evaluate_design")
+    @mock.patch("scripts.judge.extract_pattern")
+    @mock.patch("scripts.dispatcher.handle_fix_forward")
+    @mock.patch("subprocess.run")
+    def test_successful_item_failing_judge_calls_handle_fix_forward(
+        self, mock_run, mock_handle_ff, mock_extract, mock_eval, mock_run_task, mock_check_ok, mock_save
+    ):
+        mock_run_task.return_value = {"status": "success", "resolved_by": "tier_3"}
+        mock_eval.return_value = {"status": "ok", "approved": False, "reason": "bad design", "cost_usd": 0.01}
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        state = {
+            "run_id": "run-test",
+            "project_dir": self.project_dir,
+            "status": "planned",
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "Phase 1",
+                        "items": [
+                            {
+                                "description": "Test task",
+                                "target": str(self.target_file.relative_to(self.project_dir)),
+                                "build_cmd": "echo 'built'",
+                                "verify_only": False,
+                                "context_files": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "results": []
+        }
+
+        dispatcher.dispatch(state)
+
+        mock_eval.assert_called_once()
+        mock_extract.assert_not_called()
+        mock_handle_ff.assert_called_once()
+
+    @mock.patch("scripts.dispatcher.save_run")
+    @mock.patch("scripts.dispatcher.check_tier2_ok", return_value={"ok": True})
+    @mock.patch("scripts.dispatcher.run_task")
+    @mock.patch("scripts.judge.evaluate_design")
+    @mock.patch("scripts.judge.extract_pattern")
+    @mock.patch("scripts.dispatcher.handle_fix_forward")
+    @mock.patch("subprocess.run")
+    def test_peak_hours_skipped_judge_passes_open_calls_extract_pattern(
+        self, mock_run, mock_handle_ff, mock_extract, mock_eval, mock_run_task, mock_check_ok, mock_save
+    ):
+        mock_run_task.return_value = {"status": "success", "resolved_by": "tier_3"}
+        mock_eval.return_value = {"status": "skipped", "approved": True, "reason": "peak_hours", "cost_usd": 0.0}
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        state = {
+            "run_id": "run-test",
+            "project_dir": self.project_dir,
+            "status": "planned",
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "Phase 1",
+                        "items": [
+                            {
+                                "description": "Test task",
+                                "target": str(self.target_file.relative_to(self.project_dir)),
+                                "build_cmd": "echo 'built'",
+                                "verify_only": False,
+                                "context_files": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "results": []
+        }
+
+        dispatcher.dispatch(state)
+
+        mock_eval.assert_called_once()
+        mock_extract.assert_called_once()
+        mock_handle_ff.assert_not_called()
+
+    @mock.patch("subprocess.run")
+    @mock.patch("scripts.tier3_escalate.escalate", autospec=True)
+    @mock.patch("scripts.dispatcher.run_build")
+    @mock.patch("scripts.tech_debt.log_tech_debt")
+    def test_handle_fix_forward_successful_rebuild(self, mock_log_tech_debt, mock_run_build, mock_escalate, mock_run):
+        self.target_file.write_text("original content\n", encoding="utf-8")
+        
+        def mock_escalate_side_effect(*args, **kwargs):
+            self.target_file.write_text("tier 3 rewrite\n", encoding="utf-8")
+            return {"status": "fix_applied"}
+            
+        mock_escalate.side_effect = mock_escalate_side_effect
+        mock_run_build.return_value = (True, "build ok")
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        import inspect
+        sig = inspect.signature(dispatcher.handle_fix_forward)
+        kwargs = {}
+        param_mapping = {
+            "task_id": "task-test",
+            "target": str(self.target_file),
+            "snapshot": "original content\n",
+            "build_cmd": "echo 'built'",
+            "workdir": self.project_dir,
+            "description": "Test description",
+            "context_blob": "",
+            "revision_note": "",
+            "refactor_instruction": "",
+            "state": {
+                "run_id": "run-test",
+                "project_dir": self.project_dir,
+                "status": "planned",
+                "breakdown": {"phases": []},
+                "results": [],
+            },
+            "item": {
+                "description": "Test description",
+                "target": str(self.target_file.relative_to(self.project_dir)),
+                "build_cmd": "echo 'built'",
+            }
+        }
+        for name in sig.parameters:
+            if name in param_mapping:
+                kwargs[name] = param_mapping[name]
+
+        dispatcher.handle_fix_forward(**kwargs)
+
+        self.assertEqual(self.target_file.read_text(encoding="utf-8"), "tier 3 rewrite\n")
+        mock_log_tech_debt.assert_not_called()
+
+    @mock.patch("subprocess.run")
+    @mock.patch("scripts.tier3_escalate.escalate", autospec=True)
+    @mock.patch("scripts.dispatcher.run_build")
+    @mock.patch("scripts.tech_debt.log_tech_debt")
+    def test_handle_fix_forward_failed_rebuild(self, mock_log_tech_debt, mock_run_build, mock_escalate, mock_run):
+        self.target_file.write_text("original content\n", encoding="utf-8")
+        
+        def mock_escalate_side_effect(*args, **kwargs):
+            self.target_file.write_text("tier 3 rewrite\n", encoding="utf-8")
+            return {"status": "fix_applied"}
+            
+        mock_escalate.side_effect = mock_escalate_side_effect
+        mock_run_build.return_value = (False, "build failed")
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        import inspect
+        sig = inspect.signature(dispatcher.handle_fix_forward)
+        kwargs = {}
+        param_mapping = {
+            "task_id": "task-test",
+            "target": str(self.target_file),
+            "snapshot": "original content\n",
+            "build_cmd": "echo 'built'",
+            "workdir": self.project_dir,
+            "description": "Test description",
+            "context_blob": "",
+            "revision_note": "",
+            "refactor_instruction": "",
+            "state": {
+                "run_id": "run-test",
+                "project_dir": self.project_dir,
+                "status": "planned",
+                "breakdown": {"phases": []},
+                "results": [],
+            },
+            "item": {
+                "description": "Test description",
+                "target": str(self.target_file.relative_to(self.project_dir)),
+                "build_cmd": "echo 'built'",
+            }
+        }
+        for name in sig.parameters:
+            if name in param_mapping:
+                kwargs[name] = param_mapping[name]
+
+        dispatcher.handle_fix_forward(**kwargs)
+
+        self.assertEqual(self.target_file.read_text(encoding="utf-8"), "original content\n")
+        mock_log_tech_debt.assert_called_once()
+
+
+class TechDebtTests(unittest.TestCase):
+    def test_log_tech_debt_creates_backlog_file_with_hashed_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "module.py"
+            target.write_text("print('hi')\n", encoding="utf-8")
+            backlog = Path(tmp) / "knowledge" / "TECH_DEBT.md"
+            with mock.patch.object(tech_debt, "TECH_DEBT_PATH", backlog):
+                tech_debt.log_tech_debt(str(target), "tier 3 could not rebuild")
+
+            expected_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+            text = backlog.read_text(encoding="utf-8")
+            self.assertIn("# Tech Debt", text)
+            self.assertIn(
+                f"- [ ] FILE: {target} | HASH: {expected_hash} | REASON: tier 3 could not rebuild",
+                text,
+            )
+
+    def test_check_staleness_false_when_file_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "unchanged.py"
+            target.write_text("v1\n", encoding="utf-8")
+            entry = {
+                "filepath": str(target),
+                "hash": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "reason": "test",
+            }
+            self.assertFalse(tech_debt.check_staleness(entry))
+
+    def test_check_staleness_true_when_file_modified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "modified.py"
+            target.write_text("v1\n", encoding="utf-8")
+            entry = {
+                "filepath": str(target),
+                "hash": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "reason": "test",
+            }
+            target.write_text("v2\n", encoding="utf-8")
+            self.assertTrue(tech_debt.check_staleness(entry))
+
+    def test_check_staleness_true_when_file_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "deleted.py"
+            target.write_text("v1\n", encoding="utf-8")
+            entry = {
+                "filepath": str(target),
+                "hash": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "reason": "test",
+            }
+            target.unlink()
+            self.assertTrue(tech_debt.check_staleness(entry))
+
+    def test_cmd_tech_debt_builds_synthetic_state_and_skips_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fresh = Path(tmp) / "fresh.py"
+            fresh.write_text("v1\n", encoding="utf-8")
+            stale = Path(tmp) / "stale.py"
+            stale.write_text("v1\n", encoding="utf-8")
+            backlog = Path(tmp) / "knowledge" / "TECH_DEBT.md"
+            with mock.patch.object(tech_debt, "TECH_DEBT_PATH", backlog):
+                tech_debt.log_tech_debt(str(fresh), "retry me")
+                tech_debt.log_tech_debt(str(stale), "stale me")
+            stale.write_text("changed\n", encoding="utf-8")
+
+            state = {
+                "run_id": "tech-debt-run",
+                "project_dir": tmp,
+                "status": "planned",
+                "prompt": "",
+                "plan_text": None,
+                "breakdown": {"phases": []},
+                "results": [],
+            }
+            captured: list[dict] = []
+
+            def _fake_dispatch(*args, **kwargs):
+                if args:
+                    dispatched = args[0]
+                elif "state" in kwargs:
+                    dispatched = kwargs["state"]
+                else:
+                    dispatched = next(iter(kwargs.values()))
+                captured.append(dispatched)
+                return dispatched
+
+            with (
+                mock.patch.object(tech_debt, "TECH_DEBT_PATH", backlog),
+                mock.patch.object(triapi, "tech_debt", tech_debt, create=True),
+                mock.patch.object(triapi.dispatcher, "new_run", return_value=state),
+                mock.patch.object(triapi.dispatcher, "save_run"),
+                mock.patch.object(
+                    triapi.dispatcher, "dispatch", side_effect=_fake_dispatch
+                ) as dispatch_mock,
+                mock.patch.object(
+                    triapi.resource_guard, "pause_services", return_value=[]
+                ),
+                mock.patch.object(triapi.resource_guard, "resume_services"),
+                mock.patch.object(
+                    triapi.resource_guard,
+                    "unload_other_ollama_models",
+                    return_value=[],
+                ),
+                mock.patch.object(
+                    triapi, "load_resource_guard_services", return_value=[]
+                ),
+                mock.patch.object(
+                    triapi, "load_unload_ollama_models_flag", return_value=False
+                ),
+                mock.patch("sys.stdout", io.StringIO()),
+            ):
+                triapi.cmd_tech_debt(tmp)
+
+            dispatch_mock.assert_called_once()
+            dispatched_state = captured[0]
+            self.assertEqual(dispatched_state["status"], "planned")
+            items = [
+                item
+                for phase in dispatched_state["breakdown"]["phases"]
+                for item in phase["items"]
+            ]
+            project_dir = Path(dispatched_state.get("project_dir", ".")).resolve()
+            targets = []
+            for item in items:
+                target = Path(item["target"])
+                if not target.is_absolute():
+                    target = project_dir / target
+                targets.append(str(target.resolve()))
+            self.assertIn(str(Path(fresh).resolve()), targets)
+            self.assertNotIn(str(Path(stale).resolve()), targets)
+
 
 if __name__ == "__main__":
     unittest.main()

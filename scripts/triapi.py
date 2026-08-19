@@ -29,6 +29,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -529,6 +530,40 @@ def cmd_self_fix_approve(bug_id: str) -> None:
     print(f"Run it: triapi dispatch {state['run_id']}")
 
 
+def cmd_tech_debt(project_dir: str) -> None:
+    entries = tech_debt.read_tech_debt_entries()
+    filtered_entries = [entry for entry in entries if not tech_debt.check_staleness(entry)]
+    
+    synthetic_state = {
+        "run_id": str(uuid.uuid4()),
+        "project_dir": project_dir,
+        "status": "planned",
+        "plan_text": "",
+        "breakdown": {
+            "phases": [
+                {
+                    "name": "Tech Debt",
+                    "items": [
+                        {
+                            "description": f"Fix {entry['filepath']}",
+                            "target": entry["filepath"],
+                            "build_cmd": f"# Add your build command here to fix {entry['filepath']}",
+                            "verify_only": False,
+                            "context_files": []
+                        }
+                        for entry in filtered_entries
+                    ]
+                }
+            ]
+        },
+        "results": [],
+        "regression_flags": []
+    }
+    
+    dispatcher.save_run(synthetic_state)
+    dispatcher.dispatch(synthetic_state)
+
+
 def main():
     parser = argparse.ArgumentParser(description="TriAPI natural-language pipeline entry point")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -562,6 +597,9 @@ def main():
     p_sf_approve = selffix_sub.add_parser("approve", help="approve a drafted self-fix run for dispatch")
     p_sf_approve.add_argument("bug_id")
 
+    p_tech_debt = sub.add_parser("tech-debt", help="process tech debt entries")
+    p_tech_debt.add_argument("--project-dir", required=True, help="the project directory containing TECH_DEBT.md")
+
     args = parser.parse_args()
 
     if args.command == "plan":
@@ -583,6 +621,8 @@ def main():
             cmd_self_fix_approve(args.bug_id)
     elif args.command == "list":
         cmd_list()
+    elif args.command == "tech-debt":
+        cmd_tech_debt(args.project_dir)
 
 
 if __name__ == "__main__":

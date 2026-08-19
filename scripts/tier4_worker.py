@@ -25,7 +25,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks, lessons
+from scripts import content_guard, edit_blocks, hivemind_util, lessons
 from scripts.config_loader import load_tiers
 from scripts.state import clear_state, read_state, record_failure
 from scripts.tri_logging import get_logger
@@ -50,10 +50,19 @@ def log_cost(entry: dict) -> None:
 CODE_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]*)\n(.*?)```", re.DOTALL)
 
 
-def extract_code(response_text: str) -> str:
+def extract_code(response_text: str) -> str | None:
+    """Returns None if a code fence was opened but never closed -- the
+    response was cut off mid-generation. Callers must treat None as a
+    failed attempt, never fall back to writing the raw, truncated fragment
+    (found for real 2026-08-18: a truncated new-file response left an
+    unterminated triple-quoted string; content_guard.check_write() has
+    nothing to compare a brand-new file against, so it passed straight
+    through and only surfaced as a build-time SyntaxError)."""
     blocks = CODE_FENCE_RE.findall(response_text)
     if blocks:
         return max(blocks, key=len).strip() + "\n"
+    if "```" in response_text:
+        return None
     return response_text.strip() + "\n"
 
 
@@ -110,7 +119,7 @@ def build_prompt(description: str, target_path: Path, last_stderr: str, context_
 def call_ollama(host: str, model: str, prompt: str) -> dict:
     resp = requests.post(
         f"{host}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False},
+        json={"model": model, "prompt": prompt, "stream": False, "options": {"num_ctx": 24576}},
         timeout=300,
     )
     try:
@@ -166,6 +175,14 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     state = read_state(task_id)
     prompt = build_prompt(description, target_path, state.get("last_stderr", ""), context_blob)
 
+    hivemind_code = hivemind_util.search_hivemind(description, target_path.suffix)
+    if hivemind_code is not None:
+        prompt += (
+            "\n\n[HIVEMIND REFERENCE PATTERN]\n"
+            "Adapt this structure for your solution:\n"
+            f"{hivemind_code}"
+        )
+
     log.info("[%s] Tier 4 (Ollama/%s) drafting %s", task_id, model, target_path)
 
     try:
@@ -204,6 +221,8 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
         code = new_content
     else:
         code = extract_code(response_text)
+        if code is None:
+            return _tier4_fail(task_id, threshold, "Tier 4 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.")
 
     guard = content_guard.check_write(task_id, target_path, code)
     if not guard["ok"]:

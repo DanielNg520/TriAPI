@@ -94,7 +94,7 @@ def build_user_message(stderr: str, revision_note: str = "") -> str:
     return f"Build/verification error:\n```\n{stderr}\n```\n\nFix the file."
 
 
-def extract_code(text: str) -> str:
+def extract_code(text: str) -> str | None:
     """Extract the fenced code block from a model response.
 
     The new-file prompt asks for exactly one fenced code block. This parser
@@ -104,10 +104,21 @@ def extract_code(text: str) -> str:
     tier4_worker's backing service -- is down, which is exactly when tier3 is
     invoked. Importing tier4_worker at that point could try to reach Ollama's
     /api/generate endpoint and crash with a connection error.
+
+    Returns None if a code fence was opened but never closed -- the response
+    was cut off mid-generation (found for real 2026-08-18: a truncated
+    DeepSeek response left an unterminated triple-quoted string in a new test
+    file; content_guard.check_write() has nothing to compare a brand-new file
+    against, so the broken content sailed straight through and only surfaced
+    as a SyntaxError at build time, by which point Tier 2/Tier 1 couldn't
+    SEARCH/REPLACE against the malformed content either). Callers must treat
+    None as a failed attempt, not fall back to writing the raw fragment.
     """
     match = re.search(r"```(?:\w+)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
         return match.group(1).strip()
+    if "```" in text:
+        return None
     return text.strip()
 
 
@@ -242,6 +253,19 @@ def escalate(
         }
     )
 
+    finish_reason = data["choices"][0].get("finish_reason")
+    if finish_reason == "length":
+        log.warning("[%s] Tier 3 response truncated by max-token limit (finish_reason=length)", task_id)
+        return {
+            "status": "fix_rejected",
+            "reason": "Tier 3 response truncated by max-token limit (finish_reason=length); refusing to write incomplete content.",
+            "model": model_name,
+            "cache_hit_tokens": cache_hit_tokens,
+            "cache_miss_tokens": cache_miss_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+        }
+
     response_text = data["choices"][0]["message"]["content"]
     if current_contents is not None:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
@@ -259,6 +283,17 @@ def escalate(
         fixed_code = new_content
     else:
         fixed_code = extract_code(response_text)
+        if fixed_code is None:
+            log.warning("[%s] Tier 3 new-file response truncated (unterminated code fence)", task_id)
+            return {
+                "status": "fix_rejected",
+                "reason": "Tier 3 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.",
+                "model": model_name,
+                "cache_hit_tokens": cache_hit_tokens,
+                "cache_miss_tokens": cache_miss_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+            }
 
     guard = content_guard.check_write(task_id, target_path, fixed_code)
     if not guard["ok"]:

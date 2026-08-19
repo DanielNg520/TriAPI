@@ -186,6 +186,12 @@ def escalate(
         fixed_code = new_content
     else:
         fixed_code = extract_code(raw_result)
+        if fixed_code is None:
+            return {
+                "status": "fix_rejected",
+                "reason": "Tier 1 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.",
+                "notional_cost_usd": data.get("total_cost_usd", 0.0),
+            }
 
     guard = content_guard.check_write(task_id, target_path, fixed_code)
     if not guard["ok"]:

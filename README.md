@@ -1,6 +1,6 @@
 # TriAPI
 
-A 4-tier AI coding pipeline orchestrator: local Ollama → DeepSeek → Claude Code CLI → Gemini API → human review, cheapest first, so paid subscription quota is reserved for genuinely hard problems.
+A 4-tier AI coding pipeline orchestrator: local Ollama → DeepSeek → Gemini API → Claude Code CLI → human review, cheapest first, so Claude's subscription quota is reserved as the strongest, last-resort automated attempt for genuinely hard problems.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design, and [PLAN.md](PLAN.md) for the full build history and decisions.
 
@@ -37,8 +37,8 @@ You'll see this play out roughly as described in [ARCHITECTURE.md](ARCHITECTURE.
 
 1. **Tier 4 (local, free)** asks Ollama to draft/fix the file, then actually runs your build command. If the build passes, you're done — nothing else happens, nothing gets billed.
 2. If the build fails **twice in a row**, it escalates to **Tier 3 (DeepSeek)**: DeepSeek gets the file + the error and writes a fix, which gets rebuilt (not redrafted — Tier 3's fix isn't overwritten).
-3. If that still doesn't build, it tries **Tier 1 (Claude Code CLI)** — but only after confirming your subscription billing is safe (see the budget guard note below).
-4. If that still doesn't build, it tries **Tier 2 (Gemini API)** — again, only after confirming you're within the free tier.
+3. If that still doesn't build, it tries **Tier 2 (Gemini API)** — only after confirming you're within the free tier.
+4. If that still doesn't build, it tries **Tier 1 (Claude Code CLI)** — Claude is the last automated attempt, tried only after confirming your subscription billing is safe (see the budget guard note below).
 5. If nothing worked, it stops and writes a **human handoff** instead of guessing further — see step 6.
 
 Each step patches the same file in place, so if you `git diff` mid-run you'll see whatever the current tier's attempt looks like.
@@ -79,8 +79,8 @@ python3 scripts/cost_report.py --task-id fix-simd-crash
 
 - **Re-running the same `--task-id`** picks up wherever the failure count left off (`logs/state/<task_id>.json`). If you want a clean slate, either pick a new task-id or delete that state file.
 - **The budget guard can silently skip a tier** — if `ANTHROPIC_API_KEY` is set in your environment, Tier 1 is skipped entirely (printed as `[BUDGET GUARD] Tier 1 skipped: ...`) rather than risk metered billing. Unset it if you want Tier 1 available.
-- **Tier 1 has its own on/off switch, separate from the budget guard.** Set `tier_1_manager.enabled: false` in `config/tiers.yaml` (default `true`) to disable Tier 1 (Claude Code CLI) permanently for the repair/escalation chain, or pass `triapi dispatch --no-tier1` (or set `TRIAPI_NO_TIER1=1` yourself) to force it off for a single run without editing the yaml. When off, `run_task()` skips straight from Tier 3 (DeepSeek) to Tier 2 (Gemini), printed the same way as a budget-guard skip. This does **not** affect `triapi plan`'s interactive planning step (`scripts/planner.py`), which is a separate Claude Code CLI code path controlled by the unrelated `tier_1_planner` config block.
-- **Tier 4's model matters for speed.** The configured default (`qwen3-coder:30b-cc`) is slow if it's not actually running on your GPU — see the hardware notes at the bottom of this file. `--tier4-model <name>` lets you override it per-run (e.g. a smaller/faster model while iterating).
+- **Tier 1 has its own on/off switch, separate from the budget guard.** Set `tier_1_manager.enabled: false` in `config/tiers.yaml` (default `true`) to disable Tier 1 (Claude Code CLI) permanently for the repair/escalation chain, or pass `triapi dispatch --no-tier1` (or set `TRIAPI_NO_TIER1=1` yourself) to force it off for a single run without editing the yaml. When off, `run_task()` skips straight from Tier 2 (Gemini) to human handoff, printed the same way as a budget-guard skip. This does **not** affect `triapi plan`'s interactive planning step (`scripts/planner.py`), which is a separate Claude Code CLI code path controlled by the unrelated `tier_1_planner` config block.
+- **Tier 4's model matters for speed.** The configured default (`qwen2.5-coder:14b-instruct-q8_0`) is slow if it's not actually running on your GPU — see the hardware notes at the bottom of this file. `--tier4-model <name>` lets you override it per-run (e.g. a smaller/faster model while iterating).
 
 ## Multi-file projects: `triapi plan` / `triapi dispatch`
 
@@ -188,8 +188,9 @@ It's already `enabled`, so it starts automatically on login/reboot — you shoul
 Pull the models configured in `config/tiers.yaml`'s `tier_4_worker.models` if you don't already have them:
 
 ```bash
-ollama pull qwen3-coder:30b-cc
-ollama pull gpt-oss:20b
+ollama pull qwen2.5-coder:14b-instruct-q8_0
+ollama pull deepseek-coder-v2:16b
+ollama pull qwen2.5-coder:32b
 ```
 
 ### 4. Claude Code CLI (Tier 1)

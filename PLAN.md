@@ -503,3 +503,20 @@ Independent branch audit after all four `AGENT_GUIDE.md` worked runs completed:
 - Added `tests/test_branch_features.py` regression coverage.
 - Independently audited and hardened the four worked test cases dispatched against a target repo during this phase (ghostwriter, self-fix, learning, HTML ingestion) — target-repo-specific detail lives in that repo's own docs, not here.
 
+
+---
+
+## Session Carryover Log
+
+### 2026-08-18 — Tier 4 Task-Type Model Routing ✅
+
+Replaced `tier_4_worker`'s `draft`/`fallback` pair with `default`
+(`qwen2.5-coder:14b-instruct-q8_0`)/`polyglot` (`deepseek-coder-v2:16b`)/
+`heavy` (`qwen2.5-coder:32b`) in `config/tiers.yaml`; `default_model` set to
+`default`, which also serves as the safe fallback on `polyglot`/`heavy`
+load failure; `gpt-oss:20b` and `qwen3-coder:30b-cc` fully retired (old
+load-failure writeup deleted, was specific to the purged 30b/quant, doesn't
+apply to the newly-validated `heavy` model); `scripts/ollama_load_check.py`
+now resolves its `keep_model`/test model from config instead of hardcoding;
+`AGENTS.md`/`README.md` updated to match.
+

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__codegraph__codegraph_explore",
+      "Bash(journalctl --user *)",
+      "Bash(triapi status *)",
+      "Bash(systemctl --user status *)",
+      "Bash(curl -s http://localhost:11434/*)"
+    ]
+  }
+}
