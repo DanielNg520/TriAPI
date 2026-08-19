@@ -313,10 +313,25 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
     # foreground path and the --background path, since the detached child
     # re-execs `dispatch <run_id>` without --background and lands here too.
     paused = resource_guard.pause_services(load_resource_guard_services())
+    # Snapshot the Ollama service state once per dispatch run, before Tier 4
+    # work, so the service can be restored to exactly this state on exit. A
+    # snapshot failure must never block dispatch, so default to None on error.
+    tiers_cfg = None
+    ollama_snapshot = None
+    snapshot_ollama_host = None
+    try:
+        tiers_cfg = load_tiers()
+        snapshot_ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
+        ollama_snapshot = resource_guard.snapshot_ollama_state(ollama_host=snapshot_ollama_host)
+    except Exception as exc:
+        snapshot_ollama_host = None
+        log.warning("Could not snapshot Ollama state before dispatch: %s", exc)
+
     # Unload unused Ollama models if configured
     if load_unload_ollama_models_flag():
         try:
-            tiers_cfg = load_tiers()
+            if tiers_cfg is None:
+                tiers_cfg = load_tiers()
             default_model_key = tiers_cfg["tier_4_worker"]["default_model"]
             keep_model = tiers_cfg["tier_4_worker"].get("models", {}).get(default_model_key, default_model_key)
             ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
@@ -332,6 +347,8 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
         bug_path = self_fix.capture_crash(exc, run_id=run_id, context="cmd_dispatch:foreground")
         crash = (exc, exc.__traceback__)
     finally:
+        if snapshot_ollama_host is not None:
+            resource_guard.restore_ollama_state(ollama_snapshot, ollama_host=snapshot_ollama_host)
         resource_guard.resume_services(paused)
 
     if crash is not None:

@@ -252,3 +252,40 @@ Related integrity lessons from the same change:
 - **A non-empty plan that yields zero work items must be a hard error**, never a vacuous `status: "ok"` — silent no-op success is worse than a loud failure.
 - **Pin each incident with a dedicated regression test**, preferably in a new test file when the existing suite has grown too large, using fixture repos rather than the repo's own files. The test name and comment should cite the run/incident that motivated it.
 - When validating test output, check for the *exact* unittest skipped delimiter (`... skipped`) rather than a bare substring `skipped`, which false-positives on legitimate test method names.
+
+### Best-Effort State Snapshot Before Mutating Long-Running Environments
+
+Before a long-running process changes a shared external service (e.g., unloading models), snapshot the service's current state so it can be restored exactly on exit. Make the snapshot best-effort: wrap it in `try/except`, default to `None` on failure, and log a warning. A snapshot failure must never block the main operation.
+
+Also load the configuration needed for that snapshot once, store it, and reuse it in later steps instead of reloading it:
+
+```python
+tiers_cfg = None
+ollama_snapshot = None
+try:
+    tiers_cfg = load_tiers()
+    ollama_snapshot = resource_guard.snapshot_ollama_state(...)
+except Exception as exc:
+    log.warning("Could not snapshot ...: %s", exc)
+
+if load_unload_ollama_models_flag():
+    try:
+        if tiers_cfg is None:
+            tiers_cfg = load_tiers()          # reuse if already loaded
+        ...
+```
+
+This pattern keeps the critical path resilient to snapshot/config failures, avoids duplicate configuration loads, and preserves the ability to restore the original environment when capture succeeds.
+
+### Snapshot-Restore External Resource State Around Long-Running Fallible Operations
+
+When an operation pauses, unloads, or mutates external service state for the duration of a long-running task, treat that state like a transaction:
+
+- **Snapshot before mutating.** Capture the original external state immediately before the first side effect, not later.
+- **Initialize snapshot variables to safe sentinels.** Use `config = None; snapshot = None` so downstream code can tell whether a snapshot was actually captured.
+- **Make the snapshot best-effort.** If capturing the snapshot fails, log the warning and proceed; the operation should not be blocked by an inability to record state. The `None` sentinel then disables restoration.
+- **Restore in `finally`, exactly once.** Restore using the same endpoint/config that produced the snapshot. Guard the restore with `if config is not None` to handle the “snapshot never happened” case safely.
+- **Reuse the loaded config across the whole operation.** Loading config once and reusing it for snapshot, mutation, and restore avoids inconsistent state if configuration changes mid-run.
+- **Defer expensive or side-effecting failure handling until after restoration.** Do not queue follow-up work (e.g. self-fix) while external services are still paused; restore the environment first, then process failures.
+
+This pattern prevents resource leaks, makes recovery behavior explicit, and keeps the external environment deterministic no matter whether the main work succeeds, fails, or crashes.
