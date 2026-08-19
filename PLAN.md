@@ -688,6 +688,66 @@ worker copied a pattern that didn't apply to this project's conventions.
 - **Verified**: full `py_compile`/test pass is green (97/97), including the
   new regression file (10/10).
 
+### 2026-08-19 — Plan-completion integrity bug ✅
+
+Two compounding root causes, both found live from a real false-complete
+run (`20260819-063339-9d23c7`, Ollama lifecycle management): (1)
+`_split_plan_by_phase()` in `scripts/dispatcher.py` only recognized `## `
+ATX headers as phase boundaries; that run's plan used numbered
+`1. Phase 1 — ...` markers instead, collapsing all 4 phases into one
+chunk, and Gemini's `breakdown_phase()` silently extracted only 3 of ~10
+real checklist items with no error. (2) `agents_md_gate.mark_plan_complete()`
+unconditionally flipped every `- [ ]` to `- [x]` in a run's AGENTS.md block
+once dispatch status was `"completed"`, with no check that the breakdown
+actually covered every item — so the run reported fully done and cleared
+the one-plan-per-repo gate while 3 of 4 phases silently never ran.
+
+**Fix, landed via `triapi plan --refactor`/`dispatch` (run
+`20260819-070113-94a8cf`):** `_PHASE_HEADER_RE` widened to also match
+`\d+\.\s+Phase\b` (case-insensitive) alongside ATX headers.
+`mark_plan_complete(project_dir, run_id, breakdown_item_count)` gained a
+required third argument and now refuses (returns `False`, logs a warning,
+writes nothing) whenever the AGENTS.md block's actual checkbox count
+exceeds the breakdown's captured item count — defense in depth, since
+plan-writing style will keep varying and the phase-header heuristic can't
+cover every case. New `tests/test_plan_phase_split_and_completion_guard.py`
+(5 tests).
+
+**Two bugs found and fixed post-landing, before trusting this "done":**
+(1) the landed regex's first draft, `\d+\.\s+(?:Phase\b|[A-Z])`, over-matched
+— any numbered checklist item starting with a capital letter (e.g.
+`"1. Task one"`) was misread as a new phase boundary, exactly the failure
+class the 2026-08-13 checklist-regex fix already closed once; caught by
+the new test file's own `test_numbered_phase_markers_split_into_multiple_chunks`
+failing, narrowed to require the literal word `Phase`. (2) The new test
+file itself imported `_split_plan_by_phase` from the wrong module
+(`scripts.agents_md_gate` instead of `scripts.dispatcher`, plus a stale
+copy-pasted module docstring referencing an unrelated incident) — fixed
+directly.
+
+**Second-order finding, evidence the fix is fail-safe rather than
+complete:** this very fix's own dispatch run (`20260819-070113-94a8cf`)
+recurred the *same* phase-collapse symptom on itself — its plan's phase
+titles ("1. Fix `_split_plan_by_phase()`...", "2. Add a defense-in-depth
+...") don't contain the literal word "Phase", so `_split_plan_by_phase`
+still collapsed all 5 phases into one chunk. Unlike the original incident,
+nothing was silently lost this time: `mark_plan_complete`'s new safety net
+correctly refused (12 AGENTS.md checkboxes vs. 11 breakdown items) and
+left the block unchecked rather than lying. Investigated by hand: the
+11-vs-12 gap was a benign Gemini consolidation of two closely-related
+checklist lines ("run the suite" + "inspect for skipped") into one
+dispatch item, not a real drop — independently verified all 12 conceptual
+requirements were genuinely satisfied (110/110 tests, AGENTS.md/CARRYOVER.md
+actually updated), then manually completed the gate via
+`mark_plan_complete(..., 12)`. Conclusion: the phase-header content
+heuristic (layer 1) will keep being overfit to whatever phrasing motivated
+the last fix — that's expected and acceptable, since layer 2 (the
+count-guard safety net) converts a would-be silent failure into a visible,
+investigable one instead. Not re-queuing a "smarter" heuristic; the
+fail-safe behavior is the actual fix.
+
+**Verified**: full suite green, 110/110, zero failures/errors/real skips.
+
 ### 2026-08-19 — Queued, not yet implemented
 
 Full incident detail for `CARRYOVER.md`'s remaining queue (kept out of that
