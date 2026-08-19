@@ -748,24 +748,47 @@ fail-safe behavior is the actual fix.
 
 **Verified**: full suite green, 110/110, zero failures/errors/real skips.
 
+### 2026-08-19 — Ollama lifecycle management for dispatch ✅
+
+Closes a real gap: `resource_guard.unload_other_ollama_models()` only
+unloaded *other* resident models via Ollama's own API and required
+`ollama.service` to already be running — found live mid-session, the
+service was down and `triapi dispatch` would have failed Tier 4 outright
+rather than bringing it up. `resource_guard.py` gained
+`snapshot_ollama_state(ollama_host, service="ollama.service") -> dict`
+(records whether the service was active and which models were resident,
+starting it if inactive) and `restore_ollama_state(snapshot, ollama_host)`
+(reloads whatever was resident, stops the service again if it was
+inactive before — safe no-op on a `None` snapshot). Landed in two passes:
+the helpers first (as part of the plan-completion-integrity incident,
+since that run's breakdown silently dropped the wiring/tests/docs phases
+after only the helpers landed — see the entry above), then this run
+(`20260819-075913-f230a9`) wired them into `scripts/triapi.py`'s
+`cmd_dispatch`: snapshot right after `pause_services`, restore in the
+same `finally` block that already calls `resume_services`, guaranteed on
+success, caught exception, or crash.
+
+**One regression found and fixed post-landing:** the first draft re-derived
+`ollama_host` from `tiers_cfg["tier_4_worker"]["endpoint"]` a second time
+inside the `finally` block, guarded only by `if tiers_cfg is not None`.
+Three pre-existing crash-recovery tests in `tests/test_branch_features.py`
+mock `load_tiers()` with a minimal config lacking `tier_4_worker` (they
+test the crash path, not Tier 4 itself) — `tiers_cfg` was non-`None` but
+missing the key, so the `finally` block itself crashed with `KeyError`,
+masking the tests' actual assertions. Fixed at the root: capture
+`snapshot_ollama_host` once, at snapshot time, and reuse that stored value
+in `finally` instead of re-indexing `tiers_cfg` — a failed/incomplete
+config now correctly skips restore instead of crashing. New
+`tests/test_ollama_service_lifecycle.py`, verified clean against
+`scripts/mock_patch_lint.py`.
+
+**Verified**: full suite green, 111/111, zero failures/errors/real skips.
+
 ### 2026-08-19 — Queued, not yet implemented
 
 Full incident detail for `CARRYOVER.md`'s remaining queue (kept out of that
 file per its own "stay brief" rule — it's meant for a future `triapi plan`
 call, not for reading here):
-
-- **Ollama lifecycle management for dispatch.** Currently
-  `resource_guard.unload_other_ollama_models()` only unloads *other*
-  resident models via Ollama's own API — it requires `ollama.service` to
-  already be running, and nothing auto-starts it (found live: the service
-  was down mid-session, `triapi dispatch` would have failed Tier 4 outright
-  rather than bringing it up). User's spec: once a `triapi dispatch` run
-  starts, it has full authority over the shared Ollama service for that
-  run's duration — start it if inactive, unload other resident models as
-  today — but must be a good citizen of a shared service on exit: restore
-  Ollama to exactly the state found before the run (off stays off, on stays
-  on), and reload whatever model was warm/resident before the unload so
-  it's warm again for other consumers of the shared instance.
 
 - **Monolithic-file chunking + Tier-4-timeout-threshold guard.** User
   observation, confirmed against real data from the Self-Improvement run:

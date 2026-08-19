@@ -27,13 +27,10 @@ vs. must route through `triapi plan`/`dispatch`).
   64/64 tests, independently confirmed by a real Jules advisory pass
   (repo-wide `py_compile` clean too). Mock-patch-target lint check,
   context_files grounding guard, and plan phase-ordering/import-dependency
-  guard, and the plan-completion integrity fix all landed 2026-08-19 (4 of
-  6 total queue items fully done, full suite 110/110 clean). Ollama
-  lifecycle management is still PARTIALLY landed (`resource_guard.py`'s
-  snapshot/restore helper functions only) — wiring into `triapi.py`,
-  tests, and docs are still outstanding (queued below, now safe to trust
-  completion status on). Full bug-by-bug detail in `PLAN.md`'s carryover
-  log; systemic gaps found along the way are queued below.
+  guard, the plan-completion integrity fix, and Ollama lifecycle
+  management all landed 2026-08-19 (5 of 6 total queue items fully done,
+  full suite 111/111 clean). Full bug-by-bug detail in `PLAN.md`'s
+  carryover log; systemic gaps found along the way are queued below.
   `config/tiers.yaml` also got two more corrections this session:
   `tier_4_worker` default model switched `q8_0` → `q6_K` with
   `num_ctx=24576` (dramatic speedup on small calls, mixed on very large
@@ -48,20 +45,11 @@ vs. must route through `triapi plan`/`dispatch`).
 ## Next up
 
 
-Full incident detail for both items below is in `PLAN.md`'s carryover
+Full incident detail for the item below is in `PLAN.md`'s carryover
 log (`### 2026-08-19 — Queued, not yet implemented` entry) — kept out of
 here per this file's own "stay brief" rule above.
 
-- **#1 IN QUEUE: Ollama lifecycle management for dispatch (redo/complete).**
-  `resource_guard.py`'s `snapshot_ollama_state`/`restore_ollama_state`
-  helpers already landed; still needed: wire them into
-  `scripts/triapi.py`'s `cmd_dispatch` (start `ollama.service` if inactive,
-  unload other resident models — same place `pause_services`/
-  `unload_other_ollama_models` are already called — then restore exactly
-  the prior state via `try/finally` on exit), a dedicated regression test
-  file, and the AGENTS.md/docs update. Route through `triapi plan`/`dispatch`.
-
-- **#2 IN QUEUE (LAST, user reprioritization 2026-08-19): monolithic-file
+- **#1 IN QUEUE (LAST, user reprioritization 2026-08-19): monolithic-file
   chunking + Tier-4-timeout-threshold guard.** Two patches: (1) hard
   file-length ceiling at Tier 4's context window (`num_ctx=24576`) as a
   plan-approval rule — reject/require-split for any file whose existing +
