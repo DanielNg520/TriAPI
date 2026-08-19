@@ -254,6 +254,79 @@ def _backstop_context_files(item: dict) -> None:
         item["context_files"] = merged
 
 
+_TEST_TARGET_RE = re.compile(r"^(?:tests|Tests|TESTS)/test_[^/]+\.py$")
+def _find_anchor_test_file(project_dir: str, exclude: str | None = None) -> str | None:
+    """Finds the anchor test file for a project.
+
+    Prefer 'tests/test_branch_features.py' if it exists and is not excluded,
+    otherwise find the first sorted tests/test_*.py file.
+
+    Found for real 2026-08-18 (two incidents, see CARRYOVER.md queue item #1):
+    when a step referenced "the test file" / "existing test patterns" without
+    naming an exact path, the worker had no context file to ground against and
+    hallucinated a test structure; and when an anchor test file was chosen by
+    alphabetical order instead of the project's canonical
+    'tests/test_branch_features.py', the worker copied a pattern that did not
+    apply. This helper is the deterministic fallback for both cases.
+
+    Args:
+        project_dir (str): The root directory of the project.
+        exclude (str | None): An optional regex pattern to exclude specific
+            files or directories. When None or empty, nothing is excluded.
+
+    Returns:
+        str | None: The path to the anchor test file, or None if no suitable
+        file is found.
+    """
+    target_path = Path(project_dir) / 'tests' / 'test_branch_features.py'
+    if target_path.exists() and not (exclude and re.match(exclude, str(target_path))):
+        return str(target_path)
+
+    test_files = sorted(Path(project_dir).glob('tests/test_*.py'))
+    for file in test_files:
+        if not (exclude and re.match(exclude, str(file))):
+            return str(file)
+
+    return None
+
+
+def _apply_test_context_guard(items: list[dict], project_dir: str) -> str | None:
+    """Grounds each test-file breakdown item in real repo content.
+
+    For each item whose target is a standard tests/test_*.py file (skipping
+    git items and any item not targeting such a file), the companion
+    scripts/<name>.py helper (stripping the "test_" prefix from the target's
+    stem) is added to that item's own context_files if it exists on disk,
+    and the project's anchor test file (see _find_anchor_test_file) is added
+    so the worker patterns its test against the canonical example instead of
+    hallucinating one -- each item only receives its own companion, never
+    another item's. Returns an error string (without mutating any item) when
+    no anchor test file exists at all, otherwise None."""
+    anchor_file = None
+    test_items = [
+        item for item in items
+        if "git" not in item and _TEST_TARGET_RE.match(item.get("target", ""))
+    ]
+    if test_items:
+        anchor_file = _find_anchor_test_file(project_dir)
+        if not anchor_file:
+            return "Error: No suitable anchor test file found."
+
+    for item in test_items:
+        target_stem = Path(item["target"]).stem
+        module_name = target_stem[len("test_"):] if target_stem.startswith("test_") else target_stem
+        companion_script = Path(project_dir) / "scripts" / f"{module_name}.py"
+
+        if "context_files" not in item:
+            item["context_files"] = []
+        if companion_script.exists() and str(companion_script) not in item["context_files"]:
+            item["context_files"].append(str(companion_script))
+        if anchor_file not in item["context_files"]:
+            item["context_files"].append(anchor_file)
+
+    return None
+
+
 _RETRY_AFTER_RE = re.compile(r"[Rr]etry in ([\d.]+)s")
 
 
@@ -393,6 +466,10 @@ def breakdown_plan(state: dict) -> dict:
         result = breakdown_phase(chunk)
         if result["status"] != "ok":
             return result
+        guard_reason = _apply_test_context_guard(result["phase"]["items"], state["project_dir"])
+        if guard_reason is not None:
+            log.error("Test context guard failed for phase %s: %s", result["phase"].get("name", "?"), guard_reason)
+            return {"status": "error", "reason": guard_reason}
         state["breakdown"]["phases"].append(result["phase"])
         _recheck_regression_flags(state)
         save_run(state)

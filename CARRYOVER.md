@@ -41,33 +41,7 @@ vs. must route through `triapi plan`/`dispatch`).
 ## Next up
 
 
-- **#1 IN QUEUE: context_files grounding guard.** CONFIRMED RECURRING — hit twice in the
-  same run, two different symptoms, same root cause: a Tier 1-drafted plan
-  item for a new test file doesn't ground the drafting tiers in either (a)
-  the module it's testing, or (b) this repo's actual test-writing
-  conventions, so every tier guesses blindly. Instance 1:
-  `tests/test_hivemind_util.py`'s item never listed
-  `scripts/hivemind_util.py` in `context_files` → wrong parameter name,
-  wrong data format. Instance 2: `tests/test_judge.py`'s item had
-  `scripts/judge.py` in context but no example *test* file and no
-  "unittest, not pytest" instruction → every tier defaulted to `import
-  pytest`, which isn't an installed dependency, and 4 escalation attempts
-  (Tier4→3→2→1) all failed the same `ModuleNotFoundError` before human
-  handoff. Both patched directly in the run's state JSON as a stopgap; the
-  durable fix needs to be systemic. Spec: add a deterministic check (likely
-  in `dispatcher.py`'s breakdown validation) for any item whose `target`
-  matches a test-file naming convention (`tests/test_<name>.py` or
-  similar): (1) if a same-stem source file exists in the repo
-  (`scripts/<name>.py` etc.) and isn't already in `context_files`, auto-add
-  it; (2) always include at least one existing test file from the same
-  test directory as a style/convention anchor (this repo's is
-  `tests/test_branch_features.py`) so the drafting tiers copy the real
-  test framework/style instead of guessing; reject the plan at approval
-  time with a clear reason if no existing test file can be found to anchor
-  to. New TriAPI feature work — route through `triapi plan`/`dispatch`, do
-  not hand-implement.
-
-- **#2 IN QUEUE: plan phase-ordering / import-dependency guard.** A Tier 1-drafted plan
+- **#1 IN QUEUE: plan phase-ordering / import-dependency guard.** A Tier 1-drafted plan
   sequenced Phase 3 (edits `scripts/dispatcher.py` to add
   `from scripts import ... tech_debt` at module load time) before Phase 4
   (creates `scripts/tech_debt.py`). Once Phase 3's item landed, `triapi`'s
@@ -87,7 +61,7 @@ vs. must route through `triapi plan`/`dispatch`).
   feature work — route through `triapi plan`/`dispatch`, do not
   hand-implement.
 
-- **#3 IN QUEUE: Ollama lifecycle management for dispatch.** Currently `resource_guard.unload_other_ollama_models()`
+- **#2 IN QUEUE: Ollama lifecycle management for dispatch.** Currently `resource_guard.unload_other_ollama_models()`
   only unloads *other* resident models via Ollama's own API — it requires
   `ollama.service` to already be running, and nothing auto-starts it (found
   live: the service was down mid-session, `triapi dispatch` would have
@@ -107,7 +81,7 @@ vs. must route through `triapi plan`/`dispatch`).
   are already called) — new TriAPI feature work, route through `triapi
   plan`/`dispatch` per standing rule, do not hand-implement.
 
-- **#4 IN QUEUE (LAST, user reprioritization 2026-08-19 — was #1, pushed to
+- **#3 IN QUEUE (LAST, user reprioritization 2026-08-19 — was #1, pushed to
   last): monolithic-file chunking + Tier-4-timeout-threshold guard.** User
   observation, confirmed against real data from the Self-Improvement run:
   the plan chunks *tasks* into small units but not *files* — Phase 3/4's
@@ -137,7 +111,6 @@ vs. must route through `triapi plan`/`dispatch`).
      pattern or idiom justifies a single file that size; more LOC is
      exposed surface, not more value. This should be a hard plan-approval
      rule (reject/split at planning time), not just a soft preference —
-     natural extension of the context_files grounding guard (#1 above),
      likely the same validation pass in `dispatcher.py`'s breakdown
      validation: estimate the target file's token count (existing content
      + planned addition) against the ceiling and reject/require-split if

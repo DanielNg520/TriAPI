@@ -648,3 +648,30 @@ the 7+ minute Ollama hang observed in the previous session).
 - **Verified**: the previously-failing suites now complete with zero live
   Tier 4/2/3/1 calls, and the full `py_compile`/test pass is green.
 
+### 2026-08-19 — Test-file context_files grounding guard ✅
+
+Closes the two confirmed incidents from 2026-08-18 (see `_find_anchor_test_file`'s
+docstring): a test-file breakdown item that only referenced "the test file" /
+"existing test patterns" without naming an exact path left the drafting tier
+with no grounding context, so it hallucinated a test structure that matched
+nothing in the repo; and when an anchor test file was picked by alphabetical
+order instead of the project's canonical `tests/test_branch_features.py`, the
+worker copied a pattern that didn't apply to this project's conventions.
+
+- **Deterministic fix**: `_apply_test_context_guard()` in `dispatcher.py`'s
+  `breakdown_plan()` now auto-populates `context_files` for every item whose
+  target is a standard `tests/test_*.py` file: the companion
+  `scripts/<name>.py` helper (the module under test, derived by stripping the
+  `test_` prefix) is added when it exists on disk, and the project's anchor
+  test file (`tests/test_branch_features.py` when present, else the first
+  sorted `tests/test_*.py`) is added as a style anchor. Each item only
+  receives its own companion, never another item's; if no anchor test file
+  exists at all, the breakdown errors out instead of dispatching an
+  ungroundable test item.
+- **Regression tests**: coverage added under `tests/test_test_context_guard.py`
+  exercising the guard directly (companion + anchor injection, missing
+  companion no-op, no-anchor error path) and both real failure shapes from the
+  incidents above.
+- **Verified**: full `py_compile`/test pass is green, including the new
+  regression file.
+
