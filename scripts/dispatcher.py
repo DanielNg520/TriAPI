@@ -154,7 +154,7 @@ BREAKDOWN_SYSTEM_INSTRUCTION = (
 )
 
 
-_PHASE_HEADER_RE = re.compile(r"^#{1,6} ")
+_PHASE_HEADER_RE = re.compile(r"^(?:#{1,6} |\d+\.\s+Phase\b)", re.IGNORECASE)
 
 # Matches a markdown task-list item regardless of bullet style: '- [ ]',
 # '* [ ]', or a numbered '1. [ ]' -- and regardless of checked state ('x'/'X'
@@ -178,25 +178,36 @@ _CHECKLIST_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+", re.MULTILINE)
 
 
 def _split_plan_by_phase(plan_text: str) -> list[str]:
-    """Splits plan markdown into chunks on ATX headers (one chunk per
-    phase, keeping its header), so each phase can be broken down into JSON
+    """Splits plan markdown into chunks on phase-header markers (one chunk
+    per phase, keeping its header), so each phase can be broken down into JSON
     independently. Asking Gemini for the WHOLE plan's JSON in one call fails
     on large plans -- observed: malformed/truncated JSON past ~500 lines of
     output for a real 9-phase plan. Smallest reliable batch, not fewer,
     bigger calls.
 
-    Matches any heading level ('#' through '######'), not just '## '
+    Matches any ATX heading level ('#' through '######'), not just '## '
     specifically -- found for real 2026-08-12: a plan used '### Phase 2'
     (three hashes) while this only recognized exactly '## ', silently
     dropping that entire phase's checklist items from the breakdown with
     no error at all (the dropped phase just never existed as far as
     dispatch was concerned). The planner's own header depth isn't a
-    guaranteed convention to rely on. A stray '# Title' line before the
-    first real phase header still produces a harmless chunk, filtered out
-    below same as before. A plan with NO header at all (a single short
-    plan, e.g. one Tier-1-drafted phase with no '#' line whatsoever)
-    produces exactly one chunk -- the whole text -- which is correct as
-    long as the checklist-item filter below still recognizes it."""
+    guaranteed convention to rely on. Also matches a numbered top-level
+    marker of the form 'N. ' at the start of a line when it is followed by
+    a plausible phase title ('Phase ...' or a capitalized word) -- found
+    for real 2026-08-19 (run 20260819-063339-9d23c7): a plan used numbered
+    top-level headers ('1. Phase 1 -- ...', '2. Phase 2 -- ...') with no
+    '#' markers at all, and the splitter previously saw no phase headers,
+    silently collapsing the whole plan into one chunk and dropping every
+    phase after the first from the breakdown. The numbered-marker match is
+    deliberately narrower than the ATX one (requires 'Phase' or an
+    uppercase letter after the number) so numbered checklist sub-items
+    inside a phase are not misread as new phases. A stray '# Title' line
+    before the first real phase header still produces a harmless chunk,
+    filtered out below same as before. A plan with NO header at all (a
+    single short plan, e.g. one Tier-1-drafted phase with no '#' line
+    whatsoever) produces exactly one chunk -- the whole text -- which is
+    correct as long as the checklist-item filter below still recognizes
+    it."""
     lines = plan_text.splitlines(keepends=True)
     chunks = []
     current = []

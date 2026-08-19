@@ -168,3 +168,87 @@ When a process temporarily changes external system state (stopping services, mut
 5. **Only manage what you actually changed.** Before pausing a service, check whether it is currently active. If it was already inactive, leave it alone and do not include it in the restore list. This avoids resurrecting something the user or another process deliberately stopped before your run began.
 
 6. **Prefer exit-code checks over output parsing.** The diff replaced capturing and parsing `systemctl is-active` output with `systemctl --user is-active --quiet` and checking the return code. Exit codes are stable, locale-independent, and avoid brittle string matching.
+
+### Tolerate Format Drift in LLM-Generated Structured Content — and Make the Tolerance Narrow Enough to Stay Selective
+
+When your system consumes LLM-generated or LLM-influenced text (plans, checklists, breakdowns, structured metadata), **do not assume the model will honor a single canonical format for structural markers**, even if you asked for one in your system prompt. Models reliably drift between conventions: ATX headers of varying depth (`## Phase`, `### Phase`), numbered prose headers (`1. Phase 1 -- ...`), plain hyphen bullets with no checkbox syntax, etc. A parser that silently recognizes only one convention will quietly drop valid content — and because the output is well-formed overall, the failure often goes unnoticed until much later.
+
+In this diff, `_PHASE_HEADER_RE` was hardened from matching only `#{1,6} ` to also matching numbered top-level markers like `N. Phase ...` or `N. Capitalized-Word ...`. The real incident: a plan used `1. Phase 1 -- ...`, `2. Phase 2 -- ...` with no `#` markers at all, so the splitter saw no phase headers, collapsed the whole plan into one chunk, and dropped every phase after the first.
+
+Key practices this illustrates:
+
+1. **Recognize that format drift is the norm, not the exception.** The same codebase's comments document real occurrences of: plans using `###` instead of `##`, numbered checkboxes instead of `- [ ]`, plain numbered items with no checkboxes, and `N. Phase N --` headers with no Markdown heading syntax. Treat any single-format assumption as a bug waiting to happen.
+
+2. **When broadening a matcher, make the new branch deliberately narrower than the existing one.** The numbered-header regex requires `Phase` or an uppercase letter after the number, so numbered checklist sub-items inside a phase are not misread as new phase boundaries. Broadening a parser is only safe if the added flexibility doesn't create false positives that corrupt the structure you're trying to preserve.
+
+3. **Fail loudly when tolerant parsing produces an empty result.** The surrounding file contains another important half of this lesson: `breakdown_plan()` explicitly refuses to report success when a non-empty plan yields zero items, because a previous silent "0 items" result was indistinguishable from a genuine empty-plan success. When you relax a parser to accept more formats, add a guard that turns "nothing matched" into an explicit error rather than a plausible-looking no-op.
+
+4. **Document why the pattern was broadened.** Each regex in this file carries a comment explaining the exact real-world failure that motivated it (`found for real 2026-08-19 (run ...)`). This turns a cryptic regex into an operational memory: future maintainers know *why* the pattern is permissive, and know not to "simplify" it back into a single-format assumption.
+
+**Applicability:** any pipeline that parses LLM output into structured units — plan splitters, task breakdowns, log parsers, config generators, code generators — especially when the parsed structure drives downstream work that would silently skip work if misparsed.
+
+### Fail-Closed State Transitions: Verify Expected Counts Before Mutating Persistent Artifacts
+
+When a function mutates a persistent, user-editable artifact to mark work as complete, do not blindly rewrite matched markers. Require the caller to supply an expected count of work items (e.g. `breakdown_item_count`), scan the actual artifact for both checked and unchecked items, and refuse to write if the actual count exceeds what was originally captured.
+
+Key rules:
+
+- **Count both `- [ ]` and `- [x]` items**, not just unchecked ones. The check is about "did the artifact gain work we never accounted for", not "is everything checked".
+- **Fail closed on a mismatch**: if `block_item_count > breakdown_item_count`, do not write the file, log a warning identifying the discrepancy, and return `False` so the caller can surface the problem.
+- **Keep the mutation atomic**: perform the substitution in memory first, then check the mismatch flag before writing. Never partially write or write first and validate later.
+- **Use a nonlocal flag inside `re.sub` callbacks** to signal mismatch without throwing, then abort after the full substitution pass. This keeps the detection logic close to the regex logic while preserving a single write-point.
+- **Return a boolean result** for state-transition operations so callers can distinguish "completed successfully" from "no-op / refused"; do not raise for benign missing-state cases like an absent file or unknown run id.
+
+This pattern prevents silent false completion: if someone hand-edited the plan, a duplicate block exists, or a later step added unchecked work, the system will not mark unaccounted-for work as done.
+
+### Pass Explicit Aggregate Counts When Finalizing Persisted Progress/Checklist State
+
+When a system maintains a persistent, human-readable progress artifact (e.g., an appended plan checklist in `AGENTS.md`) alongside an authoritative internal state (e.g., a run's phase/step breakdown), finalization updates must receive exact counts from the authoritative state rather than re-deriving them inside the helper.
+
+In this change, `mark_plan_complete` now receives the total number of breakdown items:
+
+```python
+agents_md_gate.mark_plan_complete(
+    state["project_dir"],
+    state["run_id"],
+    sum(len(p["items"]) for p in state["breakdown"]["phases"]),
+)
+```
+
+This matters because:
+
+- The persisted checklist must be fully marked complete, or the "one incomplete plan per repo" gate will incorrectly block future planning.
+- The breakdown in the run state is the source of truth for what was actually dispatched; the original approved plan text may be formatted differently or may not map 1:1 to executed steps.
+- Letting the helper parse or guess the count from the artifact risks drift, partial completion, and stale blocks.
+
+General guideline: whenever you synchronize external state (checklists, status files, reports, tickets) with internal state, pass the exact computed totals/values from the source of truth into the synchronization function. Avoid deriving those values from the very artifact you are trying to update.
+
+### Pass the authoritative count/expectation explicitly instead of inferring it from mutable artifacts
+
+When a function mutates or validates an external artifact (e.g., marking an `AGENTS.md` checklist complete), do not make the function infer the expected total from the artifact itself. Pass the authoritative expected value (such as `breakdown_item_count`) from the caller.
+
+In the diff, `mark_plan_complete` now takes `breakdown_item_count`, and every call site supplies it explicitly. This makes the dependency visible, prevents the function from guessing based on the same mutable file it is about to rewrite, and avoids silently accepting an incomplete or corrupted plan.
+
+General rules this reinforces:
+
+- **Explicit parameters beat implicit environment/artifact inference.** A function should not re-derive facts the caller already knows; doing so couples it to file formats and mutable state.
+- **Make completion criteria auditable.** When the caller passes the expected item count, tests and logs can verify that the plan was marked complete for the right reason.
+- **Keep pure functions testable.** Supplying the count as an argument makes test setup clear and removes hidden assumptions from the function body.
+- **Avoid “works by accident” behavior.** If the function counted checkboxes itself right before flipping them, it could easily produce the wrong result when the artifact is partially updated or contains unrelated prose/checkboxes.
+
+### Guard completion against plan/execution count mismatch — never blindly check off declared work
+
+When a system auto-completes or marks a plan as done, verify that the number of work items actually captured/executed matches the number of work items the plan declares. Do not flip every checkbox to `[x]` just because the overall run reported `completed`.
+
+Concretely (from the TriAPI plan-completion bug):
+
+- `mark_plan_complete()` was unconditionally replacing `- [ ]` with `- [x]` for a run's plan block. A partial breakdown — where the dispatcher captured fewer items than the plan's checklist contained — would still mark the whole block complete, falsely implying work was done that wasn't.
+- Fix: require `breakdown_item_count` as a parameter, count the checklist items actually present in the block (`[ ]` and `[x]` both), and if the block declares more items than the breakdown captured, **refuse to write anything**, log a warning naming both counts, and return `False`.
+- This is fail-closed behavior: an integrity mismatch leaves the gate closed rather than silently recording a false success.
+
+Related integrity lessons from the same change:
+
+- **Parsers must recognize every legitimate input format.** A phase-splitter that only matched `## ` headers silently dropped whole phases when plans used `### ` or numbered `1. Phase ...` markers. Widen the matcher deliberately and add regression tests for each real incident shape.
+- **A non-empty plan that yields zero work items must be a hard error**, never a vacuous `status: "ok"` — silent no-op success is worse than a loud failure.
+- **Pin each incident with a dedicated regression test**, preferably in a new test file when the existing suite has grown too large, using fixture repos rather than the repo's own files. The test name and comment should cite the run/incident that motivated it.
+- When validating test output, check for the *exact* unittest skipped delimiter (`... skipped`) rather than a bare substring `skipped`, which false-positives on legitimate test method names.

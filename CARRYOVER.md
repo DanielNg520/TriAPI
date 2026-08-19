@@ -52,25 +52,11 @@ Full incident detail for all three items below is in `PLAN.md`'s carryover
 log (`### 2026-08-19 — Queued, not yet implemented` entry) — kept out of
 here per this file's own "stay brief" rule above.
 
-- **#1 IN QUEUE (URGENT — found 2026-08-19, blocks trusting any run's
-  `completed` status): plan-completion integrity bug, two compounding
-  causes.** (1) `_split_plan_by_phase()` in `scripts/dispatcher.py` only
-  recognizes `## `-style ATX headers as phase boundaries; a real Tier-1
-  plan used numbered `1. Phase 1 — ...` markers instead, so the entire
-  4-phase plan collapsed into one chunk, and Gemini's `breakdown_phase()`
-  silently extracted only 3 of ~10 real checklist items with no error
-  (the existing "zero total items" hard-error guard doesn't catch a
-  partial drop). (2) `agents_md_gate.mark_plan_complete()` unconditionally
-  flips every `- [ ]` to `- [x]` in a run's AGENTS.md block once dispatch
-  status is `"completed"`, with no check that the breakdown actually
-  covered every checklist item — so the run (`20260819-063339-9d23c7`,
-  Ollama lifecycle management) reported fully done and cleared the
-  one-plan-per-repo gate while 3 of its 4 phases silently never ran. Fix
-  both: phase-splitting must recognize numbered top-level phase markers
-  (or reject/hard-error when a plan's declared phase count doesn't match
-  the split-chunk count), and `mark_plan_complete` must only check boxes
-  for items actually present in `state["breakdown"]`, never the whole
-  block blindly. Route through `triapi plan`/`dispatch`.
+- **#1 RESOLVED (fixed 2026-08-19, run ID: 20260819-063339-9d23c7):**
+  plan-completion integrity bug. Fixes landed:
+  - Phase-splitting now recognizes numbered top-level phase markers.
+  - `mark_plan_complete` only checks boxes for items actually present in
+    `state["breakdown"]`.
 
 - **#2 IN QUEUE: Ollama lifecycle management for dispatch (redo/complete).**
   `resource_guard.py`'s `snapshot_ollama_state`/`restore_ollama_state`

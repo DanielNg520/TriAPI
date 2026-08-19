@@ -199,7 +199,7 @@ def _breakdown_and_dispatch(state: dict) -> None:
     ))
 
     if state["status"] == "completed":
-        agents_md_gate.mark_plan_complete(state["project_dir"], state["run_id"])
+        agents_md_gate.mark_plan_complete(state["project_dir"], state["run_id"], sum(len(p["items"]) for p in state["breakdown"]["phases"]))
         jules_check = budget_guard.check_jules_ok()
         if not jules_check["ok"]:
             print(f"\nSkipping Jules advisory test: {jules_check['reason']}")

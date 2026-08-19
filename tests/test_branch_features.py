@@ -1033,7 +1033,9 @@ class AgentsMdGateTests(unittest.TestCase):
     def test_mark_plan_complete_clears_gate(self) -> None:
         plan = "- [ ] step one\n- [ ] step two\n"
         agents_md_gate.append_plan(self.project_dir, "run-1", plan, "2026-08-16")
-        ok = agents_md_gate.mark_plan_complete(self.project_dir, "run-1")
+        ok = agents_md_gate.mark_plan_complete(
+            self.project_dir, "run-1", breakdown_item_count=2
+        )
         self.assertTrue(ok)
         self.assertIsNone(agents_md_gate.find_incomplete_plan(self.project_dir))
         text = Path(self.project_dir, "AGENTS.md").read_text()
@@ -1042,13 +1044,17 @@ class AgentsMdGateTests(unittest.TestCase):
 
     def test_mark_plan_complete_unknown_run_is_noop(self) -> None:
         agents_md_gate.append_plan(self.project_dir, "run-1", "- [ ] step", "2026-08-16")
-        ok = agents_md_gate.mark_plan_complete(self.project_dir, "run-nope")
+        ok = agents_md_gate.mark_plan_complete(
+            self.project_dir, "run-nope", breakdown_item_count=1
+        )
         self.assertFalse(ok)
         self.assertIsNotNone(agents_md_gate.find_incomplete_plan(self.project_dir))
 
     def test_only_most_recent_block_gates(self) -> None:
         agents_md_gate.append_plan(self.project_dir, "run-1", "- [ ] step", "2026-08-16")
-        agents_md_gate.mark_plan_complete(self.project_dir, "run-1")
+        agents_md_gate.mark_plan_complete(
+            self.project_dir, "run-1", breakdown_item_count=1
+        )
         agents_md_gate.append_plan(self.project_dir, "run-2", "- [ ] another step", "2026-08-17")
         incomplete = agents_md_gate.find_incomplete_plan(self.project_dir)
         self.assertEqual(incomplete["run_id"], "run-2")

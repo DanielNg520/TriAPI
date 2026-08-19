@@ -27,6 +27,7 @@ _BLOCK_RE = re.compile(
     re.DOTALL,
 )
 _UNCHECKED_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+\[ \]", re.MULTILINE)
+_CHECKLIST_ITEM_ANY_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+\[[ x]\]", re.MULTILINE)
 
 
 def _agents_md_path(project_dir: str) -> Path:
@@ -81,8 +82,14 @@ def append_plan(project_dir: str, run_id: str, plan_text: str, appended_date: st
     path.write_text(existing + "\n" + block)
 
 
-def mark_plan_complete(project_dir: str, run_id: str) -> bool:
+def mark_plan_complete(project_dir: str, run_id: str, breakdown_item_count: int) -> bool:
     """Flip every `- [ ]` to `- [x]` inside the named run's block only.
+
+    `breakdown_item_count` is the number of checklist items the breakdown
+    actually captured. If the run's AGENTS.md block contains more checkbox
+    items than that, the block is left untouched (no file write), a warning
+    is logged, and False is returned -- so the caller can report the
+    discrepancy instead of silently marking unaccounted-for work complete.
 
     Returns False (no-op) if AGENTS.md or that run's block isn't found --
     e.g. the plan was appended to a project_dir that no longer exists, or
@@ -93,10 +100,22 @@ def mark_plan_complete(project_dir: str, run_id: str) -> bool:
         return False
     text = path.read_text()
     found = False
+    mismatch = False
 
     def _replace(match: re.Match) -> str:
-        nonlocal found
+        nonlocal found, mismatch
         if match.group("run_id") != run_id:
+            return match.group(0)
+        block_item_count = len(_CHECKLIST_ITEM_ANY_RE.findall(match.group("body")))
+        if block_item_count > breakdown_item_count:
+            mismatch = True
+            import logging
+            logging.getLogger(__name__).warning(
+                "run_id=%s has %d checklist items in AGENTS.md but breakdown captured %d; refusing to mark complete",
+                run_id,
+                block_item_count,
+                breakdown_item_count,
+            )
             return match.group(0)
         found = True
         checked_body = re.sub(r"\[ \]", "[x]", match.group("body"))
@@ -106,6 +125,8 @@ def mark_plan_complete(project_dir: str, run_id: str) -> bool:
         )
 
     new_text = _BLOCK_RE.sub(_replace, text)
+    if mismatch:
+        return False
     if not found:
         return False
     path.write_text(new_text)
