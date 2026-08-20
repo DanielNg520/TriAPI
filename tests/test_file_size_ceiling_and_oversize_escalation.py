@@ -223,6 +223,28 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         self.assertFalse(_item_deletes_target_file(edits))
         self.assertFalse(_item_deletes_target_file(far_mention))
 
+    def test_item_deletes_target_file_rejects_delete_of_content_within_file(self):
+        """Real incident 2026-08-20: a plan item pruning stale sections OUT
+        of AGENTS.md (not deleting AGENTS.md itself) false-positive-matched
+        the old 80-char-proximity check because "delete" and "AGENTS.md"
+        both appeared in the same sentence, letting an oversized file skip
+        the size-ceiling guard and go to Tier 4 undefended."""
+        prune_content = {
+            "target": "AGENTS.md",
+            "description": (
+                "Prune fully-superseded/never-dispatched blocks from `AGENTS.md`: "
+                "delete everything between and including the start/end markers."
+            ),
+        }
+        self.assertFalse(_item_deletes_target_file(prune_content))
+
+    def test_item_deletes_target_file_matches_path_prefixed_mention(self):
+        deletes_with_path = {
+            "target": "ohmyllama/webui.py",
+            "description": "Finalize the deletion: run `git rm ohmyllama/webui.py` to remove ohmyllama/webui.py for good.",
+        }
+        self.assertTrue(_item_deletes_target_file(deletes_with_path))
+
     def test_tier4_timeout_failure_escalates_after_one_consecutive_failure(self):
         task_id = self._task_id("timeout_task")
         build_output = "Command timed out after 120s: ./run_tests.sh"

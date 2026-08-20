@@ -130,7 +130,7 @@ def call_ollama(host: str, model: str, prompt: str) -> dict:
     return resp.json()
 
 
-def run_build(build_cmd: str, workdir: str, timeout: int = 120) -> tuple[bool, str]:
+def run_build(build_cmd: str, workdir: str, timeout: int = 300) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             build_cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
@@ -139,9 +139,15 @@ def run_build(build_cmd: str, workdir: str, timeout: int = 120) -> tuple[bool, s
         # A slow build_cmd (e.g. a test suite that cold-loads a large local
         # model) must fail like any other build failure, not crash the
         # whole unattended dispatch process -- found for real 2026-08-11:
-        # `./run_tests.sh` alone exceeded the 120s default and took down the
-        # entire dispatch run with an uncaught traceback, no escalation
-        # recorded, mid-run. Partial output captured before the timeout is
+        # `./run_tests.sh` alone exceeded the then-120s default and took down
+        # the entire dispatch run with an uncaught traceback, no escalation
+        # recorded, mid-run. Default raised to 300s 2026-08-20 after a
+        # different repo's growing full suite (script + pytest, 86 files)
+        # started tripping the same 120s wall on every tier identically --
+        # since Tier 3/2/1 only patch-and-rebuild (never re-draft), a slow
+        # test command fails the same way regardless of which tier is
+        # trying, so the whole escalation chain hit human_handoff on a
+        # passing build. Partial output captured before the timeout is
         # preserved (e.g. e.stdout is bytes when text=True isn't honored on
         # a timeout -- decode defensively) so the human_handoff/escalation
         # path still shows what ran before it hung.

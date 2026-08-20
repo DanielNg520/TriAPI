@@ -58,22 +58,40 @@ def check_write(task_id: str, target_path: Path, new_content: str) -> dict:
     logs/rejected_writes/<task_id>.txt so a human can still see what the
     model proposed."""
     if len(new_content) > MAX_WRITE_CHARS:
-        REJECTED_DIR.mkdir(parents=True, exist_ok=True)
-        rejected_path = REJECTED_DIR / f"{task_id}.txt"
-        rejected_path.write_text(new_content)
-        reason = (
-            f"Refused write to {target_path}: proposed content is "
-            f"{len(new_content)} chars, over the {MAX_WRITE_CHARS}-char Tier 4 "
-            f"context ceiling. Writing it would make the file permanently "
-            f"unworkable by Tier 4 (dispatcher._enforce_file_size_ceiling "
-            f"blocks any later item that targets an oversized file). If this "
-            f"file genuinely needs to hold this much content, split it into "
-            f"cohesive smaller files/modules instead of writing one oversized "
-            f"file. Original left untouched (or file not created); proposed "
-            f"content saved to {rejected_path} for review."
+        # An edit that SHRINKS an already-oversized file is progress toward
+        # compliance, not a new violation -- refusing it deadlocks the exact
+        # repair this ceiling exists to encourage (found for real 2026-08-20:
+        # a plan pruning a 224KB AGENTS.md down in several incremental steps
+        # had its first, correct, size-reducing edit refused outright because
+        # the result -- still shrinking, still over ceiling -- tripped this
+        # check same as authoring a brand-new oversized file would). Only
+        # refuse when the write would author a new oversized file or GROW an
+        # existing one; allow it when it's already too big and this write
+        # makes it smaller.
+        existing_chars = len(target_path.read_text(errors="replace")) if target_path.exists() else 0
+        shrinking_an_oversized_file = existing_chars > MAX_WRITE_CHARS and len(new_content) < existing_chars
+        if not shrinking_an_oversized_file:
+            REJECTED_DIR.mkdir(parents=True, exist_ok=True)
+            rejected_path = REJECTED_DIR / f"{task_id}.txt"
+            rejected_path.write_text(new_content)
+            reason = (
+                f"Refused write to {target_path}: proposed content is "
+                f"{len(new_content)} chars, over the {MAX_WRITE_CHARS}-char Tier 4 "
+                f"context ceiling. Writing it would make the file permanently "
+                f"unworkable by Tier 4 (dispatcher._enforce_file_size_ceiling "
+                f"blocks any later item that targets an oversized file). If this "
+                f"file genuinely needs to hold this much content, split it into "
+                f"cohesive smaller files/modules instead of writing one oversized "
+                f"file. Original left untouched (or file not created); proposed "
+                f"content saved to {rejected_path} for review."
+            )
+            log.warning("[%s] %s", task_id, reason)
+            return {"ok": False, "reason": reason, "content_chars": len(new_content)}
+        log.info(
+            "[%s] Allowing oversized write to %s: %d -> %d chars, still over the "
+            "%d-char ceiling but shrinking (progress, not a new violation).",
+            task_id, target_path, existing_chars, len(new_content), MAX_WRITE_CHARS,
         )
-        log.warning("[%s] %s", task_id, reason)
-        return {"ok": False, "reason": reason, "content_chars": len(new_content)}
 
     if not target_path.exists():
         return {"ok": True}

@@ -58,6 +58,22 @@ class PlanSplitAndCompletionGuardTests(unittest.TestCase):
         self.assertTrue(chunks[0].startswith("## Phase 1"))
         self.assertTrue(chunks[1].startswith("2. Phase 2"))
 
+    def test_bold_wrapped_numbered_phase_markers_split_correctly(self) -> None:
+        """Real incident 2026-08-20 (run 20260820-081806-d7c25f): a plan used
+        '1. **Phase 1 -- ...**' (bold markdown around 'Phase'), which the
+        original number+literal-'Phase' match didn't recognize, silently
+        collapsing a 14-phase plan into a single chunk."""
+        plan_text = (
+            "1. **Phase 1 -- Setup**\n"
+            "   - [ ] Task one\n"
+            "2. **Phase 2 -- Build**\n"
+            "   - [ ] Task two\n"
+        )
+        chunks = _split_plan_by_phase(plan_text)
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(chunks[0].startswith("1. **Phase 1"))
+        self.assertTrue(chunks[1].startswith("2. **Phase 2"))
+
     def test_atx_header_only_plan_unchanged(self) -> None:
         plan_text = (
             "# Phase 1\n"

@@ -160,7 +160,7 @@ BREAKDOWN_SYSTEM_INSTRUCTION = (
 )
 
 
-_PHASE_HEADER_RE = re.compile(r"^(?:#{1,6} |\d+\.\s+Phase\b)", re.IGNORECASE)
+_PHASE_HEADER_RE = re.compile(r"^(?:#{1,6} |\d+\.\s+\*{0,2}_{0,2}Phase\b)", re.IGNORECASE)
 
 # Matches a markdown task-list item regardless of bullet style: '- [ ]',
 # '* [ ]', or a numbered '1. [ ]' -- and regardless of checked state ('x'/'X'
@@ -207,7 +207,12 @@ def _split_plan_by_phase(plan_text: str) -> list[str]:
     phase after the first from the breakdown. The numbered-marker match is
     deliberately narrower than the ATX one (requires 'Phase' or an
     uppercase letter after the number) so numbered checklist sub-items
-    inside a phase are not misread as new phases. A stray '# Title' line
+    inside a phase are not misread as new phases. Also tolerates up to two
+    leading '*'/'_' markdown emphasis markers before 'Phase' -- found for
+    real 2026-08-20 (run 20260820-081806-d7c25f): a plan used
+    '1. **Phase 1 -- ...**' (bold-wrapped), which the number+'Phase'
+    literal match didn't recognize, same silent single-chunk collapse as
+    the two incidents above. A stray '# Title' line
     before the first real phase header still produces a harmless chunk,
     filtered out below same as before. A plan with NO header at all (a
     single short plan, e.g. one Tier-1-drafted phase with no '#' line
@@ -422,9 +427,6 @@ def _apply_test_context_guard(items: list[dict], project_dir: str) -> str | None
 _ESTIMATED_NEW_CONTENT_CHARS = 2000  # conservative fixed buffer: breakdown doesn't know real diff size in advance
 
 
-_DELETE_VERB_RE = re.compile(r"\b(delete|remove)\b", re.I)
-
-
 def _item_deletes_target_file(item: dict) -> bool:
     """True if this item's own description says it deletes/removes the
     target file wholesale, not merely edits/trims its contents.
@@ -433,15 +435,22 @@ def _item_deletes_target_file(item: dict) -> bool:
     always needs -- retiring the oversized flat file once its content has
     moved to new (individually under-ceiling) modules -- without opening
     the door to edit items that would grow an already-oversized file
-    further. Requires the delete verb to appear near the target's own
-    filename, not just anywhere in a longer multi-file description."""
+    further. Requires the delete verb's own grammatical object to be the
+    target filename (allowing a few filler words/articles/backticks in
+    between, e.g. "delete the old `state.py` file"), not just proximity
+    anywhere in a longer description -- found for real 2026-08-20: an
+    80-char proximity window let "delete everything between and including
+    the ... markers from `AGENTS.md`" (an in-place prune, not a whole-file
+    delete) false-positive-match and skip the size-ceiling guard entirely,
+    sending an oversized file through Tier 4 undefended."""
     desc = item.get("description", "")
     target_name = Path(item["target"]).name
-    for m in _DELETE_VERB_RE.finditer(desc):
-        window = desc[max(0, m.start() - 80): m.end() + 80]
-        if target_name in window:
-            return True
-    return False
+    pattern = re.compile(
+        r"\b(?:delete|remove)\b\s+(?:the\s+)?(?:old\s+|entire\s+|whole\s+|flat\s+)*"
+        rf"[`\"']?(?:[\w./-]*/)?{re.escape(target_name)}[`\"']?\b",
+        re.I,
+    )
+    return bool(pattern.search(desc))
 
 
 def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | None:

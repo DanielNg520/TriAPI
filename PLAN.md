@@ -1039,3 +1039,133 @@ dispatch, and a passing test suite because nothing ever exercised
 path. Worth remembering next time a "logic is correct, just needs a
 smoke test" item gets marked done on mocked-interface tests alone.
 
+### 2026-08-20 — Queue drain: items #1-3, #4b/#5, #4c all closed; four real pipeline bugs found and fixed
+
+**#1-#3 (TriAPI's own repo, run `20260819-224114-9884f8`):** dispatched
+clean, 11/11 items. `breakdown_plan()`'s guards now only run on fresh
+chunk assembly, not on resume of an already-populated breakdown.
+`planner.py`'s `SYSTEM_PROMPT` documents this box's real `sops` 3.8.1
+syntax (`--set`, not the nonexistent `set` subcommand). `TIER4_MAX_CONTEXT_CHARS`/
+`MAX_WRITE_CHARS` deduplicated into new `scripts/tier4_context.py`.
+Also confirmed the piped-`approve`-blocked-by-classifier note from the
+prior session no longer reproduces — `printf 'approve\n' | triapi plan
+...` worked fine this session, used throughout.
+
+**#4b/#5 (oh-my-llama, run `20260820-021946-1a1bd7`):** `ohmyllama/webui.py`'s
+stray uncommitted deletion investigated and confirmed intentional (coordinated
+with `cli.py`'s `_cmd_web` removal in the same uncommitted session, zero
+importers) — finalized via `git rm`; `dep_triage.py`/`test_dep_triage_seam.py`
+updated to reflect fastapi's real dead status; `run_tests.sh`'s skip removed.
+`AGENTS.md` pruned 224KB → 55KB (stale plan blocks retired). This run
+surfaced three real TriAPI pipeline bugs, found and fixed live mid-dispatch:
+
+1. **`run_build()`'s 120s default timeout** (`scripts/tier4_worker.py`) —
+   the 2026-08-11 fix that raised *some* call sites to `timeout=300` never
+   touched all of them; 4 of 7 call sites (`orchestrator.py`'s
+   `_rebuild_after_patch`/critique-revision rebuild, `tier4_worker.py`'s
+   own initial build, `dispatcher.py`'s fix-forward rebuild) still used
+   the 120s default, and oh-my-llama's full suite (now 86 test files)
+   crossed that wall — every tier hit the identical timeout on the
+   identical slow command, so the whole Tier4→3→2→1 chain escalated to
+   human_handoff on a build that was actually passing. Fixed by raising
+   the default itself to 300s so no call site can silently regress back
+   to the short timeout.
+2. **`content_guard.check_write()`'s oversized-write refusal deadlocked
+   legitimate shrinking edits.** The check (added earlier the same
+   session for the AGENTS.md-growing incident) refused *any* write whose
+   result was still over `MAX_WRITE_CHARS`, with no exception for a write
+   that's making genuine progress — so the very first correct, size-
+   reducing edit to a doc mid-prune got refused outright. Fixed: refuse
+   only when authoring a new oversized file or growing an existing one;
+   allow when the write shrinks an already-oversized file, even if still
+   over ceiling afterward. 5 new regression tests
+   (`tests/test_content_guard.py`).
+3. **`_item_deletes_target_file()`'s 80-char proximity window was a
+   false-positive magnet.** A plan item's own prose ("delete everything
+   between and including the `<!-- ... -->` markers ... from
+   `AGENTS.md`") put the word "delete" and the filename in the same
+   sentence without the item actually deleting the file — the loose
+   window matched it as a whole-file deletion and skipped the size-
+   ceiling guard entirely, sending an oversized file through Tier 4
+   undefended. Fixed: require the delete verb's own grammatical object to
+   be the target filename (verb immediately followed by the name, modulo
+   articles/backticks/path prefix), not just co-occurrence anywhere in
+   the description. 2 new regression tests.
+
+Also hand-corrected (not a code bug, a one-off plan-generation mistake)
+two self-referential verify commands the planner baked into this specific
+plan: a `grep`/`awk` check for a run-id string that the plan's own
+appended checklist item necessarily quotes while describing itself, so
+the check could never pass regardless of correctness. Patched the stored
+`build_cmd`s to tolerate the plan's own one expected self-reference
+instead of requiring zero occurrences.
+
+**#4c (oh-my-llama, run `20260820-081806-d7c25f`): `ohmyllama/state.py`
+(1754 lines, 81KB) split into `ohmyllama/state/` package, this time
+correctly.** The prior 2026-08-19 attempt (see entry above) fabricated 4
+of 6 mixin files because each tier was asked to *draft* a file from a
+method-name sketch, with only `py_compile` checking the result — a
+plausible-looking rewrite passed every check while silently inventing
+content. This attempt used a fundamentally different mechanism instead of
+trying to catch fabrication after the fact:
+
+- Every phase's `build_cmd` is a **deterministic AST-extraction script**
+  (`ast.get_source_segment` against `git show HEAD:ohmyllama/state.py`)
+  that performs the actual file-write itself — no tier ever drafts
+  content; the script mechanically copies the named methods verbatim and
+  writes the file. Every item is `verify_only: true`.
+- A **completeness check** (its own phase, run before the old file is
+  deleted) parses both the original `Store` class and the full new
+  package with `ast` and asserts the method-name sets are byte-for-byte
+  identical — nothing missing, nothing duplicated, nothing invented.
+- Given the stakes (this exact task fabricated content last time), the
+  whole breakdown was **hand-constructed and dry-run tested against a
+  disposable `git worktree`** of the real repo (including a real
+  `bash run_tests.sh` run) before being dispatched for real — not because
+  the pipeline can't be trusted with routine work, but because handing an
+  LLM's breakdown step a long embedded Python heredoc script risked
+  transcription/truncation errors, and this was cheap to verify directly
+  first.
+- Also fixed live: `scripts/dispatcher.py`'s `_PHASE_HEADER_RE` didn't
+  recognize `1. **Phase 1 — ...**` (bold-markdown-wrapped numbered
+  headers) as a phase boundary, silently collapsing this specific
+  14-phase plan into one chunk — the third real incident of this same
+  header-recognition gap (2026-08-12 ATX-depth, 2026-08-19 numbered-with-no-hash,
+  now bold-wrapped-numbered). Regex now tolerates up to two `*`/`_`
+  emphasis markers before "Phase". New regression test.
+- **Two real extraction gotchas found and fixed during dry-run testing,
+  before anything touched the real repo:** (a) `ast.get_source_segment`
+  excludes decorator lines for the node handed to it directly — `Task`/
+  `Approval`'s `@dataclass(slots=True)` silently vanished, leaving plain
+  classes with no generated `__init__` (`TypeError: Task() takes no
+  arguments`); fixed by manually prepending decorator source. (b) a
+  name-only, `FunctionDef`-only extraction missed **class-level `Assign`
+  constants** sitting directly in `Store`'s body between methods
+  (`_QUARANTINE_AFTER`/`_QUARANTINE_BASE_S`/`_QUARANTINE_MAX_S`,
+  `_LIVE_NOTIFIED_COL`, `MAIL_BROADCAST_MIN_CONFIDENCE`) — every method
+  referencing them broke (`AttributeError: 'Store' object has no
+  attribute '_QUARANTINE_AFTER'`) since nothing copied the constant
+  itself; extraction extended to also walk class-level `Assign` nodes,
+  and the completeness check extended to verify constants too, not just
+  methods.
+
+**Verified independently, twice over:** local `bash run_tests.sh` (both
+in the disposable dry-run worktree and for real in the dispatch) and a
+separate Jules advisory session against the pushed branch — Jules ran in
+a fresh clone with an empty `.state/ohmyllama.sqlite3` (one expected,
+unrelated test failure from that: `test_migrate_facts_seam.py` needs
+seeded fixture data) and confirmed 25 script suites + 158 pytest suites
+otherwise green, "does not indicate a regression in the
+`ohmyllama/state.py` file splitting that was performed."
+
+**Lesson for later sessions:** when a task is genuinely mechanical
+(copy this exact text from A to B, nothing judged or generated), prefer
+building a deterministic script over asking an LLM tier to reproduce the
+content from a description, even a very precise one — this session's
+first attempt at #4c (identical file, identical method list, far more
+explicit anti-fabrication instructions than the original 2026-08-19
+prompt) still fabricated a dataclass on the first item, across all four
+tiers, before the mechanism was replaced rather than the instructions
+tightened further. Verification can catch fabrication; it can't make an
+LLM stop generating when the task calls for copying.
+
