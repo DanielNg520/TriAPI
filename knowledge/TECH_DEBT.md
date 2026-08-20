@@ -189,3 +189,176 @@ FAILED (failures=1, errors=3)
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/CARRYOVER.md | HASH: 7ab25834239af794cc73a36427a1d681f4a83b11ccfe547ac754ef93c8ef015f | REASON: Rebuild failed after Tier 3 rewrite: 86:  extension of the context_files grounding guard (#1 above), user
 
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/AGENTS.md | HASH: ca7d25447ba7ffa43d5541357206cd8ad5ac572d2a034bb9f7920b58f835c9fe | REASON: Could not apply proposed edit: Block 1: SEARCH text not found verbatim in the current file.
+- [ ] FILE: /home/dyne/Documents/Coding/oh-my-llama/ohmyllama/orchestrator.py | HASH: c4a29fcba69ca3dc781fdb3bf87674fcd46f70d95d3fd0c029024ce3b36c2f04 | REASON: Rebuild failed after Tier 3 rewrite: ============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/dyne/Documents/Coding/oh-my-llama
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 18 items
+
+tests/test_orchestrator.py FFF...............                            [100%]
+
+=================================== FAILURES ===================================
+_______________ test_model_for_primary_reachable_not_quarantined _______________
+
+    def test_model_for_primary_reachable_not_quarantined():
+>       assert _model_for_heavy(set()) == "gpt-oss:20b"
+               ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_orchestrator.py:232: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+quarantined = set()
+
+    def _model_for_heavy(quarantined):
+        """Exercise AsyncOrchestrator._model_for's tier=='heavy' branch
+        directly against a real (unpatched) implementation, with a store
+        double whose quarantined_models() is deterministic per test case.
+        Direct unit-level testing here (rather than driving the whole
+        _process/_answer pipeline) avoids depending on incidental details of
+        LLM-call argument shapes to infer which model was picked."""
+        cfg = SimpleNamespace(models_for=lambda role: _HEAVY_FALLBACKS)
+        orch = object.__new__(AsyncOrchestrator)
+        orch.cfg = cfg
+        store = RecordingStore()
+        store.quarantined_models = lambda: quarantined
+>       return orch._model_for("chat", "heavy", store)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: AsyncOrchestrator._model_for() takes 3 positional arguments but 4 were given
+
+tests/test_orchestrator.py:228: TypeError
+______________________ test_model_for_primary_quarantined ______________________
+
+    def test_model_for_primary_quarantined():
+>       assert _model_for_heavy({"gpt-oss:20b"}) == "deepseek-r1:32b"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_orchestrator.py:236: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+quarantined = {'gpt-oss:20b'}
+
+    def _model_for_heavy(quarantined):
+        """Exercise AsyncOrchestrator._model_for's tier=='heavy' branch
+        directly against a real (unpatched) implementation, with a store
+        double whose quarantined_models() is deterministic per test case.
+        Direct unit-level testing here (rather than driving the whole
+        _process/_answer pipeline) avoids depending on incidental details of
+        LLM-call argument shapes to infer which model was picked."""
+        cfg = SimpleNamespace(models_for=lambda role: _HEAVY_FALLBACKS)
+        orch = object.__new__(AsyncOrchestrator)
+        orch.cfg = cfg
+        store = RecordingStore()
+        store.quarantined_models = lambda: quarantined
+>       return orch._model_for("chat", "heavy", store)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: AsyncOrchestrator._model_for() takes 3 positional arguments but 4 were given
+
+tests/test_orchestrator.py:228: TypeError
+______________ test_model_for_primary_and_escalation_quarantined _______________
+
+    def test_model_for_primary_and_escalation_quarantined():
+>       assert _model_for_heavy({"gpt-oss:20b", "deepseek-r1:32b"}) == "qwen2.5-coder:32b"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_orchestrator.py:240: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+quarantined = {'deepseek-r1:32b', 'gpt-oss:20b'}
+
+    def _model_for_heavy(quarantined):
+        """Exercise AsyncOrchestrator._model_for's tier=='heavy' branch
+        directly against a real (unpatched) implementation, with a store
+        double whose quarantined_models() is deterministic per test case.
+        Direct unit-level testing here (rather than driving the whole
+        _process/_answer pipeline) avoids depending on incidental details of
+        LLM-call argument shapes to infer which model was picked."""
+        cfg = SimpleNamespace(models_for=lambda role: _HEAVY_FALLBACKS)
+        orch = object.__new__(AsyncOrchestrator)
+        orch.cfg = cfg
+        store = RecordingStore()
+        store.quarantined_models = lambda: quarantined
+>       return orch._model_for("chat", "heavy", store)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: AsyncOrchestrator._model_for() takes 3 positional arguments but 4 were given
+
+tests/test_orchestrator.py:228: TypeError
+=========================== short test summary info ============================
+FAILED tests/test_orchestrator.py::test_model_for_primary_reachable_not_quarantined
+FAILED tests/test_orchestrator.py::test_model_for_primary_quarantined - TypeE...
+FAILED tests/test_orchestrator.py::test_model_for_primary_and_escalation_quarantined
+========================= 3 failed, 15 passed in 0.16s =========================
+
+- [ ] FILE: /home/dyne/Documents/Coding/oh-my-llama/tests/test_orchestrator.py | HASH: 240f729dba51cafb5eeeb1062dacbaecf5d9a9b3bb6395e9c6c58ae0fc374951 | REASON: Rebuild failed after Tier 3 rewrite: ============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/dyne/Documents/Coding/oh-my-llama
+configfile: pyproject.toml
+plugins: anyio-4.14.2, asyncio-1.4.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 17 items
+
+tests/test_orchestrator.py ........F........                             [100%]
+
+=================================== FAILURES ===================================
+__________________ test_chat_kind_triggers_searchrouter_read ___________________
+
+    def test_chat_kind_triggers_searchrouter_read():
+        orch = make_orchestrator()
+        store = RecordingStore()
+        task = make_task(kind="chat", prompt="What's the weather?", reply_to=None)
+    
+        call_order = []
+        async def mock_read(*args, **kwargs):
+            call_order.append("read")
+            return "sunny"
+    
+        async def mock_llm(*args, **kwargs):
+            call_order.append("llm")
+            return MagicMock()
+    
+        search_router_read = AsyncMock(side_effect=mock_read)
+        # orch.llm is the LLM client OBJECT; production code calls its .chat(...)
+        # method, not the object itself -- side_effect/assertions must target
+        # .chat, a distinct auto-generated child mock.
+        orch.llm.chat.side_effect = mock_llm
+    
+        with patch("ohmyllama.capabilities.search_router.SearchRouter.read", search_router_read), \
+             patch("asyncio.to_thread", AsyncMock(side_effect=_run_in_thread)):
+            try:
+                asyncio.run(orch._process(store, task))
+            except Exception:
+                pass
+    
+        search_router_read.assert_awaited_once()
+>       orch.llm.chat.assert_awaited()
+
+tests/test_orchestrator.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <AsyncMock name='mock.chat' id='140329550829552'>
+
+    def assert_awaited(self):
+        """
+        Assert that the mock was awaited at least once.
+        """
+        if self.await_count == 0:
+            msg = f"Expected {self._mock_name or 'mock'} to have been awaited."
+>           raise AssertionError(msg)
+E           AssertionError: Expected chat to have been awaited.
+
+../../../.local/share/uv/python/cpython-3.13.14-linux-x86_64-gnu/lib/python3.13/unittest/mock.py:2361: AssertionError
+------------------------------ Captured log call -------------------------------
+ERROR    ohmyllama.orchestrator:orchestrator.py:491 task #1 crashed
+Traceback (most recent call last):
+  File "/home/dyne/Documents/Coding/oh-my-llama/ohmyllama/orchestrator.py", line 480, in _process
+    await self._answer(store, task, intent.kind, intent.tier,
+                       intent.capability)
+  File "/home/dyne/Documents/Coding/oh-my-llama/ohmyllama/orchestrator.py", line 581, in _answer
+    if self.cfg.rag_auto and store.rag_count() > 0:
+       ^^^^^^^^^^^^^^^^^
+AttributeError: 'types.SimpleNamespace' object has no attribute 'rag_auto'
+=========================== short test summary info ============================
+FAILED tests/test_orchestrator.py::test_chat_kind_triggers_searchrouter_read
+========================= 1 failed, 16 passed in 0.22s =========================
+

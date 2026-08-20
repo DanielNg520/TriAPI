@@ -20,11 +20,16 @@ conversation has real memory across turns (verified: a fact stated in one
 call is correctly recalled in a --resume'd follow-up call).
 
 Must only be called after budget_guard.check_tier1_ok().
+
+Note: the downstream Tier 3 (DeepSeek) leg is billed at DeepSeek's peak rate
+during 06:00-10:00 UTC; `in_tier3_deepseek_peak_utc()` exposes this window so
+plans can be priced/scheduled with that cost in mind.
 """
 
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -32,6 +37,31 @@ from scripts.budget_guard import check_tier1_ok
 from scripts.tri_logging import get_logger
 
 log = get_logger("planner")
+
+# Tier 3 runs on DeepSeek, whose billing has a peak window of 06:00-10:00 UTC.
+# Tier 1 planning itself is charged to subscription quota, but the expensive
+# downstream tier must avoid that window; the constant and helper below make the
+# window explicit and testable so callers can price/schedule a plan without
+# re-deriving the rule.
+TIER3_DEEPSEEK_PEAK_UTC_START = 6  # inclusive
+TIER3_DEEPSEEK_PEAK_UTC_END = 10  # exclusive
+
+
+def in_tier3_deepseek_peak_utc(now: datetime | None = None) -> bool:
+    """Return True when `now` falls in DeepSeek's Tier 3 peak billing window.
+
+    The window is 06:00-10:00 UTC. `now` defaults to the current time in UTC;
+    a tz-aware datetime is converted to UTC, a naive datetime is assumed UTC.
+    Example: LA local 2026-08-19T23:14:07.869655-07:00 is UTC
+    2026-08-20T06:14:07.869655+00:00, which is inside the window -> True.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    else:
+        now = now.astimezone(timezone.utc)
+    return TIER3_DEEPSEEK_PEAK_UTC_START <= now.hour < TIER3_DEEPSEEK_PEAK_UTC_END
 
 SYSTEM_PROMPT = (
     "You are a software architect having a conversation with the user to define "
@@ -65,7 +95,16 @@ SYSTEM_PROMPT = (
     "of guessing. Otherwise, propose your best plan (or a revised plan, if the "
     "user gave feedback on a previous version) in the exact phase/checklist "
     "markdown format described above. Every response must be ONLY the question "
-    "or the plan -- no unrelated commentary, no offers of unrelated next steps."
+    "or the plan -- no unrelated commentary, no offers of unrelated next steps.\n\n"
+    "This box's installed `sops` is version 3.8.1 (confirmed via `sops --version`), "
+    "which has NO `set` subcommand — `sops --help`'s COMMANDS list is only "
+    "`exec-env`/`exec-file`/`publish`/`keyservice`/`groups`/`updatekeys`/`help`. "
+    "Any plan step editing a secrets file in place MUST use the `--set` flag on the "
+    "default (edit-mode) invocation, never the `sops set FILE key value` subcommand "
+    "form. Concrete working syntax: for a nested key, `sops --set '[\"key\"][0] \"value\"' "
+    "FILE`; for a top-level key, `sops --set '[\"key\"] \"value\"' FILE`. "
+    "Never generate `sops set FILE key value` — that subcommand does not exist on this "
+    "box's sops 3.8.1."
 )
 
 

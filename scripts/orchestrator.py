@@ -282,7 +282,7 @@ def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
     return {"status": "human_handoff", "resolved_by": None, "cost_report": cost_rep}
 
 
-def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None) -> dict:
+def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None, skip_tier4: bool = False) -> dict:
     config = load_tiers()
     build_cmd = build_cmd or " && ".join(config["tier_4_worker"]["build_commands"])
 
@@ -299,29 +299,39 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     context_blob = build_context_blob(context_files or [], workdir)
 
     resolved_by = None
-    log.info("[%s] run_task starting: target=%s workdir=%s context_files=%s", task_id, target, workdir, context_files)
+    log.info("[%s] run_task starting: target=%s workdir=%s context_files=%s skip_tier4=%s", task_id, target, workdir, context_files, skip_tier4)
 
-    # Tier 4: draft + build loop, until success or escalate.
-    while True:
-        try:
-            result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
-        except Exception as e:
-            # An exception here (e.g. Ollama connection/read timeout) shouldn't
-            # crash the whole dispatch or trigger an endless retry loop. Record
-            # the failure so later tiers have context, then escalate.
-            log.warning("[%s] Tier 4 raised %s; escalating", task_id, e)
-            record_failure(task_id, str(e))
-            break
-        log.info("[%s] Tier 4 attempt: %s (consecutive_failures=%s)", task_id, result["status"], result.get("consecutive_failures"))
-        if result["status"] == "success":
-            resolved_by = "tier_4"
-            break
-        if result["status"] != "build_failed":
-            # Covers "escalate" as well as unexpected statuses returned by
-            # tier4_run (e.g. "error" from a timed-out Ollama request). Only
-            # "build_failed" should loop around for another Tier 4 attempt.
-            log.warning("[%s] Tier 4 returned status %s; escalating", task_id, result["status"])
-            break
+    # Tier 4: draft + build loop, until success or escalate. Skipped entirely
+    # when skip_tier4 is set -- e.g. an item whose target already exceeds
+    # Tier 4's context ceiling (dispatcher._enforce_file_size_ceiling) is
+    # something Tier 4's small local window can never handle, so there is no
+    # point spending an attempt (and risking its known ~300s timeout) before
+    # escalating; go straight to Tier 3, whose cloud context window is far
+    # larger. Tier 4 remains the default (skip_tier4=False) for every
+    # ordinary item.
+    if skip_tier4:
+        log.info("[%s] Tier 4 skipped (oversized target); starting at Tier 3", task_id)
+    else:
+        while True:
+            try:
+                result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
+            except Exception as e:
+                # An exception here (e.g. Ollama connection/read timeout) shouldn't
+                # crash the whole dispatch or trigger an endless retry loop. Record
+                # the failure so later tiers have context, then escalate.
+                log.warning("[%s] Tier 4 raised %s; escalating", task_id, e)
+                record_failure(task_id, str(e))
+                break
+            log.info("[%s] Tier 4 attempt: %s (consecutive_failures=%s)", task_id, result["status"], result.get("consecutive_failures"))
+            if result["status"] == "success":
+                resolved_by = "tier_4"
+                break
+            if result["status"] != "build_failed":
+                # Covers "escalate" as well as unexpected statuses returned by
+                # tier4_run (e.g. "error" from a timed-out Ollama request). Only
+                # "build_failed" should loop around for another Tier 4 attempt.
+                log.warning("[%s] Tier 4 returned status %s; escalating", task_id, result["status"])
+                break
 
     if resolved_by is None:
         # Tier 3: DeepSeek

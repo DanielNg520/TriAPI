@@ -756,6 +756,70 @@ class OrchestratorTier3PeakSkipTests(unittest.TestCase):
         self.assertEqual(result["status"], "human_handoff")
 
 
+class SkipTier4Tests(unittest.TestCase):
+    """run_task(skip_tier4=True) -- the file-size-ceiling escape hatch
+    (dispatcher._enforce_file_size_ceiling marks items on an oversized
+    target this way) must never invoke Tier 4 at all and go straight to
+    Tier 3."""
+
+    def test_skip_tier4_never_calls_tier4_run_and_starts_at_tier3(self) -> None:
+        config = {
+            "tier_4_worker": {"build_commands": ["true"]},
+            "tier_1_manager": {"enabled": True},
+            "critique": {"enabled": False},
+        }
+        tier4_run = mock.Mock()
+        tier3_escalate = mock.Mock(return_value={"status": "fix_rejected", "reason": "no"})
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "target.py")
+            with (
+                mock.patch.object(orchestrator, "load_tiers", return_value=config),
+                mock.patch.object(orchestrator, "build_context_blob", return_value="ctx"),
+                mock.patch.object(orchestrator, "tier4_run", new=tier4_run),
+                mock.patch.object(
+                    orchestrator, "check_tier3_peak_hours_ok", return_value={"ok": True}
+                ),
+                mock.patch.object(orchestrator, "tier3_escalate", new=tier3_escalate),
+                mock.patch.object(orchestrator, "check_tier2_ok", return_value={"ok": False, "reason": "no"}),
+                mock.patch.object(orchestrator, "check_tier1_ok", return_value={"ok": False, "reason": "no"}),
+                mock.patch.object(
+                    orchestrator, "check_tier1_manager_ok", return_value={"ok": True}
+                ),
+                mock.patch.object(orchestrator, "read_state", return_value={}),
+                mock.patch.object(orchestrator, "report", return_value={}),
+                mock.patch.object(orchestrator, "human_handoff"),
+            ):
+                result = orchestrator.run_task(
+                    "task-skip4", "fix it", target, workdir=tmp, build_cmd="true",
+                    skip_tier4=True,
+                )
+        tier4_run.assert_not_called()
+        tier3_escalate.assert_called_once()
+        self.assertEqual(result["status"], "human_handoff")
+
+    def test_skip_tier4_defaults_false_and_calls_tier4_run(self) -> None:
+        config = {
+            "tier_4_worker": {"build_commands": ["true"]},
+            "tier_1_manager": {"enabled": True},
+            "critique": {"enabled": False},
+        }
+        tier4_run = mock.Mock(return_value={"status": "success", "consecutive_failures": 0})
+        with tempfile.TemporaryDirectory() as tmp:
+            target = str(Path(tmp) / "target.py")
+            with (
+                mock.patch.object(orchestrator, "load_tiers", return_value=config),
+                mock.patch.object(orchestrator, "build_context_blob", return_value="ctx"),
+                mock.patch.object(orchestrator, "tier4_run", new=tier4_run),
+                mock.patch.object(orchestrator, "read_state", return_value={}),
+                mock.patch.object(orchestrator, "report", return_value={}),
+            ):
+                result = orchestrator.run_task(
+                    "task-noskip4", "fix it", target, workdir=tmp, build_cmd="true",
+                )
+        tier4_run.assert_called_once()
+        self.assertEqual(result["status"], "success")
+
+
 class JulesClientUnavailableTests(unittest.TestCase):
     def test_missing_api_key_short_circuits(self) -> None:
         with (

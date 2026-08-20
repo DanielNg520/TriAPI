@@ -875,3 +875,167 @@ on every resume.
 
 **Verified**: full suite green, 117/117, zero failures/errors/real skips.
 
+### 2026-08-19 — Encrypted-secrets corruption incident + guard (oh-my-llama dispatch, run 20260819-132222-9de752)
+
+**Incident:** a plan item's job was to *investigate* the openclaw gateway's
+401 (read `.secret/secrets.json`'s `OPENCLAW_GATEWAY_URL`/`_TOKEN`, curl
+the gateway) but the breakdown never marked it `verify_only: true`, so
+`run_task()` sent it through the normal Tier 4→3→2 draft/patch pipeline —
+each tier tried to *edit* the sops-encrypted file via `edit_blocks.py`
+SEARCH/REPLACE as if it were an ordinary text file. Tier 4's attempt
+failed cleanly ("SEARCH text not found verbatim"), but Tier 3/2's
+attempt(s) corrupted the file's MAC (cryptographic authentication tag) —
+`sops -d` started failing with `MAC mismatch` on the real, live file.
+
+**Recovery (verified safe, not guesswork):** `sops -d --ignore-mac
+--output-type json` on the corrupted file, then confirmed every one of
+this session's Phase 1 secret changes (7 role pins) and the untouched
+literature keys matched exactly what had already been verified earlier in
+the same session — the underlying encrypted *values* were intact, only
+the MAC/metadata trailer was damaged. Cross-checked against the newest
+on-disk `.bak-20260803*` backup (98 keys vs. the recovered file's 114 —
+a plausible 16-day growth delta, not evidence of loss). Re-encrypted the
+verified-correct plaintext fresh via `sops -e`, confirmed byte-identical
+round-trip decrypt, replaced the corrupted file, shredded every plaintext
+temp artifact. `sops -d .secret/secrets.json` now succeeds with no flags.
+
+**Root-cause fix** (`scripts/dispatcher.py`): new
+`_is_sops_encrypted_file()` (detects a sops file by its own *unencrypted*
+top-level `"sops"` metadata key — no decryption needed) and
+`_enforce_no_raw_edits_to_encrypted_files()`, wired into `breakdown_plan()`
+alongside the existing guards — refuses any non-`verify_only`, non-`git`
+item whose target is sops-encrypted, forcing the real change to be
+expressed as `sops set`/`--set` inside an explicit `build_cmd` on a
+`verify_only` item (the pattern Phase 1's own items already used
+correctly for the same file). New `tests/test_encrypted_file_edit_guard.py`
+(7 tests).
+
+**Also found and fixed while investigating:** `OMLL_MODEL_LITERATURE`
+*did* contain the stale `BookWormXtreme/fimbulvetr-11b-v2` id (the
+earlier assumption in this same plan that it didn't was wrong) — fixed via
+`sops --set` to `hf.co/Sao10K/Fimbulvetr-11B-v2-GGUF:Q4_K_M`, matching the
+already-pulled local tag. `OPENCLAW_GATEWAY_URL`/`_TOKEN` are both empty —
+openclaw was never configured (consistent with `project_ohmyllama_pivot`
+memory: the in-repo "openclaw" code predates and is unrelated to the real
+openclaw.ai), not an expired-token bug; `catalog.py` already degrades to 0
+openclaw models via its existing per-source `try/except`, confirmed by
+direct code inspection, no code change needed there.
+
+**Verified**: TriAPI's own suite green (92/92 across the touched test
+files) both before and after the guard landed; the live dispatch's own
+`sops -d`/`jq` checkpoints passed once the two affected breakdown items
+were hand-corrected to `verify_only: true` and re-dispatched.
+
+### 2026-08-19 — ohmyllama/state.py package split reverted: fabricated, not extracted
+
+Same run (`20260819-132222-9de752`). The split completed all 12 items and
+every one *reported* success, but a routine post-split import check
+(`bash run_tests.sh`) caught a circular import in the new package's
+`__init__.py` — investigating that surfaced something much worse.
+
+**What actually happened:** across the 6 new mixin files, only
+`_model_health.py` and `_observability.py` were faithful extractions of
+the real code (correctly used the shared `self.db` connection). The other
+four — `_queue.py`, `_approvals.py`, `_memory.py`, `_ingest.py` — were
+wholesale **fabrications**: plausible-looking code with completely
+different method names than the original (`claim_next`→`atomic_claim`,
+`meta_get`/`meta_set`→`kv_meta_get`/`kv_meta_set`, `mail_is_seen`→
+`insert_mail_seen`, `add_message`/`recent_messages`/`facts`/`put_fact`
+missing entirely), `_approvals.py` opening its own disconnected
+`sqlite3.connect()` per call instead of the shared `self.db`, `_queue.py`
+using a nonexistent `self._db` attribute and containing **invalid SQL**
+(PostgreSQL-only `FOR NO KEY UPDATE SKIP LOCKED`, which SQLite doesn't
+support) plus a live bug (`now_iso() - timedelta(...)`, subtracting a
+timedelta from a string). `__init__.py` itself never defined the actual
+database connection/schema setup — `Store.__init__` called
+`super().__init__(db_path=db_path)` into mixins that don't implement it.
+Every item's own `build_cmd` (mostly `py_compile`) passed anyway, since
+none of them exercise the actual runtime logic — the same blind spot
+`content_guard.py` was built for in the 2026-08-10 incident, just one
+layer deeper (a *plausible rewrite*, not a *content-losing* one, so the
+existing retention-ratio guard had nothing to catch).
+
+**Recovery:** `ohmyllama/state.py` was git-tracked (its own deletion,
+`git rm`, was one of the split's own items) — `git checkout --
+ohmyllama/state.py` restored the exact, complete, correct 1745-line
+original with zero loss. Deleted the broken `ohmyllama/state/` package.
+Presented the finding to the user with three options (revert / do the
+full correct re-split now / pause); user chose revert. Re-applied the one
+still-wanted change (item 8's quarantine-pruning fix,
+`model_health()` — same `CASE WHEN quarantined_until > ? THEN
+quarantined_until ELSE NULL END` design as the earlier PLAN.md entries)
+directly to the restored flat file, plus its regression test in
+`tests/test_queue_recovery.py`. The size-ceiling problem that motivated
+the split in the first place (`state.py` at ~79KB, over the 73,728-char
+Tier 4 ceiling) is **not re-solved** — deferred to a dedicated future
+session, likely informed by `VIRTUAL_CODEBASE_PLAN.md`'s Slicer/
+Materializer design rather than a repeat of this approach.
+
+**Verified**: `bash run_tests.sh` clean (161/161) both immediately before
+and after the quarantine fix, against the restored file.
+
+**Open question for a future session, not this repo's or TriAPI's
+existing guards:** nothing in the pipeline currently distinguishes "code
+that plausibly compiles and passes its own narrow build_cmd" from "code
+that's actually semantically equivalent to what it replaced." A
+multi-file mechanical refactor (a plain split, no behavior change
+intended) is exactly the case where a tier drafting one file at a time,
+each with only that file's own narrow context, has the least grounding to
+notice it invented new method names instead of copying real ones. Worth
+its own guard or process change before attempting a split like this
+again — noted here rather than immediately designed, since the right fix
+depends on how `VIRTUAL_CODEBASE_PLAN.md`'s architecture (if built) ends
+up handling multi-file moves.
+
+### 2026-08-19 — Queue wrap-up: literature-id fix, and a real heavy-fallback wiring bug found post-verification
+
+Applied directly (small, well-understood, single-value changes; not routed
+through another dispatch given the session's track record with the
+automated pipeline tonight): `DEFAULT_LITERATURE_MODELS`'s third entry
+fixed from the stale `BookWormXtreme/fimbulvetr-11b-v2` to the actually-
+pulled `hf.co/Sao10K/Fimbulvetr-11B-v2-GGUF:Q4_K_M`, in both
+`ohmyllama/config.py` and its verbatim duplicate in
+`src/semai/workers/ghostwriter.py`. Verified: `bash run_tests.sh` clean
+(161/161).
+
+**Then, sanity-checking the earlier "OMLL_MODEL_HEAVY" work while writing
+this entry, found a real bug that had passed every check tonight:**
+`.secret/secrets.json` has `OMLL_MODEL_HEAVY` set as an actual env-var
+override (`"qwen3-coder:30b-cc"`, the old blacklisted single model) — the
+Phase 2 plan item only changed `config.py`'s *default*
+(`os.environ.get("OMLL_MODEL_HEAVY", "gpt-oss:20b,...")`), which is never
+consulted while the env var is set. The whole ordered-fallback feature
+built and fixed earlier this session was inert in practice. Fixed via
+`sops --set` to the ordered list.
+
+**Deeper bug, found immediately after:** even with the secret corrected,
+`Config.load()` showed `models_for('heavy')` returning `('qwen2.5:7b-
+instruct-q8_0',)` — the FAST tier's model, not the 3-item list.
+`models_for(role)` resolves *role* names (router/chat/code/critic/...)
+against `model_roles`; "heavy" is a *tier* name (fast/heavy/reasoning/
+literature), never a role, so the lookup always misses and silently falls
+through to `model_fast`. `orchestrator.py`'s `_model_for()` and
+`_escalation_model()` both called `self.cfg.models_for("heavy")` for the
+fallback list — this never worked. The unit test added earlier
+(`test_model_for_primary_*`) never caught it because it mocked
+`cfg.models_for` directly rather than exercising the real method against
+a real-shaped `Config`.
+
+**Fix:** new `Config.heavy_fallbacks()` (comma-splits `self.model_heavy`
+directly, independent of the role system), both orchestrator call sites
+repointed to it, the unit test's mock corrected to patch
+`heavy_fallbacks` (matching what the real code now calls) instead of
+`models_for`. Verified live against the real `Config.load()`:
+`heavy_fallbacks()` → `('gpt-oss:20b', 'deepseek-r1:32b',
+'qwen2.5-coder:32b')`, `models_for('heavy')` still correctly falls
+through (confirms the distinction, not just a lucky pass). `bash
+run_tests.sh` clean (161/161) after this fix too.
+
+**Lesson for later sessions, general:** a unit test that mocks the exact
+method under test's own name proves nothing about whether the *caller*
+wired that method correctly — this bug survived a full plan, a real
+dispatch, and a passing test suite because nothing ever exercised
+`orchestrator.py` against the real `Config` class end-to-end for this
+path. Worth remembering next time a "logic is correct, just needs a
+smoke test" item gets marked done on mocked-interface tests alone.
+

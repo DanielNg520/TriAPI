@@ -32,6 +32,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scripts import gemini_fallback, git_ops, regression_guard, judge, mock_patch_lint, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
+from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
 from scripts.budget_guard import check_tier2_ok
 from scripts.config_loader import load_tiers
 from scripts.orchestrator import human_handoff, run_task, verify_task
@@ -41,6 +42,11 @@ from scripts.tri_logging import get_logger
 log = get_logger("dispatcher")
 
 RUNS_DIR = Path(__file__).resolve().parent.parent / "logs" / "runs"
+
+# Tier 3 (tier3_escalate) uses DeepSeek, which is more expensive to call
+# during peak billing hours 06:00-10:00 UTC. This window is used to warn
+# (and potentially gate) expensive fix-forward escalations.
+DEEPSEEK_PEAK_HOURS_UTC = (6, 10)
 
 BREAKDOWN_SYSTEM_INSTRUCTION = (
     "You manage a team of coding workers. Given ONE PHASE of an execution plan "
@@ -413,17 +419,61 @@ def _apply_test_context_guard(items: list[dict], project_dir: str) -> str | None
     return None
 
 
-TIER4_MAX_CONTEXT_CHARS = 24576 * 3  # tier_4_worker num_ctx=24576 tokens (config/tiers.yaml) * 3 chars/token conservative floor -- see scripts/tier4_worker.py's call_ollama() options={"num_ctx": 24576}, the source of truth
 _ESTIMATED_NEW_CONTENT_CHARS = 2000  # conservative fixed buffer: breakdown doesn't know real diff size in advance
 
 
+_DELETE_VERB_RE = re.compile(r"\b(delete|remove)\b", re.I)
+
+
+def _item_deletes_target_file(item: dict) -> bool:
+    """True if this item's own description says it deletes/removes the
+    target file wholesale, not merely edits/trims its contents.
+
+    Lets _enforce_file_size_ceiling allow the one step a package-split plan
+    always needs -- retiring the oversized flat file once its content has
+    moved to new (individually under-ceiling) modules -- without opening
+    the door to edit items that would grow an already-oversized file
+    further. Requires the delete verb to appear near the target's own
+    filename, not just anywhere in a longer multi-file description."""
+    desc = item.get("description", "")
+    target_name = Path(item["target"]).name
+    for m in _DELETE_VERB_RE.finditer(desc):
+        window = desc[max(0, m.start() - 80): m.end() + 80]
+        if target_name in window:
+            return True
+    return False
+
+
 def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | None:
-    """Post-breakdown guard: refuse to dispatch any file item whose target
-    is already at/over the Tier 4 context ceiling before any new content is
-    added (see constants above). Nonexistent targets are skipped; files that
-    would only tip over once new content is applied are deliberately NOT
-    flagged, because the real diff size isn't known at breakdown time and
-    only the existing size is ground truth."""
+    """Post-breakdown guard for a file item whose target is already at/over
+    the Tier 4 context ceiling before any new content is added (see
+    constants above). Nonexistent targets are skipped; files that would
+    only tip over once new content is applied are deliberately NOT flagged,
+    because the real diff size isn't known at breakdown time and only the
+    existing size is ground truth.
+
+    An oversized target no longer blocks the whole breakdown outright:
+    - An item that deletes the target wholesale (see
+      _item_deletes_target_file) is exempt outright -- otherwise a package
+      split could never dispatch the retirement step for the very file
+      it's splitting.
+    - Any other item on an oversized target is marked skip_tier4=True (in
+      place, mutating the item) instead of failing: Tier 4's small local
+      context window can never hold it, but Tier 3/2's cloud context
+      windows are far larger, so orchestrator.run_task() routes straight
+      to Tier 3 for that one item rather than refusing the entire plan.
+      This is a one-time unblock for the CURRENT oversized file, not a
+      standing way to keep patching it in place -- so the item's
+      description also gets an explicit instruction appended: reduce the
+      file's size (split it into cohesive smaller files/modules, per the
+      ohmyllama/state/ package precedent) as part of this fix, not just
+      edit its content while leaving it oversized. A future item that
+      still targets the same file after that should find it under the
+      ceiling and go through Tier 4 normally again.
+      Only returns an error for a genuinely unrecoverable case (there is
+      none left today, but the return type stays str | None for callers
+      that still branch on failure).
+    """
     for phase in phases:
         for item in phase["items"]:
             if "git" in item:
@@ -433,7 +483,66 @@ def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | No
                 continue
             existing_chars = len(target_path.read_text())
             if existing_chars > TIER4_MAX_CONTEXT_CHARS:
-                return f"Error: {item['target']} is already {existing_chars} chars, over the Tier 4 context ceiling of {TIER4_MAX_CONTEXT_CHARS} chars -- breakdown must split this file's work differently or route it elsewhere before dispatch."
+                if _item_deletes_target_file(item):
+                    continue
+                item["skip_tier4"] = True
+                item["description"] = (
+                    item["description"]
+                    + f"\n\nNOTE: {item['target']} is already {existing_chars} chars, over "
+                    f"the Tier 4 context ceiling of {TIER4_MAX_CONTEXT_CHARS} chars -- Tier 4 "
+                    "cannot be used on it. As part of this fix, reduce the file's size (split "
+                    "it into cohesive smaller files/modules, don't just mechanically truncate "
+                    "it) so it drops back under the ceiling -- a one-time patch that leaves it "
+                    "still oversized just defers the same problem to the next item that "
+                    "touches it."
+                )
+    return None
+
+
+def _is_sops_encrypted_file(target_path: Path) -> bool:
+    """True if target_path's raw (still-encrypted) content is a sops file.
+
+    sops's own metadata trailer (key info, MAC, version) is stored as a
+    top-level "sops" key in the plaintext JSON structure alongside each
+    field's "ENC[...]" ciphertext -- no decryption needed to detect this,
+    just a JSON parse of the file as it sits on disk."""
+    try:
+        data = json.loads(target_path.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return False
+    return isinstance(data, dict) and "sops" in data
+
+
+def _enforce_no_raw_edits_to_encrypted_files(phases: list[dict], project_dir: str) -> str | None:
+    """Post-breakdown guard: refuse any non-verify_only, non-git item whose
+    target is a sops-encrypted file.
+
+    Found for real 2026-08-19: an "investigate the openclaw 401" item's
+    target was .secret/secrets.json but it wasn't marked verify_only, so
+    Tier 4/3/2 each tried to DRAFT/PATCH the file via the normal
+    edit_blocks.py SEARCH/REPLACE mechanism -- text-editing sops ciphertext
+    invalidated the file's MAC (its cryptographic authentication tag),
+    corrupting it, even though the underlying encrypted values were
+    untouched (recovered via `sops -d --ignore-mac`, re-encrypted fresh).
+    No tier should ever be handed an encrypted file to draft/patch as if
+    it were an ordinary text file -- any legitimate change to one must go
+    through `sops set`/`--set` inside an explicit, immutable build_cmd on
+    a verify_only item (the working pattern this same plan's Phase 1 used
+    correctly for the same file), never a drafted content replacement."""
+    for phase in phases:
+        for item in phase["items"]:
+            if "git" in item or item.get("verify_only"):
+                continue
+            target_path = Path(project_dir) / item["target"]
+            if not target_path.exists():
+                continue
+            if _is_sops_encrypted_file(target_path):
+                return (
+                    f"Error: {item['target']} is a sops-encrypted file -- it cannot be a "
+                    "draft/patch target for any tier (text-editing ciphertext corrupts its "
+                    "MAC). Rephrase this item as verify_only: true with the actual change "
+                    "expressed as a 'sops set'/'--set' shell command inside build_cmd instead."
+                )
     return None
 
 
@@ -569,6 +678,13 @@ def breakdown_plan(state: dict) -> dict:
 
     chunks = _split_plan_by_phase(state["plan_text"])
     already_done = len(state["breakdown"]["phases"])
+    # Only run the post-breakdown guards when this call actually assembled
+    # new phases (CARRYOVER.md item #1): on a resume of an already-fully-
+    # populated breakdown, `already_done` equals `len(chunks)` at entry, and
+    # re-running the guards could retroactively block the resume because a
+    # later unrelated item (e.g. AGENTS.md's size) drifted past a guard's
+    # threshold since the original breakdown.
+    newly_broken_down = already_done < len(chunks)
 
     for i, chunk in enumerate(chunks):
         if i < already_done:
@@ -588,16 +704,27 @@ def breakdown_plan(state: dict) -> dict:
             f"{result['phase']['name']} ({len(result['phase']['items'])} item(s))"
         )
 
-    reorder_error = _enforce_module_import_order(state["breakdown"]["phases"], state["project_dir"])
-    if reorder_error is not None:
-        log.error("Module import order guard failed: %s", reorder_error)
-        return {"status": "error", "reason": reorder_error}
+    # CARRYOVER.md item #1: these guards run only on fresh chunk-to-phase
+    # assembly, not on resume of an already-fully-populated breakdown -- a
+    # later unrelated item drifting past a guard's threshold must not
+    # retroactively block a resume (real incident: AGENTS.md's size).
+    if newly_broken_down:
+        reorder_error = _enforce_module_import_order(state["breakdown"]["phases"], state["project_dir"])
+        if reorder_error is not None:
+            log.error("Module import order guard failed: %s", reorder_error)
+            return {"status": "error", "reason": reorder_error}
 
-    size_error = _enforce_file_size_ceiling(state["breakdown"]["phases"], state["project_dir"])
-    if size_error is not None:
-        log.error("File size ceiling guard failed: %s", size_error)
-        return {"status": "error", "reason": size_error}
-    save_run(state)
+        size_error = _enforce_file_size_ceiling(state["breakdown"]["phases"], state["project_dir"])
+        if size_error is not None:
+            log.error("File size ceiling guard failed: %s", size_error)
+            return {"status": "error", "reason": size_error}
+
+        encrypted_edit_error = _enforce_no_raw_edits_to_encrypted_files(
+            state["breakdown"]["phases"], state["project_dir"])
+        if encrypted_edit_error is not None:
+            log.error("Encrypted-file edit guard failed: %s", encrypted_edit_error)
+            return {"status": "error", "reason": encrypted_edit_error}
+        save_run(state)
 
     total_items = sum(len(p["items"]) for p in state["breakdown"]["phases"])
     log.info("Breakdown ok: %d phase(s), %d item(s) total", len(state["breakdown"]["phases"]), total_items)
@@ -886,8 +1013,28 @@ def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> di
     return result
 
 
+def _is_deepseek_peak_hours(now_utc: time.struct_time | None = None) -> bool:
+    """True when the given UTC time (default: now) is inside DeepSeek's peak
+    billing window (06:00-10:00 UTC). Used by handle_fix_forward to warn about
+    expensive Tier 3 escalations."""
+    now_utc = now_utc or time.gmtime()
+    return DEEPSEEK_PEAK_HOURS_UTC[0] <= now_utc.tm_hour < DEEPSEEK_PEAK_HOURS_UTC[1]
+
+
 def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> None:
-    """Invokes Tier 3 to apply the design judge's refactor instructions directly."""
+    """Invokes Tier 3 to apply the design judge's refactor instructions directly.
+
+    Note: Tier 3 (tier3_escalate) uses DeepSeek, which charges a higher rate
+    during peak billing hours 06:00-10:00 UTC. This is called from the design
+    judge's rejection path only, so the added cost is scoped to items that
+    already failed design review.
+    """
+    if _is_deepseek_peak_hours():
+        log.warning(
+            "[%s] Tier 3 is in DeepSeek peak billing hours (06:00-10:00 UTC); "
+            "fix-forward escalation may be expensive",
+            task_id,
+        )
     log.info("[%s] Design check failed. Running fix-forward...", task_id)
     target_path = Path(state["project_dir"]) / item["target"]
     target_hash = hashlib.sha256(str(target_path).encode()).hexdigest()
@@ -1044,6 +1191,7 @@ def dispatch(state: dict) -> dict:
                             workdir=state["project_dir"],
                             build_cmd=build_cmd,
                             context_files=item.get("context_files") or [],
+                            skip_tier4=item.get("skip_tier4", False),
                         )
                     except requests.exceptions.RequestException as e:
                         result = {"status": "error", "reason": str(e), "resolved_by": None}

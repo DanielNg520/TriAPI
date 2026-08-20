@@ -289,3 +289,125 @@ When an operation pauses, unloads, or mutates external service state for the dur
 - **Defer expensive or side-effecting failure handling until after restoration.** Do not queue follow-up work (e.g. self-fix) while external services are still paused; restore the environment first, then process failures.
 
 This pattern prevents resource leaks, makes recovery behavior explicit, and keeps the external environment deterministic no matter whether the main work succeeds, fails, or crashes.
+
+### Pre-Flight Resource-Ceiling Guards at Pipeline Boundaries
+
+Before dispatching work to a downstream AI tier, validate each planned unit of work against that tier's known hard resource limits. If a single item already exceeds the downstream context/window ceiling (before any new content is even added), fail the whole breakdown early with a clear, actionable error instead of letting the run start and stall or corrupt later.
+
+- **Identify the source of truth for the limit** and derive the check from it: `TIER4_MAX_CONTEXT_CHARS = 24576 * 3` documents both the tier config value and why `* 3` (token→char conservative floor), pointing at the exact call that sets the real limit.
+- **Check the ground truth you actually have at planning time**: only the existing file size is known before dispatch, so only flag files already over the ceiling; don't guess at diff sizes. The comment explicitly says files that would tip over after new content are *not* flagged because that data isn't available yet.
+- **Fail fast at the earliest safe checkpoint**: the guard runs immediately after phase breakdown and alongside other structural guards (module import order), before any item is dispatched—so the cost is a cheap read, not a long retrying worker run.
+- **Return one structured, human-actionable message** naming the offending target, its current size, the ceiling, and what to do: "breakdown must split this file's work differently or route it elsewhere."
+- **Skip items the guard doesn't apply to**: git actions are excluded; nonexistent targets are skipped.
+
+This pattern generalizes beyond file size: whenever your executor has a hard constraint (context window, time limit, RPM, memory), surface violations at the planning/breakdown boundary rather than discovering them mid-execution after expensive work has already been done.
+
+### Pre-Dispatch Constraint Validation Against Downstream Execution Limits
+
+When a generated plan/checklist will be executed by a resource-constrained worker, validate every item against that worker's real execution limits **before dispatch begins**, not after expensive work has started.
+
+This diff adds a post-breakdown guard that refuses to dispatch any file item whose existing size already exceeds the Tier 4 context-window ceiling. The pattern:
+
+- **Derive the limit from the actual downstream configuration** (`TIER4_MAX_CONTEXT_CHARS = 24576 * 3` from `tier4_worker.py`'s `num_ctx`) and document the source of truth in a comment.
+- **Validate only what is knowable at this stage.** The guard checks existing file size, not the unknown future diff size, so it avoids false failures based on speculation. Non-existent targets are skipped; git items are skipped.
+- **Fail fast with an actionable error.** The message names the target file, the measured size, the ceiling, and what must change ("split this file's work differently or route it elsewhere") rather than silently proceeding into a doomed task.
+- **Run the guard at the completion of a generation/transformation step**, before the state is marked successful, so a bad plan is caught as a hard error instead of surfacing halfway through execution as a confusing runtime failure.
+
+General lesson: before handing generated work to a limited downstream system, add a cheap static preflight check for the constraint that would make the work impossible. A few lines of validation can prevent an entire long-running, retry-heavy pipeline from wasting effort on a task that could never succeed.
+
+### Non-retryable failures should bypass the retry threshold and escalate immediately
+
+When a system uses a consecutive-failure counter to decide when to escalate, not all failures should consume the same retry budget. Some failures are *known to be permanent for the current attempt* — retrying with the same inputs will almost certainly produce the same invalid result (e.g. a code-generation guard rejected the output as oversized, a malformed/unparseable response, a content-safety rejection). Counting these as ordinary retryable failures burns attempts, delays escalation, and can stall an unattended pipeline.
+
+The pattern is to explicitly classify such failures as **non-retryable** at the failure-handling call site, and have the failure handler apply an **effective escalation threshold of 1** for those cases. This keeps all the existing bookkeeping (recording the failure, preserving state, emitting logs) while ensuring the process escalates immediately instead of looping.
+
+Key implementation guidance:
+
+- Add a boolean flag/parameter to the shared failure handler, e.g. `is_oversize_failure: bool = False`.
+- When the flag is true, compute `effective_threshold = 1` instead of using the configured retry threshold.
+- Always record the failure in state/logs first; only the escalation decision changes.
+- Use the flag only for failure classes where another identical attempt is known to be futile.
+- This composes cleanly with existing retry logic: normal failures still escalate only after the configured consecutive-failure threshold.
+
+```python
+def _tier4_fail(task_id, threshold, reason, is_oversize_failure=False):
+    effective_threshold = 1 if is_oversize_failure else threshold
+    state = record_failure(task_id, reason)
+    status = "escalate" if state["consecutive_failures"] >= effective_threshold else "build_failed"
+    return {"status": status, "consecutive_failures": state["consecutive_failures"], "stderr": reason}
+```
+
+This prevents an unattended automation loop from wasting N expensive retries on a condition that retrying cannot fix.
+
+### Classify failures as "retryable" vs. "will never succeed on retry" and escalate unrecoverable ones immediately
+
+Some failures are not transient — retrying with the same inputs will predictably fail again (e.g., a model response truncated mid-generation because it hit a length/cap limit, or a tool that is fundamentally incompatible). These should not be fed into the normal consecutive-failure counter; they should escalate on the first occurrence.
+
+In practice:
+
+- Add a category/flag to the failure-handling path (e.g. `is_oversize_failure`) that overrides the retry threshold to `1`.
+- Use it only for failures that indicate a structural limit, not for ordinary build errors or slow requests.
+- Refuse to write partial/truncated artifacts (e.g. an unterminated code fence) even if the content guard has nothing to compare against (e.g. brand-new files). A truncated response is a failed attempt, never a fallback source.
+- Log the failure reason alongside the escalation so operators can distinguish "model hit a hard output limit" from "build still broken after N attempts."
+
+This prevents an unattended system from burning retry attempts on an unrecoverable condition, and makes the status semantics honest: `build_failed` means "a retry may help," while `escalate` means "stop retrying, this needs a different approach."
+
+### Treat optional external backends as degraded capacity, not fatal failures
+
+When a system can use several interchangeable external providers, one unhealthy provider must not take down the whole discovery/selection path. Treat each backend as optional capacity: catch its errors, log a warning, skip it, and continue with whatever healthy providers remain.
+
+Add a regression test that simulates the failure mode directly:
+
+- Monkeypatch the HTTP client (`mock.patch("httpx.get", side_effect=...)`) so the test never touches the network.
+- Return a fake response with the desired status code (`401`) and implement just enough of the response interface (`raise_for_status()`, `.json()`).
+- Leave unrelated URLs returning empty-but-valid responses.
+- Assert three things:
+  1. The operation still completes and returns a usable result (it does not raise/abort).
+  2. The failed backend contributes zero results/models.
+  3. The failure is surfaced as a warning, not swallowed silently.
+
+This pattern keeps the suite offline and deterministic while locking in graceful-degradation behavior, preventing regressions where a retired token, decommissioned gateway, or misconfigured optional provider makes the whole assistant unusable.
+
+```python
+class _FakeHttpxResponse:
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self.payload = payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self.payload
+
+def _fake_httpx_get(url, *args, **kwargs):
+    if "openclaw" in str(url):
+        return _FakeHttpxResponse(401, {"error": "unauthorized"})
+    return _FakeHttpxResponse(200, {"models": [], "data": []})
+
+with mock.patch("httpx.get", side_effect=_fake_httpx_get):
+    with mock.patch("ohmyllama.catalog.log.warning") as warn:
+        discovered = discover(_Cfg)
+
+check("openclaw 401 does not abort discovery", isinstance(discovered, list), True)
+check("openclaw 401 contributes zero ModelCards",
+      any(c.backend == "openclaw" for c in discovered), False)
+check("openclaw 401 is logged as a warning", ...)
+```
+
+General guideline: every optional integration should have an explicit “this backend failed” path, and that path should be tested with a stub that returns the exact failure it must survive.
+
+### Make post-validation guardrails path-aware, not binary blockers
+
+When a validation guard rejects an item, ask whether the rejection reflects a fundamental invariant or just a limitation of one execution path. Shape the guard to route around the limitation, exempt legitimate inverse operations, and return actionable remediation when the artifact type demands a different mechanism.
+
+**Key tactics from this change:**
+
+- **Downgrade hard failures to routing hints when an alternative path exists.** An oversized file was previously a breakdown-blocking error because Tier 4's local context window couldn't hold it. The guard now sets `skip_tier4=True` so `run_task()` routes that item to Tier 3/2's larger cloud context, and appends an explicit "split this file" instruction to the item description so the work still reduces the size.
+
+- **Whitelist the legitimate exception.** A package split must be able to retire the original oversized flat file, so a delete/remove item whose description names the target's filename is exempt from the size-ceiling guard. The exemption is narrow: the delete verb must occur near the target filename, preventing ordinary edit items from slipping through.
+
+- **Use guards to enforce the correct tool, not just to say "no".** Sops-encrypted files must never be drafted/patched by an AI tier because SEARCH/REPLACE on ciphertext corrupts the MAC. The guard refuses such items but tells the caller the correct shape: make it `verify_only: true` and express the change as an immutable `sops set`/`--set` shell command in `build_cmd`.
+
+- **Don't re-run creation-time guards on resume.** Post-breakdown guards now run only when `newly_broken_down` is true. Re-running them on an already-populated breakdown would let unrelated drift (e.g. AGENTS.md growing) retroactively block a resumable run that was valid when it was created. Validation should be anchored to the moment the state was produced, not re-litigated under later conditions.

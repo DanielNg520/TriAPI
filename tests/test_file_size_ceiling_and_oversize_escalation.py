@@ -1,8 +1,10 @@
 """Regression tests for the Tier 4 file-size ceiling guard and oversize
 (timeout / truncated-response) escalation shortcut.
 
-Covers scripts.dispatcher._enforce_file_size_ceiling (rejects a plan item
-targeting a file already at/over TIER4_MAX_CONTEXT_CHARS on disk) and
+Covers scripts.dispatcher._enforce_file_size_ceiling (marks a plan item
+targeting a file already at/over TIER4_MAX_CONTEXT_CHARS on disk to skip
+Tier 4 and go straight to Tier 3, with an appended instruction to shrink
+the file rather than just patch it in place) and
 scripts.tier4_worker._tier4_fail's is_oversize_failure fast-path, which
 escalates a timeout or truncated-response failure after exactly 1
 consecutive failure instead of the normal 2.
@@ -15,7 +17,13 @@ from unittest import mock
 
 from scripts.tier4_worker import run
 from scripts.state import clear_state
-from scripts.dispatcher import _enforce_file_size_ceiling, TIER4_MAX_CONTEXT_CHARS
+from scripts.dispatcher import (
+    _enforce_file_size_ceiling,
+    _item_deletes_target_file,
+    _split_plan_by_phase,
+    TIER4_MAX_CONTEXT_CHARS,
+    breakdown_plan,
+)
 
 
 TIER4_CONFIG = {
@@ -42,14 +50,86 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
             clear_state(task_id)
         self.temp_dir.cleanup()
 
+    def _write_large_file(self, path: Path, size: int) -> None:
+        with open(path, "w") as f:
+            f.write("a" * size)
+
+    def test_enforce_file_size_ceiling_does_not_block_fully_broken_down_state(self):
+        self._write_large_file(self.target_path, TIER4_MAX_CONTEXT_CHARS + 1000)
+        state = {
+            "plan_text": "# Phase\n- [ ] Edit test_file.cpp to add a new method.",
+            # project_dir is part of the persisted run state and is required by
+            # breakdown_plan to resolve target paths.
+            "project_dir": str(self.repo_root),
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "p",
+                        "items": [
+                            {
+                                "target": "test_file.cpp",
+                                "description": "Edit test_file.cpp to add a new method.",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+        phases = state["breakdown"]["phases"]
+        self.assertEqual(len(phases), len(_split_plan_by_phase(state["plan_text"])))
+
+        # Already fully broken down: no fresh chunk-to-phase assembly happens,
+        # so the ceiling guard must not run at all (not even to re-mark a
+        # stored item). Patching it to fail proves the already-broken-down
+        # path never consults it.
+        with mock.patch(
+            "scripts.dispatcher._enforce_file_size_ceiling",
+            side_effect=AssertionError(
+                "ceiling guard must not run on an existing breakdown"
+            ),
+        ) as ceiling:
+            result = breakdown_plan(state)
+        self.assertEqual(result, {"status": "ok"})
+        ceiling.assert_not_called()
+        stored_item = state["breakdown"]["phases"][0]["items"][0]
+        self.assertNotIn("skip_tier4", stored_item)
+
+    def test_enforce_file_size_ceiling_still_fires_on_initial_breakdown(self):
+        self._write_large_file(self.target_path, TIER4_MAX_CONTEXT_CHARS + 1000)
+        state = {
+            "plan_text": "# Phase\n- [ ] Edit test_file.cpp to add a new method.",
+            "project_dir": str(self.repo_root),
+            "breakdown": None,
+        }
+        phases = [
+            {
+                "name": "p",
+                "items": [
+                    {
+                        "target": "test_file.cpp",
+                        "description": "Edit test_file.cpp to add a new method.",
+                    }
+                ],
+            }
+        ]
+        self.assertEqual(len(phases), len(_split_plan_by_phase(state["plan_text"])))
+
+        # Fresh initial breakdown: the guard must still fire. It reports
+        # success by returning None; firing is observable through the
+        # skip_tier4 marker on the oversized item, not through a non-None
+        # return value.
+        result = _enforce_file_size_ceiling(phases, state["project_dir"])
+        self.assertIsNone(result)
+        item = phases[0]["items"][0]
+        self.assertTrue(item["skip_tier4"])
+        self.assertIn("test_file.cpp", item["description"])
+        self.assertIn(str(TIER4_MAX_CONTEXT_CHARS + 1000), item["description"])
+        self.assertIn("split it into cohesive smaller files", item["description"])
+
     def _task_id(self, name: str) -> str:
         self.task_ids.append(name)
         clear_state(name)
         return name
-
-    def _write_large_file(self, path: Path, size: int) -> None:
-        with open(path, "w") as f:
-            f.write("a" * size)
 
     def _run_with_mocks(self, task_id: str, run_build_return=None, extract_code_return="__unset__"):
         patches = [
@@ -74,12 +154,19 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
     def _phases(self, target: str) -> list[dict]:
         return [{"name": "p", "items": [{"target": target}]}]
 
-    def test_enforce_file_size_ceiling_rejects_existing_large_file(self):
+    def _phases_with_desc(self, target: str, description: str) -> list[dict]:
+        return [{"name": "p", "items": [{"target": target, "description": description}]}]
+
+    def test_enforce_file_size_ceiling_marks_skip_tier4_for_existing_large_file(self):
         self._write_large_file(self.target_path, TIER4_MAX_CONTEXT_CHARS + 1000)
-        error = _enforce_file_size_ceiling(self._phases("test_file.cpp"), str(self.repo_root))
-        self.assertIsNotNone(error)
-        self.assertIn("test_file.cpp", error)
-        self.assertIn(str(TIER4_MAX_CONTEXT_CHARS + 1000), error)
+        phases = self._phases_with_desc("test_file.cpp", "Edit test_file.cpp to add a new method.")
+        result = _enforce_file_size_ceiling(phases, str(self.repo_root))
+        self.assertIsNone(result)
+        item = phases[0]["items"][0]
+        self.assertTrue(item["skip_tier4"])
+        self.assertIn("test_file.cpp", item["description"])
+        self.assertIn(str(TIER4_MAX_CONTEXT_CHARS + 1000), item["description"])
+        self.assertIn("split it into cohesive smaller files", item["description"])
 
     def test_enforce_file_size_ceiling_ignores_small_existing_file(self):
         self._write_large_file(self.target_path, TIER4_MAX_CONTEXT_CHARS - 1000)
@@ -89,6 +176,52 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
     def test_enforce_file_size_ceiling_ignores_nonexistent_file(self):
         result = _enforce_file_size_ceiling(self._phases("nonexistent_file.cpp"), str(self.repo_root))
         self.assertIsNone(result)
+
+    def test_enforce_file_size_ceiling_exempts_deletion_of_oversized_file(self):
+        # A package-split plan's retirement step must be able to delete the
+        # very file whose size tripped the guard -- otherwise the fix for
+        # an oversized file could never be dispatched.
+        self._write_large_file(self.target_path, TIER4_MAX_CONTEXT_CHARS + 1000)
+        phases = self._phases_with_desc(
+            "test_file.cpp",
+            "Delete the old test_file.cpp file once the package replaces it.",
+        )
+        result = _enforce_file_size_ceiling(phases, str(self.repo_root))
+        self.assertIsNone(result)
+
+    def test_enforce_file_size_ceiling_does_not_mark_deletion_item(self):
+        # A deletion item on an oversized file is exempt outright -- it
+        # doesn't need Tier 3/2 routing at all (verify_only items never
+        # reach run_task/Tier 4 in the first place), and marking it would
+        # be meaningless since there's no content left to shrink.
+        self._write_large_file(self.target_path, TIER4_MAX_CONTEXT_CHARS + 1000)
+        phases = self._phases_with_desc(
+            "test_file.cpp",
+            "Delete the old test_file.cpp file once the package replaces it.",
+        )
+        result = _enforce_file_size_ceiling(phases, str(self.repo_root))
+        self.assertIsNone(result)
+        self.assertNotIn("skip_tier4", phases[0]["items"][0])
+
+    def test_item_deletes_target_file_requires_verb_near_filename(self):
+        deletes = {
+            "target": "ohmyllama/state.py",
+            "description": "Delete the old ohmyllama/state.py file once the package replaces it.",
+        }
+        edits = {
+            "target": "ohmyllama/state.py",
+            "description": "Edit ohmyllama/state.py to add a new method.",
+        }
+        far_mention = {
+            "target": "ohmyllama/state.py",
+            "description": (
+                "Delete the stale cache directory. " + ("x" * 200) +
+                " Separately, also touch ohmyllama/state.py."
+            ),
+        }
+        self.assertTrue(_item_deletes_target_file(deletes))
+        self.assertFalse(_item_deletes_target_file(edits))
+        self.assertFalse(_item_deletes_target_file(far_mention))
 
     def test_tier4_timeout_failure_escalates_after_one_consecutive_failure(self):
         task_id = self._task_id("timeout_task")
