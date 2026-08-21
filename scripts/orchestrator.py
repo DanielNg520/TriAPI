@@ -282,7 +282,7 @@ def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
     return {"status": "human_handoff", "resolved_by": None, "cost_report": cost_rep}
 
 
-def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None, skip_tier4: bool = False) -> dict:
+def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None, skip_tier4: bool = False, single_api_mode: bool = False) -> dict:
     config = load_tiers()
     build_cmd = build_cmd or " && ".join(config["tier_4_worker"]["build_commands"])
 
@@ -297,6 +297,11 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     # guessing. Content is fixed per item, so this is fine to reuse across
     # Tier 4 retries and every escalation tier without re-reading each time.
     context_blob = build_context_blob(context_files or [], workdir)
+
+    if single_api_mode:
+        log.info("[%s] single_api_mode enabled; delegating to single_api_worker", task_id)
+        from scripts import single_api_worker
+        return single_api_worker.run(task_id, description, target, workdir, build_cmd, context_blob, config, single_api_mode)
 
     resolved_by = None
     log.info("[%s] run_task starting: target=%s workdir=%s context_files=%s skip_tier4=%s", task_id, target, workdir, context_files, skip_tier4)

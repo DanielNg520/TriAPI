@@ -886,6 +886,7 @@ def new_run(prompt: str, project_dir: str) -> dict:
         "prompt": prompt,
         "project_dir": str(Path(project_dir).resolve()),
         "status": "planning",
+        "single_api_mode": False,
         "plan_text": None,
         "breakdown": None,
         "results": [],
@@ -1132,6 +1133,7 @@ def dispatch(state: dict) -> dict:
     phases = state["breakdown"]["phases"]
     state["status"] = "dispatching"
     state.setdefault("regression_flags", [])
+    state["single_api_mode"] = state.get("single_api_mode", False) or os.environ.get("TRIAPI_SINGLE_API") == "1"
 
     if _recheck_regression_flags(state):
         state["status"] = "stopped_on_failure"
@@ -1201,6 +1203,7 @@ def dispatch(state: dict) -> dict:
                             build_cmd=build_cmd,
                             context_files=item.get("context_files") or [],
                             skip_tier4=item.get("skip_tier4", False),
+                            single_api_mode=state.get("single_api_mode", False),
                         )
                     except requests.exceptions.RequestException as e:
                         result = {"status": "error", "reason": str(e), "resolved_by": None}

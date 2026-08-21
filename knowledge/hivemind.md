@@ -411,3 +411,232 @@ When a validation guard rejects an item, ask whether the rejection reflects a fu
 - **Use guards to enforce the correct tool, not just to say "no".** Sops-encrypted files must never be drafted/patched by an AI tier because SEARCH/REPLACE on ciphertext corrupts the MAC. The guard refuses such items but tells the caller the correct shape: make it `verify_only: true` and express the change as an immutable `sops set`/`--set` shell command in `build_cmd`.
 
 - **Don't re-run creation-time guards on resume.** Post-breakdown guards now run only when `newly_broken_down` is true. Re-running them on an already-populated breakdown would let unrelated drift (e.g. AGENTS.md growing) retroactively block a resumable run that was valid when it was created. Validation should be anchored to the moment the state was produced, not re-litigated under later conditions.
+
+### Parameterize a method for analogous endpoints instead of adding a sibling method
+
+When a method wraps an external API and a second endpoint provides the same logical operation, add an optional mode parameter to the existing method rather than copying it.
+
+- **Preserve the existing contract.** `warm()` stayed `warm()` and kept returning `bool`; existing callers were unaffected.
+- **Default to old behavior.** `is_embedding: bool = False` keeps `/api/generate` as the default path.
+- **Mirror the existing sibling call.** The new branch posts the same `model`/`prompt`/`keep_alive` body to `/api/embeddings`, matching `embed()` instead of inventing a new request shape.
+- **Keep failure semantics.** The method still returns `False` on any exception; a failed warm-up is not a reason to fail the caller.
+- **Document the mode.** The docstring states exactly what `is_embedding=True` does and which endpoint is used.
+
+This is the "one method, one contract, explicit mode" pattern. Avoid a bare boolean if you expect more than two variants; use an enum or strategy then. For exactly two stable variants, a well-documented optional boolean is simpler than duplicated wrapper methods.
+
+### Preserve Role Metadata When Operating on a Heterogeneous Resource Set
+
+When a loop or utility operates on a collection of resources that look alike but behave differently, do not flatten them into a plain list of identifiers. Carry each item’s role/type alongside it, and pass that role into the shared operation.
+
+**Context:** `_hot_models()` returns a flat list of local models to warm. The list mixes generative/chat/router models with one embedding model. Warming an embedding model requires different client semantics (`is_embedding=True`), so applying the identical `warm()` call to every entry is subtly wrong: the embedding model is treated as though it were a chat model, which can break preloading or cause the wrong model behavior at request time.
+
+**Pattern:**
+- Model the collection as entries that include their kind, e.g. `(model_name, "embedding")` or `(model_name, is_embedding=True)`.
+- Have the caller, which knows the role, pass the role-specific flag explicitly to the operation.
+- Avoid inferring the role inside the generic routine via string matching on names or other brittle heuristics.
+- Keep the shared operation generic, but make it role-aware through parameters.
+
+**Example:**
+
+```python
+# Before: every model warmed identically; embedding model loses its type.
+for model in self._hot_models():
+    sync_llm.warm(model, keep_alive=cfg.model_keep_alive)
+
+# After: role metadata survives the collection.
+for model, is_embedding in self._hot_models_with_roles():
+    sync_llm.warm(model, keep_alive=cfg.model_keep_alive, is_embedding=is_embedding)
+```
+
+This applies beyond model warming: any preloading, health-check, configuration, or batching loop over a mixed set should preserve the per-item category that changes how the operation must be performed.
+
+### Fail Fast on Missing Secrets and Prefer Loopback Bindings by Default
+
+- **Never hardcode secrets in source code.** Load secrets from environment variables (or a secure secret manager) and fail fast at startup if they are missing:
+  ```js
+  if (!process.env.OPENCLAW_WEBHOOK_SECRET) {
+    throw new Error('OPENCLAW_WEBHOOK_SECRET environment variable is not set');
+  }
+  ```
+  This prevents accidental deployment with known/default credentials and makes configuration explicit.
+
+- **Default network bindings to localhost (`127.0.0.1`), not `0.0.0.0`.** Exposing a service on all interfaces by default increases the attack surface. Bind to loopback by default and allow an environment variable to opt into broader exposure:
+  ```js
+  fastify.listen(PORT, process.env.OPENCLAW_WEBHOOK_HOST || '127.0.0.1', ...)
+  ```
+  This keeps the service safe by default while still supporting intentional remote exposure.
+
+- **Combine both practices for secure webhook/sidecar services.** A webhook listener should require a strong shared secret and should not be publicly reachable unless explicitly configured. Failing fast at boot gives immediate feedback and avoids silently running in an insecure state.
+
+### Prefer Least-Privilege OAuth Scopes and Never Hardcode Secrets
+
+When integrating with external APIs or setting up local auth flows:
+
+- Request only the minimal permissions needed for the feature. Prefer fine-grained scopes like `gmail.readonly` over broad, risky scopes like full mailbox access (`mail.google.com`).
+- Never hardcode secrets such as session keys, API keys, or passwords in source code. Load them from environment variables or a secure secrets manager.
+- Validate required environment variables early and fail fast with a clear error message if they are missing, rather than silently using insecure defaults.
+- This pattern reduces security risk, prevents accidental credential leakage, and makes deployments safer and more portable.
+
+Applying this to the OAuth/Express flow means changing both the permission scope and the session secret configuration together: the app only gets read-only access it actually needs, and the session middleware uses a configurable secret instead of a known public default.
+
+### Always Call `super()` in Derived Class Constructors Before Accessing `this`
+
+In JavaScript, when a subclass defines its own `constructor`, it must call `super()` before using `this` or returning an object. This applies even if the base class has no explicit constructor or only uses the default constructor.
+
+**Pattern:**
+```js
+class Base {
+  constructor() {
+    // optional base initialization
+  }
+}
+
+class Derived extends Base {
+  constructor(...args) {
+    super(); // required before `this`
+    this.args = args;
+  }
+}
+```
+
+**Lesson from the diff:**  
+All derived dispatcher classes were missing `super()` in their constructors. Adding `super()` ensures the base class is properly initialized and prevents runtime `ReferenceError: Must call super constructor in derived class before accessing 'this'`.
+
+**Best practice:**  
+Whenever you define a constructor in a subclass, explicitly invoke `super()` as the first statement—even if the base class appears to need no setup. This makes the inheritance contract clear and avoids fragile assumptions about JavaScript's implicit behavior.
+
+### Externalize Environment-Specific Infrastructure Configuration
+
+Do not hardcode host-specific paths, sockets, ports, or credentials. Read them from environment variables with sensible defaults so the same code runs across different machines, users, and deployment environments.
+
+```js
+const docker = new Docker({
+  socketPath: process.env.OPENCLAW_PODMAN_SOCKET || '/run/user/1001/podman/podman.sock'
+});
+```
+
+**Why this matters:**
+- Avoids coupling code to one developer's machine or one host's user ID.
+- Makes CI, containers, and multi-user systems work without code changes.
+- Keeps a working default for simple local usage while allowing explicit overrides.
+
+**Best practice:**
+- Define one environment variable per configurable infrastructure detail.
+- Use a clear, project-specific variable name (e.g., `OPENCLAW_PODMAN_SOCKET`).
+- Provide a default only when it is safe and convenient; otherwise require the variable to be set explicitly.
+- Document supported variables and their fallback behavior.
+
+### Never Hardcode Secrets; Inject Them via Environment Variables
+
+Replace placeholder or hardcoded API keys with values read from environment variables (e.g., `process.env.OPENAI_API_KEY`). This prevents credentials from being committed to source control, reduces the risk of accidental exposure, and makes configuration environment-specific without code changes.
+
+**Key practices:**
+- Use environment variables for all secrets, tokens, and credentials.
+- Provide clear names with a consistent prefix (e.g., `OPENAI_API_KEY`).
+- Commit only `.env.example` files with placeholder names, never real `.env` files.
+- Validate that required secrets are present at startup and fail fast with a helpful message if missing.
+- Treat committed secrets as compromised: rotate them immediately.
+
+### Externalize Configuration and Fail Fast on Missing Secrets
+
+Replace hardcoded API keys, credentials, and provider base URLs with environment variables. Before making any external call, validate that the required configuration exists and throw a descriptive error if it is missing.
+
+**Benefits:**
+- Avoids committing secrets and environment-specific URLs to source control.
+- Makes the service deployable across environments without code changes.
+- Fails fast with a clear message instead of failing later with an obscure HTTP/auth error.
+- Gives operators immediate feedback about missing configuration.
+
+**Implementation pattern:**
+```js
+async function braveSearch(query) {
+    const apiKey = process.env.BRAVE_SEARCH_API_KEY;
+    if (!apiKey) {
+        throw new Error('BRAVE_SEARCH_API_KEY is not set');
+    }
+    // Proceed with the API call using the validated config
+}
+```
+
+Apply the same pattern consistently to every external integration: read config from `process.env`, validate it, then use it.
+
+### Keep Enum/Registry Test Expectations Explicit, but Avoid Duplicated Magic Numbers
+
+When adding a new member to a finite set of allowed values (e.g. intent kinds, command names, event types), update the test that acts as a manifest for that set. This diff shows the required chore: increment the declared-count assertion and add the new value to the membership list.
+
+However, hard-coding the count (`len(INTENT_KINDS) == 20`) is brittle and easy to forget. A more maintainable pattern is to define the canonical expected set once and derive both the count and membership checks from it:
+
+```python
+EXPECTED_KINDS = {
+    "chat", "remember_fact", "recall_memory", "unknown",
+    "create_reminder", "check_reminders", "run_command",
+    "ingest_document", "trigger_n8n", "write_file",
+    "list_mail", "trash_mail", "list_calendar_events",
+    "create_calendar_event", "delete_calendar_event",
+    "ghostwriter", "browser_action",
+    # ...
+}
+
+assert set(INTENT_KINDS) == EXPECTED_KINDS          # fails with a clear diff on new/removed kinds
+assert len(INTENT_KINDS) == len(EXPECTED_KINDS)     # no separate magic number to maintain
+```
+
+This turns the test into a single source of truth for “which values are legal today,” makes the change in the diff a one-line update, and prevents drift between count assertions and membership lists.
+
+General guideline: when validating a closed set of values, prefer comparing whole sets to an expected set over maintaining separate count and membership assertions. If the set is intentionally extensible, at least keep the test’s expected values centralized so adding a variant requires editing only one obvious place.
+
+### Centralize Mode Configuration in the Same Source of Truth as Pipeline Logic
+
+When introducing a new execution mode (e.g. a `single_api_mode` that bypasses the normal tiered pipeline), define it in the central config file alongside the existing pipeline definitions instead of scattering flags, retry counts, or allowed providers across scripts. This keeps one authoritative place for operational decisions and makes the mode switch discoverable and auditable.
+
+Concretely:
+
+- Declare explicit allowed values (e.g. `allowed_backends: ["gemini", "claude", "deepseek"]`) so validation and future changes live in data, not in code branches.
+- Co-locate related runtime parameters (e.g. `max_retries`) with the mode definition so the mode is self-describing.
+- Preserve the config file's role as the single source of truth by having scripts *read* these values rather than hardcoding their own defaults.
+- Use comments to explain *why* the mode exists and any operational constraints, so future readers understand the intended behavior without reverse-engineering call sites.
+
+### Propagate per-invocation CLI modes through re-exec boundaries (background/detached children)
+
+When a CLI accepts a mode flag that must also apply to a child process it spawns—especially a detached/background re-exec of the same CLI—propagate it in two complementary ways:
+
+1. **Set an environment variable in the parent before spawning.** Environment variables are inherited by child processes, so the mode survives the re-exec into the detached child even though the original CLI flags are not present in the child’s command line.
+
+2. **Reconstruct the child argv to include the same flag explicitly.** This keeps the spawned process self-documenting in process listings/logs, makes the mode robust even if environment propagation is later changed, and lets the child re-assert the environment variable on startup.
+
+Also validate mutually exclusive flags at argument-parse time (`parser.error(...)`) rather than deeper in business logic, so invalid combinations fail fast before any process is spawned or state is mutated.
+
+In the diff, `--single-api` sets `TRIAPI_SINGLE_API=1` in `cmd_dispatch` before the `--background` branch spawns the detached child. The child command is built as `[sys.executable, script, "dispatch", run_id]`, and `--single-api` is appended when needed. The parser rejects `--single-api --no-tier1` as redundant before dispatch starts.
+
+### Canonicalize Configuration Flags into Run State at a Single Entry Point
+
+When adding a mode/feature flag that can come from multiple sources (CLI, env var, persisted state), do not let each call site interpret the sources independently. Instead:
+
+1. **Initialize the flag with a safe default in the state constructor** (`new_run`): `"single_api_mode": False`.
+2. **Canonicalize it exactly once at the start of the main execution path** (`dispatch`), merging the persisted value and the environment override:
+   ```python
+   state["single_api_mode"] = state.get("single_api_mode", False) or os.environ.get("TRIAPI_SINGLE_API") == "1"
+   ```
+3. **Thread the canonicalized value through all downstream calls** rather than re-reading the environment or re-deriving it later.
+
+This gives you:
+
+- **Backward compatibility**: old persisted state lacking the key still works via `.get(..., False)`.
+- **Resume correctness**: once the run is saved, the same mode is reused on resume, even if the env var is no longer set.
+- **Single source of truth**: no drifting behavior between `new_run`, resumed runs, and direct API calls.
+- **Clear observability**: the effective mode is visible in the saved run state, making debugging easier.
+
+The same pattern applies generally: any cross-cutting setting that affects pipeline behavior should be resolved into the run/request state at the boundary, not scattered as ad-hoc conditionals.
+
+### Pattern: Add Alternate Execution Modes to an Orchestrator with an Explicit Flag and Early Delegation
+
+When a central orchestrator needs to support a new specialized execution path (e.g. `single_api_mode`), avoid forking the whole orchestrator or sprinkling mode checks throughout the tier pipeline.
+
+- Add an explicit mode parameter/flag to the public entry function (`single_api_mode: bool = False`).
+- Perform shared, mode-independent setup first: load config, resolve paths, build reusable context (`context_blob`).
+- Immediately after shared setup, branch on the mode flag and delegate to the specialized worker, passing the already-prepared context and config.
+- Return directly from the delegation so the new mode cannot accidentally fall through into the default tiered pipeline.
+- Use a local import inside the branch when the specialized worker would create a circular import or add avoidable startup cost.
+- Keep the default path untouched so existing callers and behavior remain stable.
+
+This keeps the orchestrator readable, makes alternate modes discoverable at the entry point, and ensures every mode shares the same consistent preparatory state.

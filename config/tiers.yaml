@@ -1,6 +1,10 @@
 # Single source of truth for the 4-tier pipeline. Scripts read this instead
 # of hardcoding model names, endpoints, or escalation thresholds.
 
+single_api_mode:
+  max_retries: 3
+  allowed_backends: ["gemini", "claude", "deepseek"]
+
 tier_1_planner:
   name: "Claude Code CLI"
   invocation: "claude -p"

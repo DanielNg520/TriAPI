@@ -272,7 +272,16 @@ def _breakdown_and_dispatch(state: dict) -> None:
             )
 
 
-def cmd_dispatch(run_id: str, background: bool) -> None:
+def cmd_dispatch(run_id: str, background: bool, single_api: bool = False) -> None:
+    if single_api:
+        # Single API mode: restrict all LLM work for this dispatch run to the
+        # Tier 2 (Gemini) provider instead of the normal multi-tier/fallback
+        # path. The dispatcher/orchestrator read this env var, and because it
+        # is set in the parent process before --background spawns the detached
+        # child, the child inherits the same mode.
+        os.environ["TRIAPI_SINGLE_API"] = "1"
+        log.info("[%s] Dispatch running in single API mode (Tier 2 / Gemini only)", run_id)
+
     state = dispatcher.load_run(run_id)
     # self_fix_drafted is intentionally NOT accepted — only self-fix approve
     # flips a queued self-fix run to planned / dispatchable.
@@ -293,9 +302,12 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
         RUNS_DIR.mkdir(parents=True, exist_ok=True)
         log_path = RUNS_DIR / f"{run_id}.log"
         script_path = Path(__file__).resolve()
+        dispatch_cmd = [sys.executable, str(script_path), "dispatch", run_id]
+        if single_api:
+            dispatch_cmd.append("--single-api")
         with open(log_path, "w") as log_file:
             subprocess.Popen(
-                [sys.executable, str(script_path), "dispatch", run_id],
+                dispatch_cmd,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -598,6 +610,13 @@ def main():
     p_dispatch.add_argument("run_id")
     p_dispatch.add_argument("--background", action="store_true", help="run detached, safe against SSH disconnects")
     p_dispatch.add_argument("--no-tier1", action="store_true", help="force Tier 1 (Claude Code CLI) off for this run only, without editing config/tiers.yaml (sets TRIAPI_NO_TIER1=1)")
+    p_dispatch.add_argument(
+        "--single-api",
+        action="store_true",
+        help="restrict this dispatch run to a single API provider (Tier 2 / Gemini) "
+        "instead of the normal multi-tier/fallback path; sets TRIAPI_SINGLE_API=1 so "
+        "--background children inherit the mode",
+    )
 
     p_status = sub.add_parser("status", help="show progress of a run")
     p_status.add_argument("run_id")
@@ -622,9 +641,15 @@ def main():
     if args.command == "plan":
         cmd_plan(args.prompt, args.project_dir, args.refactor)
     elif args.command == "dispatch":
+        if args.single_api and args.no_tier1:
+            parser.error(
+                "--single-api and --no-tier1 cannot be used together: --single-api "
+                "already restricts the run to the Tier 2 / Gemini API, so --no-tier1 "
+                "is redundant"
+            )
         if args.no_tier1:
             os.environ["TRIAPI_NO_TIER1"] = "1"
-        cmd_dispatch(args.run_id, args.background)
+        cmd_dispatch(args.run_id, args.background, args.single_api)
     elif args.command == "status":
         cmd_status(args.run_id)
     elif args.command == "self-fix":

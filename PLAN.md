@@ -1169,3 +1169,48 @@ tiers, before the mechanism was replaced rather than the instructions
 tightened further. Verification can catch fabrication; it can't make an
 LLM stop generating when the task calls for copying.
 
+### 2026-08-20 — Embedding warm-up bug closed, doc cleanup, OpenClaw plan handoff prepped
+
+**Run `20260820-111151-1d83d6` (oh-my-llama):** `Ollama.warm()`
+(`ohmyllama/llm.py`) unconditionally POSTed to `/api/generate` to warm any
+model, including the embedding-only `nomic-embed-text`, which Ollama
+rejects with 400 (embedding models don't support the generate task) —
+spamming `journalctl` every ~10-minute warm cycle and defeating the point
+of warming that model at all. Fixed: `warm()` gained an `is_embedding`
+flag routing to `/api/embeddings` instead; `orchestrator.py`'s
+`_warm_models()` passes `is_embedding=(model == self.cfg.model_embed)`,
+using `Config.model_embed` as the authority rather than string-guessing
+the model name. Tier 4 and Tier 3 landed the code + regression test
+(`tests/test_llm_warm.py`) cleanly; the plan's own Phase 3 ("restart the
+service, tail live logs for a real warm cycle") escalated to
+`human_handoff` — the run's recorded status is `stopped_on_failure` even
+though the fix itself is correct, because nothing in the pipeline can
+restart a systemd user service or tail journalctl on its own. Verified
+directly afterward: the `400 Bad Request` line is gone from
+`journalctl --user -u oh-my-llama.service`, the two new tests pass under
+`uv run pytest`, and the full `run_tests.sh` suite is green
+(160 passed, 3 skipped, none of them the new tests).
+
+**Doc cleanup, same session:** both of oh-my-llama's remaining
+`<!-- triapi:plan -->` blocks (`20260820-021946-1a1bd7`, already fully
+checked off, and `20260820-111151-1d83d6` above) were fully-resolved, so
+per this repo's own established convention they were pruned entirely from
+`AGENTS.md` and replaced with short prose summaries pointing at the Living
+file/dir index — `AGENTS.md` dropped from ~53KB to 47.8KB, comfortably
+under the 73728-char Tier-4 ceiling, with zero open plan-block gates left
+in that file.
+
+**Separately, not yet dispatched:** `openclaw_plan.md`, a phased
+OpenClaw-plugin architecture plan for oh-my-llama, was reviewed and
+tightened (webhook auth/rate-limiting split into its own phase instead of
+sharing a "zero impact" bucket with pure outbound tasks, hand-rolled OAuth
+replaced with a vetted-library requirement, the Podman/code-sandbox
+caution made concrete — rootless Podman under a dedicated UID, explicit
+`--memory`/`--cpus`/`--pids-limit`/`--network=none` defaults — plus a new
+cross-plugin secret-scoping requirement and `systemctl show ... -p Bind*`
+verification steps for every bind-mount hand-off). A "supervise this via
+TriAPI with `TRIAPI_NO_TIER1=1`" implementation guide was prepended to the
+file itself. The user is handing this off to a separate Gemini-supervised
+session rather than dispatching it here — see `CARRYOVER.md` for the
+handoff note.
+
