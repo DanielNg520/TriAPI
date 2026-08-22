@@ -649,6 +649,18 @@ class Tier3PeakHoursTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("06:00-10:00", result["reason"])
 
+    def test_weekend_passes_in_peak(self) -> None:
+        # Aug 23, 2026 is a Sunday in Beijing Time.
+        result = self._check_at(datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc))
+        self.assertTrue(result["ok"])
+        self.assertIn("weekend off-peak", result["reason"].lower())
+
+    def test_weekday_refuses_in_peak(self) -> None:
+        # Aug 24, 2026 is a Monday. Regular peak hours apply.
+        result = self._check_at(datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc))
+        self.assertFalse(result["ok"])
+        self.assertIn("06:00-10:00", result["reason"])
+
 
 class OrchestratorTier3PeakSkipTests(unittest.TestCase):
     def _run_task_with_guards(
