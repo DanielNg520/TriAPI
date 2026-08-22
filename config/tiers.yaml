@@ -2,9 +2,11 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  name: "Claude Code CLI"
-  invocation: "claude -p"
-  model: "sonnet"
+  name: "OpenRouter"
+  endpoint: "https://openrouter.ai/api/v1"
+  models:
+    default: "stealth/ox-alpha"
+  default_model: "default"
   role: "strategic planning"
   automatable: true
   outputs: ["PLAN.json", "ARCHITECTURE.md"]
@@ -93,12 +95,10 @@ tier_3_debugger:
       output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
 
 tier_4_worker:
-  name: "Ollama local"
-  endpoint: "http://localhost:11434"
+  name: "OpenRouter"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "qwen2.5-coder:14b-instruct-q6_K"
-    polyglot: "deepseek-coder-v2:16b"
-    heavy: "qwen2.5-coder:32b"
+    default: "dots-studio/dots-3-note-preview:free"
   # default_model set to 'default' model. Switched Q8_0 -> Q6_K 2026-08-19
   # (user instruction): Q8_0 (18.4GB) left only ~1.6GB headroom against this
   # machine's ~20GB available RAM (iGPU has just 512MB real VRAM, everything

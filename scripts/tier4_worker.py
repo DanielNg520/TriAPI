@@ -1,4 +1,4 @@
-"""Tier 4: local Ollama drafting + build loop.
+"""Tier 4: OpenRouter drafting + build loop.
 
 Asks a local Ollama model to draft/fix code for a task, writes it to the
 target file, runs the project's build command, and tracks consecutive
@@ -27,6 +27,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, hivemind_util, lessons
 from scripts.config_loader import load_tiers
+from scripts.secrets_loader import load_secrets
 from scripts.state import clear_state, read_state, record_failure
 from scripts.tri_logging import get_logger
 
@@ -116,18 +117,33 @@ def build_prompt(description: str, target_path: Path, last_stderr: str, context_
     return "\n\n".join(parts)
 
 
-def call_ollama(host: str, model: str, prompt: str) -> dict:
+def call_openrouter(host: str, model: str, prompt: str) -> dict:
+    secrets = load_secrets()
     resp = requests.post(
-        f"{host}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False, "options": {"num_ctx": 24576}},
+        f"{host}/chat/completions",
+        headers={
+            "Authorization": f"Bearer {secrets['open_router_api_key']}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False
+        },
         timeout=300,
     )
     try:
         resp.raise_for_status()
     except requests.HTTPError:
-        log.error("Ollama request failed (model=%s): %s %s", model, resp.status_code, resp.text[:500])
+        log.error("OpenRouter request failed (model=%s): %s %s", model, resp.status_code, resp.text[:500])
         raise
-    return resp.json()
+    data = resp.json()
+    # Format the result to match what tier 4 expects
+    return {
+        "response": data["choices"][0]["message"]["content"],
+        "prompt_eval_count": data.get("usage", {}).get("prompt_tokens", 0),
+        "eval_count": data.get("usage", {}).get("completion_tokens", 0)
+    }
 
 
 def run_build(build_cmd: str, workdir: str, timeout: int = 300) -> tuple[bool, str]:
@@ -190,17 +206,17 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
             f"{hivemind_code}"
         )
 
-    log.info("[%s] Tier 4 (Ollama/%s) drafting %s", task_id, model, target_path)
+    log.info("[%s] Tier 4 (OpenRouter/%s) drafting %s", task_id, model, target_path)
 
     try:
-        ollama_response = call_ollama(tier4["endpoint"], model, prompt)
+        ollama_response = call_openrouter(tier4["endpoint"], model, prompt)
     except requests.RequestException as e:
         # Ollama unreachable/down (connection refused, timeout, HTTP error --
         # already logged inside call_ollama for the HTTPError case). Treat
         # like a build failure so the existing consecutive-failure/escalation
         # counter handles it, instead of an uncaught exception that crashes
         # the whole (potentially hours-long, unattended) dispatch run.
-        log.error("[%s] Tier 4 request to Ollama failed: %s", task_id, e)
+        log.error("[%s] Tier 4 request to OpenRouter failed: %s", task_id, e)
         return _tier4_fail(task_id, threshold, str(e))
 
     response_text = ollama_response["response"]

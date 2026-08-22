@@ -26,6 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, lessons
+from scripts.config_loader import load_tiers
+from scripts.secrets_loader import load_secrets
+import requests
 from scripts.budget_guard import check_tier1_ok
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
@@ -123,57 +126,50 @@ def escalate(
     # (`claude -p --help`: "Arguments: prompt  Your prompt"), reading from
     # stdin when omitted -- exactly what's needed here, and with no
     # practical size limit the way argv has.
-    try:
-        result = subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--output-format",
-                "json",
-                "--tools",
-                "",
-                "--system-prompt",
-                system_prompt,
-            ],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return {"status": "error", "reason": f"Tier 1 subprocess failed to run: {e}"}
-    if result.returncode != 0:
-        return {"status": "error", "reason": result.stderr.strip()}
+    secrets = load_secrets()
+    config = load_tiers()
+    tier1 = config["tier_1_planner"]
+    model_name = tier1["models"][tier1["default_model"]]
+    endpoint = tier1["endpoint"]
 
     try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        return {"status": "error", "reason": f"Failed to parse CLI output: {e}"}
-    if not isinstance(data, dict):
-        return {"status": "error", "reason": "Claude CLI output must be a JSON object"}
+        resp = requests.post(
+            f"{endpoint}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {secrets['open_router_api_key']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                "stream": False,
+            },
+            timeout=180,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        return {"status": "error", "reason": f"Tier 1 OpenRouter request failed: {e}"}
+
+    data = resp.json()
     usage = data.get("usage", {})
-    if not isinstance(usage, dict):
-        usage = {}
+    raw_result = data["choices"][0]["message"]["content"]
 
     log_cost(
         {
             "timestamp": time.time(),
             "tier": "tier_1",
-            "model": "claude-sonnet-5",
+            "model": model_name,
             "task_id": task_id,
-            "input_tokens": usage.get("input_tokens", 0),
-            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
-            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
             "cost_usd": 0.0,
-            "notional_cost_usd": data.get("total_cost_usd", 0.0),
-            "billing": "subscription",
+            "notional_cost_usd": 0.0,
+            "billing": "openrouter",
         }
     )
-
-    raw_result = data.get("result")
-    if not isinstance(raw_result, str):
-        return {"status": "error", "reason": "Claude CLI result missing or not a string"}
 
     if editing:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, raw_result)

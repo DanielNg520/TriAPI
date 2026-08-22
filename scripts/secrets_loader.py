@@ -32,7 +32,7 @@ def load_secrets() -> dict:
         raise RuntimeError(f"sops failed to decrypt {SECRETS_PATH}: {e.stderr.strip()}") from e
 
     secrets = json.loads(result.stdout)
-    required = ["deepseek_api_key", "ollama_host", "google_ai_studio_api_key"]
+    required = ["deepseek_api_key", "ollama_host", "google_ai_studio_api_key", "open_router_api_key"]
     missing = [k for k in required if k not in secrets]
     if missing:
         raise ValueError(f"{SECRETS_PATH} is missing required keys: {missing}")
