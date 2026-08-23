@@ -1,4 +1,4 @@
-"""Tier 2: Gemini (Google AI Studio API) escalation client.
+"""Tier 2: Escalation client (Nemotron via OpenRouter).
 
 Called after Tier 1 (Claude Code CLI) fails to resolve the build -- the
 final automated tier before human handoff. Mirrors tier3_escalate.py's

@@ -1,6 +1,6 @@
 """Tier 4: OpenRouter drafting + build loop.
 
-Asks a local Ollama model to draft/fix code for a task, writes it to the
+Asks an OpenRouter model to draft/fix code for a task, writes it to the
 target file, runs the project's build command, and tracks consecutive
 build failures in logs/state/<task_id>.json. Designed to be invoked once
 per attempt (e.g. by an orchestrator or Antigravity via MCP), not as a
