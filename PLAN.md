@@ -1169,3 +1169,17 @@ tiers, before the mechanism was replaced rather than the instructions
 tightened further. Verification can catch fabrication; it can't make an
 LLM stop generating when the task calls for copying.
 
+
+---
+
+## Phase 17: Provider Decoupling & LLM Client Consolidation (2026-08-22)
+
+**Goal**: Eradicate hardcoded API endpoints, model strings, and provider types from the tier scripts so that TriAPI can rapidly swap in alternative models via standard configuration (e.g., OpenRouter, Nemotron, Llama).
+
+- [x] **`llm_client.py` Consolidation**: Extracted all network and subprocess logic out of the `tier*_escalate.py` and `tier4_worker.py` scripts. `llm_client.execute_llm()` is now the universal entry point for LLM interactions.
+- [x] **Configuration-Driven Routing**: Tiers now read their `provider` string, API key name, and `endpoint` directly from `config/tiers.yaml`.
+- [x] **Tier Re-assignments**:
+  - `tier_2_manager` shifted from hardcoded Google AI Studio to OpenRouter (pointing to `nvidia/nemotron-3-ultra-550b-a55b:free`).
+  - `tier_4_worker` shifted from hardcoded local Ollama to OpenRouter (pointing to `dots-studio/dots-3-note-preview:free`).
+- [x] **Fallback Architecture Redesign**: The global exception catchers for LLM calls (`_fallback_deepseek_then_gemini` and `_fallback_ollama`) were refactored to read from independent `gemini_fallback` and `ollama_fallback` blocks rather than overloading the Tier 2 and Tier 4 configs.
+- [x] **Self-Audit Verification**: Dispatched TriAPI in a synthetic 9-file run to comprehensively review the fallback logic and configuration decoupling, returning a clean architectural verdict (`OVERALL_AUDIT.md` - deleted post-review).

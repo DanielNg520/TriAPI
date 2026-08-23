@@ -6,9 +6,9 @@ TriAPI orchestrates a C++/Edge AI debugging workflow across four tiers, cheapest
 
 | Tier | Surface | Cost model | Role |
 |---|---|---|---|
-| **4 — Worker** | Local Ollama (`qwen3-coder:30b-cc`, fallback `gpt-oss:20b`) | $0, local | Drafts/fixes code, runs the build, tries repeatedly |
+| **4 — Worker** | OpenRouter (`dots-studio/dots-3-note-preview:free`) / Local Ollama (`qwen2.5-coder`) | OpenRouter API / $0 local | Drafts/fixes code, runs the build, tries repeatedly |
 | **3 — Debugger** | DeepSeek API (`deepseek-v4-flash`/`-pro`) | Metered, ~$0.0003/call in practice (prefix-cache discount) | Harder logic errors Tier 4 couldn't fix |
-| **2 — Manager** | Gemini API (Google AI Studio) | Free tier (rate-limited) | Second automated repair attempt |
+| **2 — Manager** | Nemotron (OpenRouter API) | OpenRouter API / Gemini REST fallback | Second automated repair attempt |
 | **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | Strongest, last automated repair attempt before human review (its `tier_1_planner` role, initial `triapi plan` authoring, is separate and always runs first regardless of this repair ordering) |
 
 If all four are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically. Tier 1 (Claude) is deliberately ordered last in the repair chain, after Tier 2 (Gemini), so subscription quota is spent only on problems the cheaper/free tiers couldn't already resolve.
@@ -16,7 +16,7 @@ If all four are exhausted, the task is logged for manual review — nothing trie
 ## Escalation state machine
 
 ```
-Tier 4 (Ollama): draft + build
+Tier 4 (OpenRouter/Ollama): draft + build
   │
   ├─ success ──────────────────────────────────────────► done
   │
@@ -34,7 +34,7 @@ Tier 4 (Ollama): draft + build
             ├─ refused (free-tier limit) ─► skip to Tier 1
             └─ ok
                  ▼
-               Tier 2 (Gemini API): patch file, plain rebuild
+               Tier 2 (Nemotron/Gemini): patch file, plain rebuild
                  ├─ builds ─────────────────────────────► done
                  └─ still fails
                       │
