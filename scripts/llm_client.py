@@ -119,7 +119,7 @@ def _fallback_request(
 
 def _fallback_ollama(prompt: str, system_prompt: str) -> Tuple[str, str, int, int]:
     """Call local Ollama API (tier-4 fallback)."""
-    config = config_loader.load_config()
+    config = config_loader.load_tiers()
     tier4_cfg = config.get("tier_4_worker", {})
     model_name = tier4_cfg.get("models", {}).get(
         "default", "dots-studio/dots-3-note-preview:free"
@@ -144,7 +144,7 @@ def _fallback_deepseek_then_gemini(
     prompt: str, system_prompt: str
 ) -> Tuple[str, str, int, int]:
     """Try DeepSeek (if allowed), then fall back to Gemini."""
-    if budget_guard.check_tier3_peak_hours_ok():
+    if budget_guard.check_tier3_peak_hours_ok().get("ok", False):
         try:
             return _call_deepseek_fallback(prompt, system_prompt)
         except Exception as exc:
@@ -162,13 +162,13 @@ def _call_deepseek_fallback(
     prompt: str, system_prompt: str
 ) -> Tuple[str, str, int, int]:
     """Call DeepSeek API using tier_3_debugger config."""
-    config = config_loader.load_config()
+    config = config_loader.load_tiers()
     tier3_cfg = config.get("tier_3_debugger", {})
     endpoint = tier3_cfg.get("endpoint", "https://api.deepseek.com")
     # Resolve model: default_model is a key (e.g. 'flash') -> models.flash
     default_key = tier3_cfg.get("default_model", "flash")
     model = tier3_cfg.get("models", {}).get(default_key, "deepseek-v4-flash")
-    api_key = secrets_loader.get_secret("deepseek_api_key")
+    api_key = secrets_loader.load_secrets().get("deepseek_api_key")
 
     return _call_openai_api(
         endpoint, api_key, model, prompt, system_prompt, "deepseek"
@@ -179,13 +179,13 @@ def _call_gemini_fallback(
     prompt: str, system_prompt: str
 ) -> Tuple[str, str, int, int]:
     """Call Gemini API using tier_2_manager config."""
-    config = config_loader.load_config()
+    config = config_loader.load_tiers()
     tier2_cfg = config.get("tier_2_manager", {})
     endpoint = tier2_cfg.get("endpoint", "https://generativelanguage.googleapis.com")
     # Fallback model is the flash model from config
     model = tier2_cfg.get("models", {}).get(
         "flash", "gemini-3.5-flash"
     )
-    api_key = secrets_loader.get_secret("google_ai_studio_api_key")
+    api_key = secrets_loader.load_secrets().get("google_ai_studio_api_key")
 
     return _call_gemini_api(endpoint, api_key, model, prompt, system_prompt)
