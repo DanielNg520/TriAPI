@@ -442,3 +442,13 @@ Centralize external LLM API calls behind a shared client abstraction so callers 
 - **Don't let an external LLM outage become a hard crash.** Modeling provider errors as build/verification failures lets the existing consecutive-failure threshold and escalation state machine handle the outage naturally.
 
 This pattern keeps agent/worker code focused on task logic while making provider swaps, multi-provider support, and consistent cost accounting a shared concern.
+
+### Treat fallback services as first-class config blocks, not code branches
+
+- Keep a single source of truth for every tier and fallback route in one central config file. Scripts should read model names, endpoints, API-key secret references, and escalation rules from that file rather than embedding them in code.
+- Add a dedicated config block for each fallback/alternative service (`gemini_fallback`, `ollama_fallback`) alongside the primary tier blocks. A fallback is a distinct deployment decision: it has its own endpoint, model, and credential secret, and should be independently maintainable.
+- Separate *normal-path* tier config from *degraded-path* fallback config. The primary block describes what a tier does by default; the fallback block describes what to use when the primary is unavailable. This keeps changes additive and low-risk: adding a fallback should not require rewriting existing tier definitions.
+- Capture operational constraints and rationale in the config itself: `automatable` flags, quota/pricing notes, verified dates, and fallback ordering. This makes the failure-handling policy auditable and prevents future contributors from silently reversing a deliberate decision.
+- Use logical names in fallback chains and map them to concrete services in config. This lets orchestration code stay generic (`try fallback chain`, `read next fallback from config`) while all provider-specific details remain centralized.
+
+**Consequence:** When a new fallback provider is discovered or verified, it can be added as a new config stanza with full context, and every script that depends on the config automatically sees the updated failure-handling path without code changes.

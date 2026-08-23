@@ -15,11 +15,9 @@ Read-only by design: the planner is only allowed Read/Glob/Grep tools, so
 it can inspect the project and any referenced plan.md, but cannot edit
 files or run commands itself -- planning and execution are kept separate.
 
-Every provider, including the local Claude CLI, is dispatched through the
-single entry point llm_client.execute_llm(); planner.py no longer invokes
-`claude -p` or parses its JSON output itself. execute_llm() does not expose
-a session identifier, so plan_turn() always returns session_id='stateless'
-(no planner-tracked cross-turn session).
+Each turn is a separate `claude -p` call chained via --resume so the
+conversation has real memory across turns (verified: a fact stated in one
+call is correctly recalled in a --resume'd follow-up call).
 
 Must only be called after budget_guard.check_tier1_ok().
 
@@ -28,13 +26,14 @@ during 06:00-10:00 UTC; `in_tier3_deepseek_peak_utc()` exposes this window so
 plans can be priced/scheduled with that cost in mind.
 """
 
+import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.budget_guard import check_tier1_ok
-from scripts import config_loader, llm_client, secrets_loader
 from scripts.tri_logging import get_logger
 
 log = get_logger("planner")
@@ -113,14 +112,7 @@ def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
     """One turn of the interactive planning conversation.
 
     Pass session_id=None for the first turn; pass back the session_id this
-    returns for every subsequent turn.
-
-    The provider is read from config (tier_1_planner.provider). Every
-    provider -- including the local Claude CLI ('cli') -- is dispatched
-    through llm_client.execute_llm(), which owns the claude subprocess and
-    handles primary/fallback routing, so planner.py never shells out or
-    parses Claude's JSON itself. execute_llm() returns no cross-turn
-    session identifier, so every turn returns session_id='stateless'.
+    returns for every subsequent turn so the conversation has memory.
     """
     guard = check_tier1_ok()
     if not guard["ok"]:
@@ -129,57 +121,46 @@ def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
 
     log.info("Planning turn: project_dir=%s resume=%s message_len=%d", project_dir, bool(session_id), len(message))
 
-    tier1 = config_loader.load_tiers().get("tier_1_planner", {})
-    provider = tier1.get("provider", "cli")
+    cmd = [
+        "claude",
+        "-p",
+        message,
+        "--output-format",
+        "json",
+        "--allowedTools",
+        "Read,Glob,Grep",
+        "--add-dir",
+        project_dir,
+        "--system-prompt",
+        SYSTEM_PROMPT,
+    ]
+    if session_id:
+        cmd += ["--resume", session_id]
 
-    return _plan_turn_llm(message, project_dir, session_id, tier1, provider)
-
-
-def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1: dict, provider: str) -> dict:
-    """Dispatch a planning turn through llm_client.execute_llm().
-
-    execute_llm() is the single entry point for every provider, including
-    the local Claude CLI ('cli'); it runs the claude subprocess itself, so
-    planner.py no longer shells out or parses Claude's JSON output. The
-    whole path is wrapped so failures return an error dict instead of
-    crashing the caller.
-    """
+    timeout_s = 600
     try:
-        endpoint = tier1.get("endpoint")
-        api_key_secret = tier1.get("api_key_secret")
-        default_key = tier1.get("default_model", "default")
-        model = tier1.get("models", {}).get(default_key)
-        api_key = secrets_loader.load_secrets().get(api_key_secret) if api_key_secret else None
-
-        # The local Claude CLI goes through execute_llm() too; pass along the
-        # project dir and (optional) resume session so it can build the same
-        # `claude -p` invocation this module used to shell out to.
-        cli_kwargs = {}
-        if provider == "cli":
-            cli_kwargs["project_dir"] = project_dir
-            if session_id and session_id != "stateless":
-                cli_kwargs["session_id"] = session_id
-
-        response_text, billing_type, in_tokens, out_tokens = llm_client.execute_llm(
-            provider=provider,
-            endpoint=endpoint,
-            api_key=api_key,
-            model=model,
-            prompt=message,
-            system_prompt=SYSTEM_PROMPT,
-            **cli_kwargs,
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout_s, cwd=project_dir, stdin=subprocess.DEVNULL
         )
-    except Exception as exc:
-        log.error("Planning turn failed via execute_llm (provider=%s): %s", provider, exc)
-        return {"status": "error", "reason": str(exc)}
+    except subprocess.TimeoutExpired:
+        log.error("Planning turn timed out after %ds (project_dir=%s)", timeout_s, project_dir)
+        return {"status": "error", "reason": f"Planning turn timed out after {timeout_s}s"}
+    if result.returncode != 0:
+        log.error("Planning turn failed (returncode=%d): %s", result.returncode, result.stderr.strip()[:500])
+        return {"status": "error", "reason": result.stderr.strip()}
+
+    data = json.loads(result.stdout)
+    if data.get("is_error"):
+        log.error("Planning turn returned an error: %s", str(data.get("result"))[:500])
+        return {"status": "error", "reason": data.get("result", "unknown Claude error")}
 
     log.info(
-        "Planning turn ok: provider=%s billing=%s in_tokens=%d out_tokens=%d response_len=%d",
-        provider, billing_type, in_tokens, out_tokens, len(response_text),
+        "Planning turn ok: session_id=%s notional_cost=$%.4f response_len=%d",
+        data["session_id"], data.get("total_cost_usd", 0.0), len(data["result"]),
     )
     return {
         "status": "ok",
-        "text": response_text,
-        "session_id": "stateless",
-        "notional_cost_usd": 0.0,
+        "text": data["result"],
+        "session_id": data["session_id"],
+        "notional_cost_usd": data.get("total_cost_usd", 0.0),
     }
