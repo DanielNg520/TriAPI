@@ -7,7 +7,7 @@ tier_1_planner:
   name: "Google AI Studio"
   endpoint: "https://generativelanguage.googleapis.com"
   models:
-    default: "gemini-3.1-pro-preview"
+    default: "gemini-3.5-flash"
   default_model: "default"
   role: "strategic planning"
   automatable: true
@@ -17,18 +17,19 @@ tier_1_manager:
   enabled: true
 
 tier_2_manager:
-  provider: google
-  api_key_secret: google_ai_studio_api_key
-  name: "Gemini (Google AI Studio API)"
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter Nemotron"
   # The Antigravity 2.0 desktop app is a GUI with no headless mode and stays
   # available as a manual review surface, but automated escalation calls the
   # underlying Gemini model directly via the Google AI Studio REST API --
   # not through the desktop app.
-  endpoint: "https://generativelanguage.googleapis.com"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
+    default: "nvidia/nemotron-3-ultra-550b-a55b:free"
     flash: "gemini-3.5-flash"
     pro: "gemini-2.5-pro"
-  default_model: flash
+  default_model: default
   # Tried in order whenever the current model's free-tier quota is
   # exhausted for the day -- confirmed live 2026-08-10 that Google buckets
   # this per model (error body: quotaId
@@ -82,7 +83,7 @@ tier_3_debugger:
   models:
     flash: "deepseek-v4-flash"
     pro: "deepseek-v4-pro"
-  default_model: flash
+  default_model: pro
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
   peak_hours_utc:
@@ -107,12 +108,12 @@ tier_3_debugger:
       output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
 
 tier_4_worker:
-  provider: ollama
+  provider: openrouter
   api_key_secret: open_router_api_key
-  name: "Local Ollama"
-  endpoint: "http://localhost:11434"
+  name: "OpenRouter Dots"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "qwen2.5-coder:14b-instruct-q6_K"
+    default: "dots-studio/dots-3-note-preview:free"
     polyglot: "deepseek-coder-v2:16b"
     heavy: "qwen2.5-coder:32b"
   default_model: default

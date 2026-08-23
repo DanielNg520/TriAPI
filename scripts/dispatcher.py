@@ -566,31 +566,53 @@ def _parse_retry_after(body: str) -> float | None:
 
 
 def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, secrets: dict) -> dict:
-    body = {
-        "systemInstruction": {"parts": [{"text": BREAKDOWN_SYSTEM_INSTRUCTION}]},
-        "contents": [{"role": "user", "parts": [{"text": phase_text}]}],
-        "generationConfig": {"responseMimeType": "application/json"},
-    }
-    try:
-        resp, model_used = gemini_fallback.post_generate_content(
-            requests.post, tier2["endpoint"], secrets["google_ai_studio_api_key"], body, models, timeout=120,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        # Was previously left to propagate uncaught past breakdown_phase()'s
-        # retry loop (only malformed-JSON was caught below), crashing the
-        # whole dispatch on a transient network blip or rate limit (hit a
-        # real 429 during Phase 11 testing) instead of retrying like every
-        # other transient failure here does.
-        log.error("Phase breakdown request failed: %s", e)
-        resp_text = getattr(getattr(e, "response", None), "text", "") or ""
-        retry_after = _parse_retry_after(resp_text)
-        return {"status": "error", "reason": f"Gemini request failed: {e}", "retry_after": retry_after}
-    if model_used != models[0]:
-        log.info("Phase breakdown used fallback model %s (default %s exhausted for today)", model_used, models[0])
-    data = resp.json()
+    provider = tier2.get("provider", "google")
+    
+    if provider == "openrouter":
+        from scripts.llm_client import execute_llm
+        try:
+            api_key = secrets.get(tier2.get("api_key_secret", "open_router_api_key"))
+            text, _, _, _ = execute_llm(
+                provider="openrouter",
+                endpoint=tier2["endpoint"],
+                api_key=api_key,
+                model=models[0],
+                prompt=phase_text,
+                system_prompt=BREAKDOWN_SYSTEM_INSTRUCTION,
+            )
+        except Exception as e:
+            log.error("Phase breakdown request failed: %s", e)
+            return {"status": "error", "reason": f"OpenRouter request failed: {e}", "retry_after": None}
+    else:
+        body = {
+            "systemInstruction": {"parts": [{"text": BREAKDOWN_SYSTEM_INSTRUCTION}]},
+            "contents": [{"role": "user", "parts": [{"text": phase_text}]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        }
+        try:
+            resp, model_used = gemini_fallback.post_generate_content(
+                requests.post, tier2["endpoint"], secrets.get(tier2.get("api_key_secret", "google_ai_studio_api_key"), ""), body, models, timeout=120,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            log.error("Phase breakdown request failed: %s", e)
+            resp_text = getattr(getattr(e, "response", None), "text", "") or ""
+            retry_after = _parse_retry_after(resp_text)
+            return {"status": "error", "reason": f"Gemini request failed: {e}", "retry_after": retry_after}
+        if model_used != models[0]:
+            log.info("Phase breakdown used fallback model %s (default %s exhausted for today)", model_used, models[0])
+        data = resp.json()
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
 
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as e:

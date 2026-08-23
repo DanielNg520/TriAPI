@@ -68,7 +68,7 @@ def _call_gemini_api(
         "contents": [{"parts": [{"text": prompt}]}],
         "system_instruction": {"parts": [{"text": system_prompt}]},
     }
-    resp = requests.post(url, json=payload, timeout=120)
+    resp = requests.post(url, json=payload, timeout=300)
     resp.raise_for_status()
     data = resp.json()
     response_text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -87,7 +87,10 @@ def _call_openai_api(
     provider: str,
 ) -> Tuple[str, str, int, int]:
     """Call any OpenAI-compatible chat completions endpoint."""
-    url = f"{endpoint}/chat/completions"
+    if provider == "ollama":
+        url = f"{endpoint}/v1/chat/completions"
+    else:
+        url = f"{endpoint}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -99,7 +102,7 @@ def _call_openai_api(
             {"role": "user", "content": prompt},
         ],
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    resp = requests.post(url, headers=headers, json=payload, timeout=300)
     resp.raise_for_status()
     data = resp.json()
     response_text = data["choices"][0]["message"]["content"]

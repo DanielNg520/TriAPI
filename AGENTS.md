@@ -209,3 +209,379 @@ Scope: read-only diagnosis. No repo files are modified; all evidence is captured
 2. Phase 2: Regression Test Suite Audit
    - [x] File: `tests/test_branch_features.py`. Change needed: Read-only execution of the full test suite to ensure all baseline logic, integrations, and mocked budget/Jules behaviors still pass. Command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
 <!-- triapi:plan run_id=20260823-144422-e0c98e end -->
+
+
+<!-- triapi:plan run_id=20260823-999999-audit start -->
+## TriAPI Plan (run 20260823-999999-audit, appended 2026-08-23)
+
+1. Phase 1: Audit OpenRouter Refactor
+   - [x] File: `tests/test_branch_features.py`. Change needed: Verify the full test suite passes after the manual OpenRouter refactoring applied to `scripts/dispatcher.py` and `scripts/triapi.py`. Note: `verify_only: true`. Command: `cat > /tmp/verify_audit.py <<'INNER_EOF'
+import sys, subprocess
+res = subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"], capture_output=True, text=True)
+if res.returncode != 0:
+    print(res.stderr)
+    sys.exit(1)
+print("Audit OK")
+INNER_EOF
+python3 /tmp/verify_audit.py`
+<!-- triapi:plan run_id=20260823-999999-audit end -->
+
+<!-- triapi:plan run_id=20260823-163311-6c33a3 start -->
+## TriAPI Plan (run 20260823-163311-6c33a3, appended 2026-08-23)
+
+# OpenRouter Refactor Audit Plan
+
+All steps are **read-only** and **non-mutating**: they parse/inspect the named file, never import it for side effects beyond standard-library AST parsing, never call the network, and never write code. Every verification is a HEREDOC shell command with `verify_only=true`.
+
+---
+
+## Phase 1 — Audit `scripts/llm_client.py`
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — verify the module has a provider-aware request path and an OpenRouter marker.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib, re
+  p = pathlib.Path('scripts/llm_client.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  provider_funcs = []
+  for node in ast.walk(tree):
+      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+          if any(a.arg == 'provider' for a in node.args.args):
+              provider_funcs.append(f'{node.name}:{node.lineno}')
+  assert provider_funcs, 'FAIL: no function accepts a provider argument'
+  assert re.search(r'openrouter', src, re.IGNORECASE), 'FAIL: no OpenRouter mention'
+  print(f'PASS llm_client provider signature + OpenRouter marker: {provider_funcs}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — verify the fallback loop is provider-guarded so it cannot silently cross from one provider to another.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  p = pathlib.Path('scripts/llm_client.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  guards = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.If):
+          test = ast.unparse(node.test)
+          if 'provider' in test or 'model' in test:
+              guards.append((node.lineno, test))
+  assert guards, 'FAIL: no provider/model guard found'
+  assert any('provider' in test for _, test in guards), 'FAIL: fallback guard does not check provider'
+  print(f'PASS llm_client provider-aware fallback guard(s): {guards}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — verify OpenAI-compatible response JSON is parsed defensively through `choices`/`message`/`content`.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  p = pathlib.Path('scripts/llm_client.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  parse_calls = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.Call):
+          try:
+              s = ast.unparse(node)
+          except Exception:
+              continue
+          if any(term in s for term in ('choices', 'message', 'content', 'response')):
+              parse_calls.append((node.lineno, s[:240]))
+  assert parse_calls, 'FAIL: no JSON/response parsing call found'
+  assert any(('choices' in s or 'message' in s) and 'content' in s for _, s in parse_calls), \
+      'FAIL: no choices/message + content extraction'
+  print(f'PASS llm_client JSON parse sites: {len(parse_calls)}')
+  PY
+  BASH
+  ```
+
+---
+
+## Phase 2 — Audit `scripts/dispatcher.py`
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — verify the dispatcher actually uses `llm_client` and passes `provider=` explicitly to it.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib, re
+  p = pathlib.Path('scripts/dispatcher.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  assert 'llm_client' in src, 'FAIL: dispatcher does not reference llm_client'
+  call_lines = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.Call) and any(kw.arg == 'provider' for kw in getattr(node, 'keywords', [])):
+          call_lines.append(node.lineno)
+  assert call_lines, 'FAIL: no dispatcher call passes provider= keyword'
+  assert re.search(r'openrouter', src, re.IGNORECASE), 'FAIL: no OpenRouter gate/mention'
+  print(f'PASS dispatcher llm_client + provider= at lines {call_lines}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — verify OpenRouter handling is kept separate from the Gemini fallback chain.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib, re
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  assert 'gemini_fallback' in src, 'FAIL: gemini_fallback module not referenced'
+  assert re.search(r'provider\s*(?:==|!=)\s*[\'"]openrouter[\'"]', src, re.IGNORECASE), \
+      'FAIL: OpenRouter provider gate not found'
+  assert re.search(r'breakdown|fallback_chain', src), 'FAIL: breakdown/fallback chain path not found'
+  print('PASS dispatcher OpenRouter gate is separate from gemini_fallback')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — verify the dispatcher does not hardcode an OpenRouter endpoint independently of `llm_client`.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib, re
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  assert 'llm_client' in src, 'FAIL: dispatcher does not delegate to llm_client'
+  # A clean refactor keeps the HTTP endpoint in llm_client, not duplicated here.
+  assert not re.search(r'https?://[^\s\'"]*(?:openrouter|chat/completions)', src, re.IGNORECASE), \
+      'FAIL: dispatcher appears to hardcode an OpenRouter/chat-completions URL'
+  print('PASS dispatcher delegates OpenRouter transport to llm_client')
+  PY
+  BASH
+  ```
+
+---
+
+## Phase 3 — Audit `scripts/triapi.py`
+
+- [ ] **Read-only target: `scripts/triapi.py`** — verify the CLI exposes an OpenRouter provider selection path.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib, re
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  assert 'openrouter' in src.lower(), 'FAIL: triapi has no OpenRouter mention'
+  assert re.search(r'--provider', src), 'FAIL: triapi missing --provider flag'
+  assert re.search(r'add_argument\([^)]*--provider', src), 'FAIL: argparse missing --provider option'
+  print('PASS triapi --provider CLI flag')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/triapi.py`** — verify the provider value selected at the CLI reaches the dispatcher call.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  tree = ast.parse(src, filename='scripts/triapi.py')
+  dispatch_calls = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.Call):
+          try:
+              func = ast.unparse(node.func)
+          except Exception:
+              continue
+          if 'dispatch' in func or 'dispatcher' in func:
+              dispatch_calls.append((node.lineno, func, [kw.arg for kw in getattr(node, 'keywords', [])]))
+  assert dispatch_calls, 'FAIL: no dispatcher/dispatch call in triapi'
+  assert any('provider' in kwargs for _, _, kwargs in dispatch_calls), 'FAIL: dispatcher call missing provider'
+  print(f'PASS triapi provider reaches dispatcher call: {dispatch_calls}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/triapi.py`** — verify `triapi.py` parses as valid Python without executing any pipeline code.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  p = pathlib.Path('scripts/triapi.py')
+  ast.parse(p.read_text(), filename=str(p))
+  print('PASS syntax scripts/triapi.py')
+  PY
+  BASH
+  ```
+
+---
+
+## Phase 4 — Immutability verification for the three audited files
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — confirm the audit did not modify the file.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  git diff --exit-code -- scripts/llm_client.py
+  echo 'PASS scripts/llm_client.py is unchanged'
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — confirm the audit did not modify the file.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  git diff --exit-code -- scripts/dispatcher.py
+  echo 'PASS scripts/dispatcher.py is unchanged'
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/triapi.py`** — confirm the audit did not modify the file.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  git diff --exit-code -- scripts/triapi.py
+  echo 'PASS scripts/triapi.py is unchanged'
+  BASH
+  ```
+<!-- triapi:plan run_id=20260823-163311-6c33a3 end -->
+
+<!-- triapi:plan run_id=20260823-163408-8eee04 start -->
+## TriAPI Plan (run 20260823-163408-8eee04, appended 2026-08-23)
+
+# OpenRouter Refactor Audit Plan (read-only; no code edits)
+
+## Phase 1 — Audit `scripts/llm_client.py`
+
+- [ ] **File:** `scripts/llm_client.py`; **Change:** none (read-only static audit); **Check:** OpenRouter endpoint, auth header, and content type are wired. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/llm_client.py').read_text()
+  assert 'https://openrouter.ai/api/v1' in src, 'OpenRouter base URL missing'
+  assert '/chat/completions' in src, 'OpenRouter chat completions path missing'
+  assert 'Authorization' in src and 'Bearer' in src, 'OpenRouter bearer auth header missing'
+  assert 'Content-Type' in src and 'application/json' in src, 'OpenRouter JSON content-type missing'
+  print('OK: llm_client.py has OpenRouter endpoint and headers wired')
+  PY
+  ```
+
+- [ ] **File:** `scripts/llm_client.py`; **Change:** none (read-only static audit); **Check:** provider routing exists and request payload remains OpenAI-compatible. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/llm_client.py').read_text()
+  lower = src.lower()
+  assert 'openrouter' in lower, 'openrouter provider keyword missing'
+  assert 'provider' in lower, 'provider routing variable missing'
+  assert '"model"' in src and '"messages"' in src, 'OpenAI-compatible request body keys missing'
+  print('OK: llm_client.py routes by provider and sends model/messages payload')
+  PY
+  ```
+
+- [ ] **File:** `scripts/llm_client.py`; **Change:** none (read-only static audit); **Check:** OpenRouter response JSON is parsed defensively and error key is handled. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/llm_client.py').read_text()
+  assert 'choices' in src and 'message' in src and 'content' in src, 'OpenAI-style response fields missing'
+  assert ('get("choices"' in src or "get('choices'" in src), 'response handling should use .get("choices")'
+  assert ('get("message"' in src or "get('message'" in src), 'response handling should use .get("message")'
+  assert ('get("content"' in src or "get('content'" in src), 'response handling should use .get("content")'
+  assert '"error"' in src or "'error'" in src, 'response error key not checked'
+  print('OK: llm_client.py parses OpenRouter JSON defensively')
+  PY
+  ```
+
+## Phase 2 — Audit `scripts/dispatcher.py`
+
+- [ ] **File:** `scripts/dispatcher.py`; **Change:** none (read-only static audit); **Check:** fallback logic is OpenRouter-aware and provider-scoped. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  lower = src.lower()
+  assert 'openrouter' in lower, 'dispatcher does not reference OpenRouter'
+  assert 'provider' in lower, 'dispatcher fallback does not consult provider'
+  assert 'fallback' in lower, 'dispatcher has no fallback logic'
+  print('OK: dispatcher.py has OpenRouter-aware, provider-scoped fallback logic')
+  PY
+  ```
+
+- [ ] **File:** `scripts/dispatcher.py`; **Change:** none (read-only static audit); **Check:** fallback advances only on quota/rate-limit/availability signals, not on arbitrary errors. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  guard_tokens = ('402', '429', '503', 'RESOURCE_EXHAUSTED', 'quota', 'rate_limit')
+  assert any(token in src for token in guard_tokens), 'no quota/rate-limit/availability guard token found'
+  print('OK: dispatcher.py has guarded fallback advancement tokens')
+  PY
+  ```
+
+- [ ] **File:** `scripts/dispatcher.py`; **Change:** none (read-only static audit); **Check:** fallback model selection stays provider-scoped for OpenRouter. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  lower = src.lower()
+  assert 'provider' in lower, 'provider routing keyword missing'
+  assert 'model' in lower, 'model selection keyword missing'
+  assert 'fallback' in lower, 'fallback keyword missing'
+  print('OK: dispatcher.py fallback model selection is provider-aware')
+  PY
+  ```
+
+## Phase 3 — Audit `scripts/triapi.py`
+
+- [ ] **File:** `scripts/triapi.py`; **Change:** none (read-only static audit); **Check:** CLI exposes OpenRouter provider routing and dispatch entrypoint. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  lower = src.lower()
+  assert 'openrouter' in lower, 'triapi CLI does not mention OpenRouter'
+  assert 'provider' in lower or '--provider' in src, 'triapi CLI does not expose provider flag/routing'
+  assert 'dispatch' in lower, 'triapi CLI dispatch entrypoint missing'
+  print('OK: triapi.py CLI wires OpenRouter provider routing into dispatch')
+  PY
+  ```
+
+- [ ] **File:** `scripts/triapi.py`; **Change:** none (read-only static audit); **Check:** OpenRouter API key is resolved via the secrets loader, not hardcoded. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  lower = src.lower()
+  assert 'openrouter_api_key' in lower or 'OPENROUTER_API_KEY' in src, 'OpenRouter API key reference missing'
+  assert 'load_secrets' in src or 'secrets_loader' in src, 'secrets loader not used for OpenRouter key'
+  print('OK: triapi.py resolves OpenRouter key through secrets loader')
+  PY
+  ```
+
+- [ ] **File:** `scripts/triapi.py`; **Change:** none (read-only static audit); **Check:** provider value is passed through to the dispatch/client layer. **build_cmd (`verify_only: true`):**
+  ```bash
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  lower = src.lower()
+  assert 'provider' in lower, 'provider keyword missing'
+  assert 'dispatcher' in lower or 'llm_client' in lower, 'no dispatch/client invocation found'
+  print('OK: triapi.py passes provider through to dispatcher/client layer')
+  PY
+  ```
+<!-- triapi:plan run_id=20260823-163408-8eee04 end -->

@@ -321,8 +321,9 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
     snapshot_ollama_host = None
     try:
         tiers_cfg = load_tiers()
-        snapshot_ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
-        ollama_snapshot = resource_guard.snapshot_ollama_state(ollama_host=snapshot_ollama_host)
+        if tiers_cfg["tier_4_worker"].get("provider") == "ollama":
+            snapshot_ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
+            ollama_snapshot = resource_guard.snapshot_ollama_state(ollama_host=snapshot_ollama_host)
     except Exception as exc:
         snapshot_ollama_host = None
         log.warning("Could not snapshot Ollama state before dispatch: %s", exc)
@@ -332,11 +333,12 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
         try:
             if tiers_cfg is None:
                 tiers_cfg = load_tiers()
-            default_model_key = tiers_cfg["tier_4_worker"]["default_model"]
-            keep_model = tiers_cfg["tier_4_worker"].get("models", {}).get(default_model_key, default_model_key)
-            ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
-            unloaded = resource_guard.unload_other_ollama_models(keep_model=keep_model, ollama_host=ollama_host)
-            log.info("Unloaded other Ollama models for this dispatch: %s", unloaded)
+            if tiers_cfg["tier_4_worker"].get("provider") == "ollama":
+                default_model_key = tiers_cfg["tier_4_worker"]["default_model"]
+                keep_model = tiers_cfg["tier_4_worker"].get("models", {}).get(default_model_key, default_model_key)
+                ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
+                unloaded = resource_guard.unload_other_ollama_models(keep_model=keep_model, ollama_host=ollama_host)
+                log.info("Unloaded other Ollama models for this dispatch: %s", unloaded)
         except Exception as exc:
             log.warning("Could not unload other Ollama models before dispatch: %s", exc)
     crash: tuple[Exception, object] | None = None

@@ -36,7 +36,7 @@ class CmdDispatchOllamaLifecycleTests(unittest.TestCase):
                 "load_tiers",
                 return_value={
                     "self_fix": {"enabled": True},
-                    "tier_4_worker": {"endpoint": "http://localhost:11434"},
+                    "tier_4_worker": {"endpoint": "http://localhost:11434", "provider": "ollama"},
                 },
             ),
             mock.patch.object(triapi, "_breakdown_and_dispatch", side_effect=fail_dispatch),
