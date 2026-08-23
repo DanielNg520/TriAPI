@@ -1,34 +1,22 @@
-"""Tier 1: Claude Code CLI escalation client.
+"""Tier 1: LLM escalation client.
 
-Called after Tier 3 (DeepSeek) fails to resolve the build. Shells out to
-`claude -p` with a minimal --system-prompt override (avoids Claude Code's
-default system prompt + CLAUDE.md auto-discovery, which otherwise adds
-~60K tokens of overhead per call -- irrelevant here since the task is a
-one-shot text fix, not a coding session) and --tools "" (no tool access
-needed; the file contents are inlined in the prompt and the fix is
-extracted from the text response, same pattern as Tier 3).
-
-Must only be called after budget_guard.check_tier1_ok() passes. Uses the
-Claude Pro/Max subscription (no ANTHROPIC_API_KEY), never metered billing.
-
-DO NOT pass --bare: it forces ANTHROPIC_API_KEY/apiKeyHelper auth and
-never reads the OAuth/keychain subscription login, which would silently
-switch this tier to metered billing -- the opposite of what budget_guard
-is protecting against.
+Called after Tier 3 (DeepSeek) fails to resolve the build. Dispatches the
+repair prompt through llm_client.execute_llm using the tier_1_planner
+config (provider/endpoint/model). Must only be called after
+budget_guard.check_tier1_ok() passes.
 """
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, lessons
+from scripts import llm_client
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
-import requests
 from scripts.budget_guard import check_tier1_ok
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
@@ -113,19 +101,6 @@ def escalate(
             "block, using the language tag appropriate for this file (or no tag for " \
             "plain text/markdown) -- no explanation."
 
-    # `prompt` (target file contents + context_blob, up to 20K chars/file --
-    # tier4_worker.build_context_blob()'s own cap -- times however many
-    # context files an item names) is piped via stdin, NOT passed as a CLI
-    # argv token. Found for real 2026-08-12: passing it as `-p prompt`
-    # hit the kernel's execve() argument-list size limit
-    # (`OSError: [Errno 7] Argument list too long`) on an item with several
-    # sizeable context files, an UNCAUGHT crash that took down the entire
-    # unattended dispatch process -- the same failure shape as the
-    # subprocess.TimeoutExpired crash tier4_worker.run_build() was already
-    # fixed for. `claude`'s own `[prompt]` CLI arg is documented optional
-    # (`claude -p --help`: "Arguments: prompt  Your prompt"), reading from
-    # stdin when omitted -- exactly what's needed here, and with no
-    # practical size limit the way argv has.
     secrets = load_secrets()
     config = load_tiers()
     tier1 = config["tier_1_planner"]
@@ -133,29 +108,17 @@ def escalate(
     endpoint = tier1["endpoint"]
 
     try:
-        resp = requests.post(
-            f"{endpoint}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {secrets['open_router_api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                "stream": False,
-            },
-            timeout=180,
+        raw_result, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+            provider=tier1.get('provider', 'openrouter'),
+            endpoint=tier1.get('endpoint'),
+            api_key=secrets.get(tier1.get('api_key_secret', 'open_router_api_key')),
+            model=model_name,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            is_tier4=False,
         )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        return {"status": "error", "reason": f"Tier 1 OpenRouter request failed: {e}"}
-
-    data = resp.json()
-    usage = data.get("usage", {})
-    raw_result = data["choices"][0]["message"]["content"]
+    except Exception:
+        return {"status": "error"}
 
     log_cost(
         {
@@ -163,11 +126,11 @@ def escalate(
             "tier": "tier_1",
             "model": model_name,
             "task_id": task_id,
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "cost_usd": 0.0,
             "notional_cost_usd": 0.0,
-            "billing": "openrouter",
+            "billing": billing_type,
         }
     )
 
@@ -177,7 +140,7 @@ def escalate(
             return {
                 "status": "fix_rejected",
                 "reason": f"Could not apply proposed edit: {err}",
-                "notional_cost_usd": data.get("total_cost_usd", 0.0),
+                "notional_cost_usd": 0.0,
             }
         fixed_code = new_content
     else:
@@ -186,7 +149,7 @@ def escalate(
             return {
                 "status": "fix_rejected",
                 "reason": "Tier 1 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.",
-                "notional_cost_usd": data.get("total_cost_usd", 0.0),
+                "notional_cost_usd": 0.0,
             }
 
     guard = content_guard.check_write(task_id, target_path, fixed_code)
@@ -194,7 +157,7 @@ def escalate(
         return {
             "status": "fix_rejected",
             "reason": guard["reason"],
-            "notional_cost_usd": data.get("total_cost_usd", 0.0),
+            "notional_cost_usd": 0.0,
         }
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -202,7 +165,7 @@ def escalate(
 
     return {
         "status": "fix_applied",
-        "notional_cost_usd": data.get("total_cost_usd", 0.0),
+        "notional_cost_usd": 0.0,
     }
 
 

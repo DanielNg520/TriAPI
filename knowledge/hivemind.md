@@ -411,3 +411,34 @@ When a validation guard rejects an item, ask whether the rejection reflects a fu
 - **Use guards to enforce the correct tool, not just to say "no".** Sops-encrypted files must never be drafted/patched by an AI tier because SEARCH/REPLACE on ciphertext corrupts the MAC. The guard refuses such items but tells the caller the correct shape: make it `verify_only: true` and express the change as an immutable `sops set`/`--set` shell command in `build_cmd`.
 
 - **Don't re-run creation-time guards on resume.** Post-breakdown guards now run only when `newly_broken_down` is true. Re-running them on an already-populated breakdown would let unrelated drift (e.g. AGENTS.md growing) retroactively block a resumable run that was valid when it was created. Validation should be anchored to the moment the state was produced, not re-litigated under later conditions.
+
+### Centralize LLM provider calls behind a shared client abstraction and normalize failure/usage outcomes
+
+When multiple escalation tiers need to call LLM providers, don't let each tier hand-build provider-specific HTTP requests, parse provider-specific response shapes, and reimplement fallback/error handling. Instead, introduce a single client API (e.g. `llm_client.execute_llm(...)`) that accepts provider, endpoint, API key, model, prompt, and system prompt, and returns a normalized result: `(response_text, billing_type, prompt_tokens, output_tokens)`.
+
+This diff shows the payoff:
+
+- The tier no longer imports provider-specific helpers (`gemini_fallback`) or constructs raw `requests.post(...)` payloads.
+- Provider-specific concerns (request schema, usage metadata fields like `candidatesTokenCount`, fallback-model selection) live behind the client.
+- The caller receives normalized token counts and billing type instead of hardcoding `"billing": "free_tier"` or digging through `data["candidates"][0]["content"]["parts"][0]["text"]`.
+- Error handling becomes consistent with the rest of the system: `except Exception` at the escalation boundary returns a normal `{"status": "error"}` result, so a transient API failure doesn't crash the entire unattended dispatch process. Previously, direct `requests.HTTPError`/connection failures could propagate uncaught and take down the orchestrator.
+
+General guidelines:
+
+- **Define a stable internal client contract** that hides vendor-specific API differences. Callers should only consume normalized text, usage counts, and billing metadata.
+- **Catch provider failures at the orchestration boundary** and convert them into domain results (e.g. status `"error"`/`"skipped"`/`"fix_rejected"`) so the caller can decide fallback/handoff instead of crashing.
+- **Keep model fallback logic centralized**; don't let each tier reimplement “try default model, then fallback chain” with raw HTTP calls.
+- **Use one cost-log shape across tiers** so accounting is uniform, even when providers report tokens differently.
+
+### Provider-Agnostic LLM Client Pattern
+
+Centralize external LLM API calls behind a shared client abstraction so callers do not know provider-specific endpoints, auth, or response shapes. Keep provider differences at the boundary, and treat provider failures as ordinary pipeline failures rather than uncaught crashes.
+
+- **Use one client module for all providers.** Replace ad-hoc `requests.post` + JSON parsing in each tier with a common `llm_client.execute_llm(provider=..., endpoint=..., api_key=..., model=..., prompt=...)` entry point.
+- **Return canonical fields from the client.** The client should normalize provider-specific token names (e.g. Ollama's `prompt_eval_count` vs. OpenRouter's `prompt_tokens`) into one shape like `(response_text, billing_type, input_tokens, output_tokens)`. Cost/reporting code then has a single schema across all tiers.
+- **Resolve provider-specific config defensively.** Use `tier4.get('provider', 'ollama')`, `tier4.get('endpoint')`, and `secrets.get(tier4.get('api_key_secret', 'open_router_api_key'))` so old configs and new configs keep working without hard-coding a provider name in the worker.
+- **Log dynamically, not by hard-coded provider.** A log line like `"Tier 4 (%s/%s) drafting %s"` with the configured provider name makes multi-provider runs traceable without code changes.
+- **Catch both expected and unexpected request failures.** Catch `requests.RequestException` first for transport/HTTP errors, then a broad `Exception` for anything else. Convert both into the same failure-result object (e.g. `_tier4_fail(...)`) so an unattended/tiered pipeline can retry or escalate instead of crashing mid-run.
+- **Don't let an external LLM outage become a hard crash.** Modeling provider errors as build/verification failures lets the existing consecutive-failure threshold and escalation state machine handle the outage naturally.
+
+This pattern keeps agent/worker code focused on task logic while making provider swaps, multi-provider support, and consistent cost accounting a shared concern.

@@ -16,11 +16,10 @@ import sys
 import time
 from pathlib import Path
 
-import requests
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks
 from scripts import lessons
+from scripts import llm_client
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
@@ -187,32 +186,20 @@ def escalate(
     user_message = build_user_message(stderr, revision_note)
 
     try:
-        resp = requests.post(
-            f"{tier3['endpoint']}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {secrets['deepseek_api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": stable_context},
-                    {"role": "user", "content": user_message},
-                ],
-                "stream": False,
-            },
+        data = llm_client.execute_llm(
+            provider=tier3.get("provider", "deepseek"),
+            endpoint=tier3["endpoint"],
+            api_key=secrets["deepseek_api_key"],
+            model=model_name,
+            messages=[
+                {"role": "system", "content": stable_context},
+                {"role": "user", "content": user_message},
+            ],
             timeout=180,
         )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        # Previously: the raw requests.post() call was fully unguarded, and
-        # the separate raise_for_status() catch re-raised after logging --
-        # both paths crashed the whole unattended dispatch process on any
-        # DeepSeek-side failure (found for real via the twin bug in
-        # tier2_escalate.py, 2026-08-13 -- same code shape, not yet
-        # triggered here but equally vulnerable). Now consistent with every
-        # other tier: return a normal error result so orchestrator falls
-        # through to human_handoff instead of taking the process down.
+    except llm_client.LLMError as e:
+        # Return a normal error result so the orchestrator falls through to
+        # human_handoff instead of taking the process down.
         status = getattr(getattr(e, "response", None), "status_code", None)
         text = getattr(getattr(e, "response", None), "text", "")[:500]
         log.error("[%s] Tier 3 request failed: %s %s %s", task_id, e, status, text)
@@ -225,7 +212,6 @@ def escalate(
             "output_tokens": 0,
             "cost_usd": 0.0,
         }
-    data = resp.json()
 
     usage = data.get("usage", {})
     cache_hit_tokens = usage.get("prompt_cache_hit_tokens", 0)

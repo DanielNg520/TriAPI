@@ -19,7 +19,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks, gemini_fallback
+from scripts import content_guard, edit_blocks, llm_client
 from scripts.budget_guard import check_tier2_ok
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
@@ -124,45 +124,21 @@ def escalate(
     log.info("[%s] Tier 2 (Gemini/%s) escalating for %s", task_id, models[0], target_path)
 
     try:
-        resp, model_name = gemini_fallback.post_generate_content(
-            requests.post,
-            tier2["endpoint"],
-            secrets["google_ai_studio_api_key"],
-            {
-                "systemInstruction": {"parts": [{"text": system_instruction}]},
-                "contents": [{"role": "user", "parts": [{"text": user_content}]}],
-            },
-            models,
-            timeout=180,
+        response_text, billing_type, prompt_tokens, output_tokens = llm_client.execute_llm(
+            provider=tier2.get("provider", "openrouter"),
+            endpoint=tier2.get("endpoint"),
+            api_key=secrets.get(tier2.get("api_key_secret", "open_router_api_key")),
+            model=models[0],
+            prompt=user_content,
+            system_prompt=system_instruction,
+            is_tier4=False,
         )
-    except requests.RequestException as e:
-        # A raw connection/timeout failure from post_generate_content's own
-        # requests.post() call -- previously uncaught here, crashing the
-        # whole unattended dispatch process. Same fix as the raise_for_status
-        # case below: treat it as an ordinary escalation failure.
-        log.error("[%s] Tier 2 request failed: %s", task_id, e)
-        return {"status": "error", "reason": f"Gemini request failed: {e}"}
-    if model_name != models[0]:
-        log.info("[%s] Tier 2 used fallback model %s (default %s exhausted for today)", task_id, model_name, models[0])
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError as e:
-        # Previously re-raised after logging -- propagated uncaught through
-        # orchestrator.run_task()/dispatcher.dispatch(), crashing the whole
-        # unattended dispatch process on a transient Gemini-side error (a
-        # real 503 killed a run 2026-08-13). Tier 1/Tier 4 already treat
-        # their own request failures as an ordinary escalation failure
-        # instead of a crash; Tier 2 didn't. Now consistent: return a
-        # normal error result so orchestrator falls through to human_handoff
-        # like any other failed tier, instead of taking the process down.
-        log.error("[%s] Tier 2 request failed: %s %s", task_id, resp.status_code, resp.text[:500])
-        return {"status": "error", "reason": f"Gemini request failed: {e}"}
-    data = resp.json()
+    except Exception:
+        log.error("[%s] Tier 2 request failed", task_id, exc_info=True)
+        return {"status": "error"}
 
-    usage = data.get("usageMetadata", {})
-    prompt_tokens = usage.get("promptTokenCount", 0)
-    cached_tokens = usage.get("cachedContentTokenCount", 0)
-    output_tokens = usage.get("candidatesTokenCount", 0)
+    model_name = models[0]
+    cached_tokens = 0
 
     log.info(
         "[%s] Tier 2 response: prompt=%d cached=%d output=%d",
@@ -179,11 +155,9 @@ def escalate(
             "cached_tokens": cached_tokens,
             "output_tokens": output_tokens,
             "cost_usd": 0.0,
-            "billing": "free_tier",
+            "billing": billing_type,
         }
     )
-
-    response_text = data["candidates"][0]["content"]["parts"][0]["text"]
     if editing:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
         if new_content is None:

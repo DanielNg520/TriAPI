@@ -25,7 +25,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks, hivemind_util, lessons
+from scripts import content_guard, edit_blocks, hivemind_util, lessons, llm_client
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import clear_state, read_state, record_failure
@@ -117,35 +117,6 @@ def build_prompt(description: str, target_path: Path, last_stderr: str, context_
     return "\n\n".join(parts)
 
 
-def call_openrouter(host: str, model: str, prompt: str) -> dict:
-    secrets = load_secrets()
-    resp = requests.post(
-        f"{host}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {secrets['open_router_api_key']}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False
-        },
-        timeout=300,
-    )
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError:
-        log.error("OpenRouter request failed (model=%s): %s %s", model, resp.status_code, resp.text[:500])
-        raise
-    data = resp.json()
-    # Format the result to match what tier 4 expects
-    return {
-        "response": data["choices"][0]["message"]["content"],
-        "prompt_eval_count": data.get("usage", {}).get("prompt_tokens", 0),
-        "eval_count": data.get("usage", {}).get("completion_tokens", 0)
-    }
-
-
 def run_build(build_cmd: str, workdir: str, timeout: int = 300) -> tuple[bool, str]:
     try:
         result = subprocess.run(
@@ -206,31 +177,34 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
             f"{hivemind_code}"
         )
 
-    log.info("[%s] Tier 4 (OpenRouter/%s) drafting %s", task_id, model, target_path)
+    log.info("[%s] Tier 4 (%s/%s) drafting %s", task_id, tier4.get('provider', 'ollama'), model, target_path)
 
+    secrets = load_secrets()
     try:
-        ollama_response = call_openrouter(tier4["endpoint"], model, prompt)
+        response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+            provider=tier4.get('provider', 'ollama'),
+            endpoint=tier4.get('endpoint'),
+            api_key=secrets.get(tier4.get('api_key_secret', 'open_router_api_key')),
+            model=model,
+            prompt=prompt,
+            system_prompt='',
+            is_tier4=True
+        )
     except requests.RequestException as e:
-        # Ollama unreachable/down (connection refused, timeout, HTTP error --
-        # already logged inside call_ollama for the HTTPError case). Treat
-        # like a build failure so the existing consecutive-failure/escalation
-        # counter handles it, instead of an uncaught exception that crashes
-        # the whole (potentially hours-long, unattended) dispatch run.
-        log.error("[%s] Tier 4 request to OpenRouter failed: %s", task_id, e)
+        log.error("[%s] Tier 4 request failed: %s", task_id, e)
+        return _tier4_fail(task_id, threshold, str(e))
+    except Exception as e:
+        log.error("[%s] Tier 4 request failed: %s", task_id, e)
         return _tier4_fail(task_id, threshold, str(e))
 
-    response_text = ollama_response["response"]
     log_cost({
         "timestamp": time.time(),
         "tier": "tier_4",
         "model": model,
         "task_id": task_id,
-        # Ollama's own names for prompt/completion tokens -- kept as-is
-        # (not renamed to input_tokens/output_tokens) so a raw log line is
-        # traceable back to the Ollama API docs without a translation step.
-        "prompt_eval_count": ollama_response.get("prompt_eval_count", 0),
-        "eval_count": ollama_response.get("eval_count", 0),
-        "cost_usd": 0.0,  # local inference -- no per-token bill
+        "prompt_eval_count": input_tokens,
+        "eval_count": output_tokens,
+        "cost_usd": 0.0,
     })
 
     if editing:
