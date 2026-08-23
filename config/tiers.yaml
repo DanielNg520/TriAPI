@@ -2,16 +2,16 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  provider: openrouter
-  api_key_secret: open_router_api_key
-  name: "OpenRouter"
-  endpoint: "https://openrouter.ai/api/v1"
+  provider: google
+  api_key_secret: google_ai_studio_api_key
+  name: "Google AI Studio"
+  endpoint: "https://generativelanguage.googleapis.com"
   models:
-    default: "stealth/ox-alpha"
+    default: "gemini-3.1-pro-preview"
   default_model: "default"
   role: "strategic planning"
   automatable: true
-  outputs: ["PLAN.json", "ARCHITECTURE.md"]
+  outputs: ["PLAN.md", "ARCHITECTURE.md"]
 
 tier_1_manager:
   enabled: true
@@ -107,21 +107,14 @@ tier_3_debugger:
       output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
 
 tier_4_worker:
-  provider: openrouter
+  provider: ollama
   api_key_secret: open_router_api_key
-  name: "OpenRouter"
-  endpoint: "https://openrouter.ai/api/v1"
+  name: "Local Ollama"
+  endpoint: "http://localhost:11434"
   models:
-    default: "dots-studio/dots-3-note-preview:free"
-  # default_model set to 'default' model. Switched Q8_0 -> Q6_K 2026-08-19
-  # (user instruction): Q8_0 (18.4GB) left only ~1.6GB headroom against this
-  # machine's ~20GB available RAM (iGPU has just 512MB real VRAM, everything
-  # else is GTT/shared system RAM) and was timing out (300s) on every real
-  # drafting prompt during this session's Self-Improvement dispatch. Q6_K
-  # (~12GB) plus 24k context (~4.6GB KV cache) lands at ~16.6GB total --
-  # notably more headroom, and roughly the same total footprint as Q5_K_M at
-  # 32k context would have been, but with better weight fidelity for equal
-  # risk. See tier4_worker.py's call_ollama() for the paired num_ctx=24576.
+    default: "qwen2.5-coder:14b-instruct-q6_K"
+    polyglot: "deepseek-coder-v2:16b"
+    heavy: "qwen2.5-coder:32b"
   default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
   # Local Ollama is not guaranteed to be running (build/verification fails

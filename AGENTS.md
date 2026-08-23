@@ -184,3 +184,28 @@ Scope: read-only diagnosis. No repo files are modified; all evidence is captured
 - [x] Auto-draft a raw red-flag index from every evidence file into `/tmp/triapi_audit/findings.md`: `{ echo "# TriAPI audit findings — $(date -Is)"; echo; echo "Scope: read-only diagnosis; evidence in /tmp/triapi_audit/*.txt; no repo files modified."; echo; for f in /tmp/triapi_audit/{carryover,repro_triapi,entry_points,unittest,deps,secrets,config_load,sidecars,ollama,ollama_api,claude,budget_guard,logs,e2e}.txt; do [ -f "$f" ] || continue; HITS=$(grep -niE 'error|fail|missing|refused|exception|traceback|not on path|decrypt_fail|secrets_missing|api_key_set|not found|cannot|denied|exit=[1-9]' "$f" | head -15); if [ -n "$HITS" ]; then echo "### $(basename "$f")"; echo "$HITS"; echo; fi; done; } > /tmp/triapi_audit/findings.md && echo "draft written"` — then rewrite the same file by hand into a clean audit report.
 - [x] Author the final root-cause report at `/tmp/triapi_audit/findings.md` (one section per confirmed problem: symptom, evidence file + line, how it breaks TriAPI, minimal fix — fixes are NOT applied in this audit), then print it for the user: compose `/tmp/triapi_audit/findings.md` from the red-flag draft above, then verify with `cat /tmp/triapi_audit/findings.md && wc -l /tmp/triapi_audit/findings.md` — done means every evidence file has been reviewed/attributed and the root cause(s) are stated with the exact command/step that will unblock TriAPI.
 <!-- triapi:plan run_id=20260823-135914-18f8c0 end -->
+
+<!-- triapi:plan run_id=20260823-143024-5e6d61 start -->
+## TriAPI Plan (run 20260823-143024-5e6d61, appended 2026-08-23)
+
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="read_file">
+<｜｜DSML｜｜parameter name="filePath" string="true">tests/test_file_size_ceiling_and_oversize_escalation.py</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+<｜｜DSML｜｜invoke name="read_file">
+<｜｜DSML｜｜parameter name="filePath" string="true">scripts/tier4_worker.py</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+<!-- triapi:plan run_id=20260823-143024-5e6d61 end -->
+
+<!-- triapi:plan run_id=20260823-144422-e0c98e start -->
+## TriAPI Plan (run 20260823-144422-e0c98e, appended 2026-08-23)
+
+1. Phase 1: Environment and Dependency Audit
+   - [x] File: `config/secrets.enc.yaml`. Change needed: Read-only verification to ensure the local `age` key successfully decrypts the encrypted configuration without errors. Command: `sops -d config/secrets.enc.yaml > /dev/null`
+   - [x] File: `config/resource_guard.yaml`. Change needed: Read-only verification of the Ollama dependency to ensure its systemd user service is currently active and running. Command: `systemctl --user status ollama --no-pager`
+   - [x] File: `scripts/tier1_escalate.py`. Change needed: Read-only verification that the Anthropic `claude` CLI dependency is installed and accessible in the system path. Command: `claude --version`
+
+2. Phase 2: Regression Test Suite Audit
+   - [x] File: `tests/test_branch_features.py`. Change needed: Read-only execution of the full test suite to ensure all baseline logic, integrations, and mocked budget/Jules behaviors still pass. Command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+<!-- triapi:plan run_id=20260823-144422-e0c98e end -->
