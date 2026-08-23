@@ -186,26 +186,20 @@ def escalate(
     user_message = build_user_message(stderr, revision_note)
 
     try:
-        data = llm_client.execute_llm(
+        raw_result, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
             provider=tier3.get("provider", "deepseek"),
             endpoint=tier3["endpoint"],
-            api_key=secrets["deepseek_api_key"],
+            api_key=secrets.get(tier3.get("api_key_secret", "deepseek_api_key")),
             model=model_name,
-            messages=[
-                {"role": "system", "content": stable_context},
-                {"role": "user", "content": user_message},
-            ],
-            timeout=180,
+            prompt=user_message,
+            system_prompt=stable_context,
+            is_tier4=False,
         )
-    except llm_client.LLMError as e:
-        # Return a normal error result so the orchestrator falls through to
-        # human_handoff instead of taking the process down.
-        status = getattr(getattr(e, "response", None), "status_code", None)
-        text = getattr(getattr(e, "response", None), "text", "")[:500]
-        log.error("[%s] Tier 3 request failed: %s %s %s", task_id, e, status, text)
+    except Exception as e:
+        log.error("[%s] Tier 3 request failed: %s", task_id, e)
         return {
             "status": "error",
-            "reason": f"DeepSeek request failed: {e}",
+            "reason": f"Tier 3 request failed: {e}",
             "model": model_name,
             "cache_hit_tokens": 0,
             "cache_miss_tokens": 0,
@@ -213,15 +207,13 @@ def escalate(
             "cost_usd": 0.0,
         }
 
-    usage = data.get("usage", {})
-    cache_hit_tokens = usage.get("prompt_cache_hit_tokens", 0)
-    cache_miss_tokens = usage.get("prompt_cache_miss_tokens", 0)
-    output_tokens = usage.get("completion_tokens", 0)
-
+    cache_hit_tokens = 0
+    cache_miss_tokens = input_tokens
+    
     cost_usd, partial = compute_cost(model_pricing, cache_hit_tokens, cache_miss_tokens, output_tokens)
     log.info(
-        "[%s] Tier 3 response: cache_hit=%d cache_miss=%d output=%d cost=$%.6f%s",
-        task_id, cache_hit_tokens, cache_miss_tokens, output_tokens, cost_usd,
+        "[%s] Tier 3 response: input=%d output=%d cost=$%.6f%s",
+        task_id, input_tokens, output_tokens, cost_usd,
         " (partial pricing)" if partial else "",
     )
 
@@ -239,20 +231,7 @@ def escalate(
         }
     )
 
-    finish_reason = data["choices"][0].get("finish_reason")
-    if finish_reason == "length":
-        log.warning("[%s] Tier 3 response truncated by max-token limit (finish_reason=length)", task_id)
-        return {
-            "status": "fix_rejected",
-            "reason": "Tier 3 response truncated by max-token limit (finish_reason=length); refusing to write incomplete content.",
-            "model": model_name,
-            "cache_hit_tokens": cache_hit_tokens,
-            "cache_miss_tokens": cache_miss_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": cost_usd,
-        }
-
-    response_text = data["choices"][0]["message"]["content"]
+    response_text = raw_result
     if current_contents is not None:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
         if new_content is None:
