@@ -118,13 +118,11 @@ def _fallback_request(
 
 
 def _fallback_ollama(prompt: str, system_prompt: str) -> Tuple[str, str, int, int]:
-    """Call local Ollama API (tier-4 fallback)."""
+    """Call local Ollama API (ollama_fallback)."""
     config = config_loader.load_tiers()
-    tier4_cfg = config.get("tier_4_worker", {})
-    model_name = tier4_cfg.get("models", {}).get(
-        "default", "dots-studio/dots-3-note-preview:free"
-    )
-    url = "http://localhost:11434/api/generate"
+    ollama_fallback_cfg = config.get("ollama_fallback", {})
+    model_name = ollama_fallback_cfg.get("models", {}).get("default")
+    url = ollama_fallback_cfg.get("endpoint")
     payload = {
         "model": model_name,
         "prompt": prompt,
@@ -178,14 +176,13 @@ def _call_deepseek_fallback(
 def _call_gemini_fallback(
     prompt: str, system_prompt: str
 ) -> Tuple[str, str, int, int]:
-    """Call Gemini API using tier_2_manager config."""
+    """Call Gemini API using gemini_fallback config."""
     config = config_loader.load_tiers()
-    tier2_cfg = config.get("tier_2_manager", {})
-    endpoint = tier2_cfg.get("endpoint", "https://generativelanguage.googleapis.com")
+    gemini_fallback_cfg = config.get("gemini_fallback", {})
+    endpoint = gemini_fallback_cfg.get("endpoint")
     # Fallback model is the flash model from config
-    model = tier2_cfg.get("models", {}).get(
-        "flash", "gemini-3.5-flash"
-    )
-    api_key = secrets_loader.load_secrets().get("google_ai_studio_api_key")
+    model = gemini_fallback_cfg.get("models", {}).get("flash")
+    api_key_secret_name = gemini_fallback_cfg.get("api_key_secret", "google_ai_studio_api_key")
+    api_key = secrets_loader.load_secrets().get(api_key_secret_name)
 
     return _call_gemini_api(endpoint, api_key, model, prompt, system_prompt)

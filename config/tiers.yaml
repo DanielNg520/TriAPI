@@ -68,6 +68,12 @@ tier_2_manager:
     free_tier_rpd: 1500
     notes: "billing-enabled Tier 1+ paid project (confirmed 2026-08-19); RPM/RPD below are a conservative floor, not independently verified for the specific flash models used here -- see comment above"
 
+gemini_fallback:
+  endpoint: "https://generativelanguage.googleapis.com"
+  models:
+    flash: "gemini-3.5-flash"
+  api_key_secret: google_ai_studio_api_key
+
 tier_3_debugger:
   provider: deepseek
   api_key_secret: deepseek_api_key
@@ -126,6 +132,11 @@ tier_4_worker:
   # Project-specific; callers may override per invocation.
   build_commands:
     - "cmake --build build"
+
+ollama_fallback:
+  endpoint: "http://localhost:11434"
+  models:
+    default: "qwen2.5-coder:14b-instruct-q6_K"
 
 escalation_rules:
   # Claude (Tier 1) is deliberately last in the automated chain, after
