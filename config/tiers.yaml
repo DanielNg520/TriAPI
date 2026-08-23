@@ -2,12 +2,12 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  provider: google
-  api_key_secret: google_ai_studio_api_key
-  name: "Google AI Studio"
-  endpoint: "https://generativelanguage.googleapis.com"
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "gemini-3.5-flash"
+    default: "stealth/ox-alpha"
   default_model: "default"
   role: "strategic planning"
   automatable: true
