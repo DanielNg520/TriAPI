@@ -17,17 +17,17 @@ tier_1_manager:
   enabled: true
 
 tier_2_manager:
-  provider: openrouter
-  api_key_secret: open_router_api_key
+  provider: google
+  api_key_secret: google_ai_studio_api_key
   name: "Gemini (Google AI Studio API)"
   # The Antigravity 2.0 desktop app is a GUI with no headless mode and stays
   # available as a manual review surface, but automated escalation calls the
   # underlying Gemini model directly via the Google AI Studio REST API --
   # not through the desktop app.
-  endpoint: "https://openrouter.ai/api/v1"
+  endpoint: "https://generativelanguage.googleapis.com"
   models:
-    flash: "nvidia/nemotron-3-ultra-550b-a55b:free"
-    pro: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    flash: "gemini-3.5-flash"
+    pro: "gemini-2.5-pro"
   default_model: flash
   # Tried in order whenever the current model's free-tier quota is
   # exhausted for the day -- confirmed live 2026-08-10 that Google buckets

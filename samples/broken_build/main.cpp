@@ -12,12 +12,12 @@ private:
 
 int main() {
     std::vector<std::unique_ptr<Widget>> widgets;
-    widgets.push_back(std::make_unique<Widget>(1));
-    widgets.push_back(std::make_unique<Widget>(2));
+    widgets.push_back(std::unique_ptr<Widget>(new Widget(1)));
+    widgets.push_back(std::unique_ptr<Widget>(new Widget(2)));
 
     std::vector<std::unique_ptr<Widget>> copy;
     for (const auto& w : widgets) {
-        copy.push_back(std::make_unique<Widget>(w->getId()));
+        copy.push_back(std::unique_ptr<Widget>(new Widget(w->getId())));
     }
 
     for (const auto& w : copy) {
