@@ -65,7 +65,7 @@ def _call_tier3_with_retries(
             resp = requests.post(
                 f"{tier3['endpoint']}/chat/completions",
                 headers={
-                    "Authorization": f"Bearer {secrets['deepseek_api_key']}",
+                    "Authorization": f"Bearer {secrets[tier3['api_key_secret']]}",
                     "Content-Type": "application/json",
                 },
                 json={

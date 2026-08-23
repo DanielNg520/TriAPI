@@ -76,14 +76,13 @@ gemini_fallback:
   api_key_secret: google_ai_studio_api_key
 
 tier_3_debugger:
-  provider: deepseek
-  api_key_secret: deepseek_api_key
-  name: "DeepSeek"
-  endpoint: "https://api.deepseek.com"
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter Dots"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
-    flash: "deepseek-v4-flash"
-    pro: "deepseek-v4-pro"
-  default_model: pro
+    default: "dots-studio/dots-3-note-preview:free"
+  default_model: default
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
   peak_hours_utc:
@@ -106,14 +105,18 @@ tier_3_debugger:
       cache_miss_per_mtok_usd: null  # not given in source doc -- verify before relying on it
       cache_hit_per_mtok_usd: 0.003625
       output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
+    default:
+      cache_miss_per_mtok_usd: 0.0
+      cache_hit_per_mtok_usd: 0.0
+      output_per_mtok_usd: 0.0
 
 tier_4_worker:
   provider: openrouter
   api_key_secret: open_router_api_key
-  name: "OpenRouter Dots"
+  name: "OpenRouter Llama"
   endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "dots-studio/dots-3-note-preview:free"
+    default: "meta-llama/llama-3.1-8b-instruct"
     polyglot: "deepseek-coder-v2:16b"
     heavy: "qwen2.5-coder:32b"
   default_model: default
