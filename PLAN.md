@@ -1183,3 +1183,14 @@ LLM stop generating when the task calls for copying.
   - `tier_4_worker` shifted from hardcoded local Ollama to OpenRouter (pointing to `dots-studio/dots-3-note-preview:free`).
 - [x] **Fallback Architecture Redesign**: The global exception catchers for LLM calls (`_fallback_deepseek_then_gemini` and `_fallback_ollama`) were refactored to read from independent `gemini_fallback` and `ollama_fallback` blocks rather than overloading the Tier 2 and Tier 4 configs.
 - [x] **Self-Audit Verification**: Dispatched TriAPI in a synthetic 9-file run to comprehensively review the fallback logic and configuration decoupling, returning a clean architectural verdict (`OVERALL_AUDIT.md` - deleted post-review).
+
+---
+
+## Phase 18: Planner Provider Decoupling & Interactive CLI Fix (2026-08-22)
+
+**Goal**: Eradicate hardcoded API endpoints, model strings, and provider types from the `planner.py` script so that TriAPI can rapidly swap in alternative models via standard configuration (e.g., OpenRouter, Nemotron, Llama) for the interactive plan authoring step.
+
+- [x] **`planner.py` Configuration Parsing**: Updated `plan_turn` to read `tier_1_planner` settings from `config/tiers.yaml` instead of hardcoding a `claude -p` subprocess.
+- [x] **`planner.py` Context Enrichment**: Since cloud models lack file search capabilities, `planner.py` automatically injects repo context (`AGENTS.md`, `PLAN.md`, `README.md`) using `build_context_blob` for non-CLI providers.
+- [x] **`planner.py` Legacy CLI Refinements**: If the provider is `cli`, the script manually executes a subprocess to `claude -p` using the proper `--tools Read,Glob,Grep`, `--output-format json`, and `--resume` flags, and gracefully falls back to `llm_client._fallback_request()` if the CLI fails or hits quota limits.
+- [x] **`llm_client.py` Logging Fix**: Discovered and patched an `AttributeError` crash inside `llm_client.py` where `tri_logging.warning()` was improperly called without fetching a logger instance first.
