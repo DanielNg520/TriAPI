@@ -232,7 +232,7 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
             "--output-format", "json",
             "--add-dir", project_dir,
         ]
-        if session_id:
+        if session_id and session_id != "stateless":
             cmd.extend(["--resume", session_id])
 
         def _fallback() -> dict:
