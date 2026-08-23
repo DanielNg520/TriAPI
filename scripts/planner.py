@@ -28,6 +28,8 @@ during 06:00-10:00 UTC; `in_tier3_deepseek_peak_utc()` exposes this window so
 plans can be priced/scheduled with that cost in mind.
 """
 
+import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.budget_guard import check_tier1_ok
 from scripts import config_loader, llm_client, secrets_loader
+from scripts.tier4_worker import build_context_blob
 from scripts.tri_logging import get_logger
 
 log = get_logger("planner")
@@ -115,12 +118,15 @@ def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
     Pass session_id=None for the first turn; pass back the session_id this
     returns for every subsequent turn.
 
-    The provider is read from config (tier_1_planner.provider). Every
-    provider -- including the local Claude CLI ('cli') -- is dispatched
-    through llm_client.execute_llm(), which owns the claude subprocess and
-    handles primary/fallback routing, so planner.py never shells out or
-    parses Claude's JSON itself. execute_llm() returns no cross-turn
-    session identifier, so every turn returns session_id='stateless'.
+    The provider is read from config (tier_1_planner.provider). For the
+    local Claude CLI ('cli'), planner.py shells out to `claude -p` natively
+    with tools (Read,Glob,Grep), --output-format json, --add-dir, and
+    --resume, parses its JSON output, and falls back to
+    llm_client._fallback_request() on failure. Non-'cli' providers and the
+    'cli' fallback enrich the prompt with a context blob (AGENTS.md,
+    PLAN.md, README.md) since they lack tools, and are dispatched through
+    llm_client.execute_llm(). execute_llm() returns no cross-turn session
+    identifier, so every turn returns session_id='stateless'.
     """
     guard = check_tier1_ok()
     if not guard["ok"]:
@@ -135,15 +141,141 @@ def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
     return _plan_turn_llm(message, project_dir, session_id, tier1, provider)
 
 
-def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1: dict, provider: str) -> dict:
-    """Dispatch a planning turn through llm_client.execute_llm().
+def _text_from_claude_json(data) -> str | None:
+    """Extract the assistant's text from a parsed `claude --output-format json` object."""
+    if isinstance(data, str):
+        return data or None
+    if not isinstance(data, dict):
+        return None
+    text = data.get("result")
+    if text is None:
+        text = data.get("text")
+    if text is None:
+        content = data.get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts = [
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ]
+            text = "".join(parts)
+    return text or None
 
-    execute_llm() is the single entry point for every provider, including
-    the local Claude CLI ('cli'); it runs the claude subprocess itself, so
-    planner.py no longer shells out or parses Claude's JSON output. The
-    whole path is wrapped so failures return an error dict instead of
-    crashing the caller.
+
+def _extract_claude_result(stdout: str) -> str | None:
+    """Pull the assistant's text out of `claude --output-format json` stdout.
+
+    The CLI emits a single JSON object, but it may also stream NDJSON (one
+    object per line). The return code is ignored on purpose -- a non-zero
+    exit still often carries a usable result object -- so callers parse
+    first and only fall back if nothing parses.
     """
+    raw = (stdout or "").strip()
+    if not raw:
+        return None
+    candidates = [raw]
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if len(lines) > 1:
+        candidates.extend(reversed(lines))
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        text = _text_from_claude_json(data)
+        if text:
+            return text
+    return None
+
+
+def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1: dict, provider: str) -> dict:
+    """Dispatch a planning turn.
+
+    Provider 'cli' runs the local `claude` CLI natively with tools
+    (Read,Glob,Grep), --output-format json, --add-dir, and --resume, then
+    parses the JSON from stdout even when the return code is non-zero. On a
+    successful parse the result is returned; on any failure or parse error a
+    warning is logged and the call falls back to
+    llm_client._fallback_request('cli', enriched_message, SYSTEM_PROMPT, False).
+
+    The 'cli' fallback and every non-'cli' provider lack CLI tools, so the
+    prompt is enriched first: build_context_blob() (imported from
+    scripts.tier4_worker) gathers AGENTS.md, PLAN.md, and README.md from the
+    project directory and the blob is prepended to the message. Non-'cli'
+    providers are dispatched through llm_client.execute_llm() with the
+    enriched message.
+
+    Every successful path returns the same shape:
+    {'status': 'ok', 'text': response, 'session_id': 'stateless',
+     'notional_cost_usd': 0.0}.
+    """
+    # Enrich the prompt for paths that lack CLI tools (the 'cli' fallback and
+    # every non-'cli' provider) by grounding it in the repo's own docs.
+    project_path = Path(project_dir)
+    context_paths = [
+        fname
+        for fname in ("AGENTS.md", "PLAN.md", "README.md")
+        if (project_path / fname).is_file()
+    ]
+    context_blob = build_context_blob(context_paths, project_dir)
+    enriched_message = (
+        context_blob + "\n\n" + message if context_blob else message
+    )
+
+    if provider == "cli":
+        cmd = [
+            "claude",
+            "-p", message,
+            "--tools", "Read,Glob,Grep",
+            "--output-format", "json",
+            "--add-dir", project_dir,
+        ]
+        if session_id:
+            cmd.extend(["--resume", session_id])
+
+        def _fallback() -> dict:
+            try:
+                response_text, _billing, _in, _out = llm_client._fallback_request(
+                    "cli", enriched_message, SYSTEM_PROMPT, False
+                )
+            except Exception as exc:
+                log.error("Planning turn fallback also failed: %s", exc)
+                return {"status": "error", "reason": str(exc)}
+            return {
+                "status": "ok",
+                "text": response_text,
+                "session_id": "stateless",
+                "notional_cost_usd": 0.0,
+            }
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+        except Exception as exc:
+            log.warning("Claude CLI invocation failed: %s. Falling back.", exc)
+            return _fallback()
+
+        response_text = _extract_claude_result(result.stdout)
+        if response_text:
+            log.info(
+                "Planning turn ok via claude CLI (returncode=%s, response_len=%d)",
+                result.returncode, len(response_text),
+            )
+            return {
+                "status": "ok",
+                "text": response_text,
+                "session_id": "stateless",
+                "notional_cost_usd": 0.0,
+            }
+
+        log.warning(
+            "Claude CLI returned no parseable JSON (returncode=%s, stderr=%s). Falling back.",
+            result.returncode, (result.stderr or "")[:200],
+        )
+        return _fallback()
+
+    # Non-'cli' providers: enrich and dispatch through execute_llm().
     try:
         endpoint = tier1.get("endpoint")
         api_key_secret = tier1.get("api_key_secret")
@@ -151,23 +283,13 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
         model = tier1.get("models", {}).get(default_key)
         api_key = secrets_loader.load_secrets().get(api_key_secret) if api_key_secret else None
 
-        # The local Claude CLI goes through execute_llm() too; pass along the
-        # project dir and (optional) resume session so it can build the same
-        # `claude -p` invocation this module used to shell out to.
-        cli_kwargs = {}
-        if provider == "cli":
-            cli_kwargs["project_dir"] = project_dir
-            if session_id and session_id != "stateless":
-                cli_kwargs["session_id"] = session_id
-
         response_text, billing_type, in_tokens, out_tokens = llm_client.execute_llm(
             provider=provider,
             endpoint=endpoint,
             api_key=api_key,
             model=model,
-            prompt=message,
+            prompt=enriched_message,
             system_prompt=SYSTEM_PROMPT,
-            **cli_kwargs,
         )
     except Exception as exc:
         log.error("Planning turn failed via execute_llm (provider=%s): %s", provider, exc)

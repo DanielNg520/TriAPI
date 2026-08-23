@@ -8,6 +8,7 @@ import requests
 
 from scripts import budget_guard, config_loader, secrets_loader, tri_logging
 
+log = tri_logging.get_logger("llm_client")
 
 def execute_llm(
     provider: str,
@@ -26,7 +27,7 @@ def execute_llm(
     try:
         return _primary_request(provider, endpoint, api_key, model, prompt, system_prompt)
     except Exception as exc:
-        tri_logging.warning(
+        log.warning(
             f"Primary provider '{provider}' failed: {exc}. Falling back..."
         )
         return _fallback_request(provider, prompt, system_prompt, is_tier4)
@@ -146,11 +147,11 @@ def _fallback_deepseek_then_gemini(
         try:
             return _call_deepseek_fallback(prompt, system_prompt)
         except Exception as exc:
-            tri_logging.warning(
+            log.warning(
                 f"DeepSeek fallback failed: {exc}. Trying Gemini fallback..."
             )
     else:
-        tri_logging.warning(
+        log.warning(
             "Tier-3 peak hours active; skipping DeepSeek, going straight to Gemini."
         )
     return _call_gemini_fallback(prompt, system_prompt)
