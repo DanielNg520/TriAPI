@@ -71,6 +71,9 @@ def apply_edit_blocks(original: str, response_text: str) -> tuple[str | None, st
     failure (retry/escalate), never fall back to overwriting the file with
     raw response_text -- that would reopen exactly the hole this module
     closes."""
+    # Prevents cmd_dispatch's AttributeError when model output is None/non-string.
+    if not isinstance(response_text, str) or not response_text.strip():
+        return None, "model returned no usable text (None or empty)"
     text = response_text.strip()
     fence_match = _FENCE_RE.match(text)
     if fence_match:

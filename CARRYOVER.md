@@ -112,14 +112,43 @@ see `feedback_target_repo_docs_stay_in_target_repo` memory.
   against this repo: `dispatcher.py` should probably just call
   `budget_guard.check_tier3_peak_hours_ok()` instead of maintaining its own
   separate/stale copy.
-- **Real self-fix draft awaiting review: `20260823-213048-a51c20`** —
-  `edit_blocks.apply_edit_blocks()` crashes (`AttributeError: 'NoneType'
-  object has no attribute 'strip'`) when a Tier 3 response comes back with
-  `response_text is None` (observed once, right after a Tier 3 call that
-  hit the 65536-output-token ceiling — plausibly related, not confirmed).
-  This one is a genuine bug, unlike the two stale drafts above — review
-  and approve/dispatch it next session rather than re-diagnosing from
-  scratch.
+- **Self-fix `20260823-213048-a51c20` approved and dispatched 2026-08-25** —
+  `edit_blocks.apply_edit_blocks()` crash on `response_text is None` (see
+  prior entry, now historical). Phase 2's core guard landed clean (Tier 4,
+  `scripts/edit_blocks.py`). Phase 3's first item (`tier3_escalate.py`) hit
+  a **new, confirmed-live systemic bug while dispatching** — queued below.
+  Workaround applied to unblock this run: dropped `logs/triapi.log` and
+  `logs/cost_log.jsonl` from that item's `context_files` (they weren't load-
+  bearing for the edit) and set `skip_tier4: true`. If this run is still
+  mid-flight next session, `triapi dispatch 20260823-213048-a51c20` resumes
+  it; if it finished, check `PLAN.md` for the outcome instead of resuming.
+- **New systemic bug found 2026-08-25, NOT fixed (queue it, don't hand-
+  patch — same rule as the peak-hours duplicate above): OpenRouter's content
+  filter false-positives on `[PHONE]` for TriAPI's own log files, and this
+  can wedge an item's entire escalation ladder, not just Tier 4.** Repro'd
+  live: feeding `logs/triapi.log` + `logs/cost_log.jsonl` as Tier 4 context
+  for a real dispatch item got a `403 Client Error: Forbidden`; direct curl
+  isolated the cause to `{"error":{"message":"Request blocked by content
+  filter: [PHONE]", ...}}` — a false positive, almost certainly one of the
+  many digit-heavy `run_id`/`task_id`/timestamp strings in those logs
+  (e.g. `20260810-092820-8cbeaf`) pattern-matching as a phone number, not
+  an actual phone number. Phase 26's sanitizer (`llm_client.
+  _sanitize_for_openrouter_content_filter()`) only strips email-shaped
+  tokens — it has no phone-number case, so it didn't catch this. **Worse
+  than Phase 26's finding**: because `context_blob` is folded into the same
+  `prompt` string sent to every OpenRouter-routed tier, this item's Tier 4
+  failure fell through (via `skip_tier4`) straight into Tier 3 → Tier 2,
+  and Tier 2 (Nemotron, OpenRouter) hit the *same* `[PHONE]` block on every
+  candidate in its `fallback_chain` too, so the whole ladder failed and
+  crashed the run (`RuntimeError: Tier 2 failed: ...403...`) rather than
+  landing in `human_handoff` with a clear reason. Route the fix through
+  `triapi self-fix`/a normal plan against this repo: extend
+  `_sanitize_for_openrouter_content_filter()` with a phone-number-shaped
+  regex case (careful not to also mangle legitimate digit-heavy content
+  like hex hashes or line numbers), and consider whether `logs/*.log`/
+  `logs/*.jsonl` should even be eligible as raw LLM context at all — they
+  are internal operational logs, not source/docs, and stuffing them
+  unsanitized into a prompt is the root cause both here and in Phase 26.
 
 ## Next up
 
