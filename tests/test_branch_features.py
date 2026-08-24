@@ -21,13 +21,16 @@ from scripts import (
     cost_report,
     critique,
     dispatcher,
+    edit_blocks,
     git_ops,
     jules_client,
     lessons,
+    llm_client,
     orchestrator,
     resource_guard,
     self_fix,
     tech_debt,
+    tier3_escalate,
     triapi,
 )
 
@@ -1642,6 +1645,55 @@ class TechDebtTests(unittest.TestCase):
                 targets.append(str(target.resolve()))
             self.assertIn(str(Path(fresh).resolve()), targets)
             self.assertNotIn(str(Path(stale).resolve()), targets)
+
+
+class ApplyEditBlocksTests(unittest.TestCase):
+    def test_apply_edit_blocks_with_none_returns_none_string(self) -> None:
+        original = "line1\nline2\nline3"
+        result = edit_blocks.apply_edit_blocks(original, None)
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+        self.assertIsNone(result[0])
+        self.assertIsInstance(result[1], str)
+
+    def test_apply_edit_blocks_with_empty_string_returns_none_string(self) -> None:
+        original = "line1\nline2\nline3"
+        result = edit_blocks.apply_edit_blocks(original, "")
+        self.assertIsInstance(result, tuple)
+        self.assertEqual(len(result), 2)
+        self.assertIsNone(result[0])
+        self.assertIsInstance(result[1], str)
+
+
+def test_escalate_with_null_content_returns_failure_and_preserves_file(tmp_path):
+    target = tmp_path / "target.py"
+    target.write_text("original\n", encoding="utf-8")
+    original_bytes = target.read_bytes()
+
+    mock_response = mock.Mock()
+    mock_response.json.return_value = {
+        "choices": [{"message": {"content": None}, "finish_reason": "stop"}],
+        "usage": {"prompt_cache_hit_tokens": 0, "prompt_cache_miss_tokens": 10, "completion_tokens": 0}
+    }
+    mock_response.raise_for_status = mock.Mock()
+
+    with (
+        mock.patch.object(tier3_escalate, "load_secrets", return_value={"deepseek_apikey": "test-key"}),
+        mock.patch.object(llm_client.requests, "post", return_value=mock_response) as mock_post,
+    ):
+        result = tier3_escalate.escalate(
+            task_id="test-task",
+            target=str(target),
+            description="test task",
+            context_blob="",
+            revision_note="",
+        )
+
+    mock_post.assert_called_once()
+    assert isinstance(result, dict)
+    assert "status" in result
+    assert result["status"] == "fix_rejected"
+    assert target.read_bytes() == original_bytes
 
 
 if __name__ == "__main__":

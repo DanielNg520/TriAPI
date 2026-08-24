@@ -186,7 +186,7 @@ def escalate(
     user_message = build_user_message(stderr, revision_note)
 
     try:
-        raw_result, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+        response_data, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
             provider=tier3.get("provider", "deepseek"),
             endpoint=tier3["endpoint"],
             api_key=secrets.get(tier3.get("api_key_secret", "deepseek_api_key")),
@@ -207,6 +207,51 @@ def escalate(
             "cost_usd": 0.0,
         }
 
+    # Extract message content and metadata from response
+    if isinstance(response_data, dict):
+        content = response_data.get("content")
+        finish_reason = response_data.get("finish_reason")
+        reasoning_content = response_data.get("reasoning_content")
+    else:
+        content = response_data
+        finish_reason = None
+        reasoning_content = None
+
+    # Handle null/empty content branch
+    if not content:
+        has_reasoning = bool(reasoning_content)
+        log.debug(
+            "[%s] Tier 3 empty content: model=%s finish_reason=%s reasoning_content_populated=%s",
+            task_id, model_name, finish_reason, has_reasoning
+        )
+        # Still log cost entry if usage data exists
+        cache_hit_tokens = 0
+        cache_miss_tokens = input_tokens
+        cost_usd, partial = compute_cost(model_pricing, cache_hit_tokens, cache_miss_tokens, output_tokens)
+        log_cost(
+            {
+                "timestamp": time.time(),
+                "tier": "tier_3",
+                "model": model_name,
+                "task_id": task_id,
+                "cache_hit_tokens": cache_hit_tokens,
+                "cache_miss_tokens": cache_miss_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": cost_usd,
+                "cost_partial": partial,
+            }
+        )
+        return {
+            "status": "fix_rejected",
+            "reason": f"Tier 3 returned empty content (finish_reason={finish_reason}, reasoning_content_populated={has_reasoning})",
+            "model": model_name,
+            "cache_hit_tokens": cache_hit_tokens,
+            "cache_miss_tokens": cache_miss_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+        }
+
+    response_text = content
     cache_hit_tokens = 0
     cache_miss_tokens = input_tokens
     
@@ -230,8 +275,6 @@ def escalate(
             "cost_partial": partial,
         }
     )
-
-    response_text = raw_result
     if current_contents is not None:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
         if new_content is None:

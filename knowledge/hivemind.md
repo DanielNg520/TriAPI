@@ -539,3 +539,41 @@ When starting a long-running, expensive, or stateful operation (like a dispatch 
 **In this specific change:**
 - `llm_client.probe_models()` was added as the first line inside the `try` block of `cmd_dispatch`, before `_breakdown_and_dispatch(state)`.
 - This means a dead LLM backend is detected immediately, the crash is captured via `self_fix.capture_crash()`, and the `finally` block restores Ollama state and resumes resource-guarded services — all before any plan breakdown or phase execution begins.
+
+### Validate Input Types Before Parsing — Defensive Input Handling for Untrusted Data
+
+When a function receives data from an external/untrusted source (e.g., a model's raw output, user input, an API response), **validate the type and non-emptiness before any string operations**, even if the calling code's type hints suggest the data should already be a string.
+
+**Applied here:** `apply_edit_blocks()` was documented to take a `response_text: str`, but a real-world failure surfaced where the caller (`cmd_dispatch`) passed `None` or a non-string value, causing an `AttributeError` on `.strip()` deep inside parsing. Uncaught, this would crash the pipeline with an opaque stack trace rather than a controllable failure.
+
+**Pattern:**
+```python
+def apply_edit_blocks(original: str, response_text: str) -> tuple:
+    # First line: guard against invalid types with a clear, actionable error
+    if not isinstance(response_text, str) or not response_text.strip():
+        return None, "model returned no usable text (None or empty)"
+    # ...rest of parsing is now safe to assume a non-empty string
+```
+
+**Key lessons:**
+1. **Type hints are documentation, not runtime guarantees** — especially at system boundaries where another module or an external service (like an LLM) produces the value.
+2. **Guard at the entry point** of every parsing/processing function that operates on untrusted input; don't let an `AttributeError`/`TypeError` become the failure mode.
+3. **Return a domain-meaningful error tuple** (here `(None, error_message)`) so the caller can retry, escalate, or log — never propagate a raw exception that crashes the whole operation.
+4. **Check `strip()` on strings too** — an empty or whitespace-only string is as unusable as `None` for parsing purposes, and the same guard handles both.
+5. This costs one line now and prevents a class of subtle, hard-to-reproduce bugs (e.g., intermittent model failures returning `None`) from becoming production incidents with unhelpful stack traces.
+
+**General rule:** *Never assume your inputs match their declared types — validate at the boundary, fail gracefully with a descriptive message, and let callers decide how to handle the failure.*
+
+### Handle Empty or Structured LLM Responses Explicitly Before Processing
+
+When a language model API can return either a plain string or a structured object (and especially when it can return an empty/null response), always:
+
+1. **Normalize the response into a consistent shape before processing.** Check whether the response is a dict and extract fields explicitly (`content`, `finish_reason`, `reasoning_content`) rather than assuming the raw result is directly usable. This makes the downstream code independent of the underlying provider's response format.
+
+2. **Treat "no content" as a distinct, first-class failure state.** Do not let an empty string, `None`, or a dict with empty content flow through to text-processing functions like edit-block parsers or code extractors. A model that returns nothing is a failed attempt — short-circuit it with a clear rejection reason, log the diagnostics (`finish_reason`, whether reasoning content was present) to aid debugging, and still record cost/usage data (cost accounting should not be skipped just because the response was unhelpful).
+
+3. **Destroy ambiguous failure modes at the boundary.** An empty or malformed response should never reach code that assumes content exists — otherwise you risk subtle behavior like passing `None` to string operations, or writing a truncated/incomplete file that only fails at build time. Define the contract: if content is falsy → reject immediately; otherwise, proceed with the normalized text.
+
+4. **Propagate structured metadata** (e.g., `finish_reason`) into logs and return values so that repeated empty responses can be diagnosed (e.g., token limits, refusal, reasoning-only responses) without needing to replicate the API call.
+
+This pattern is especially important in resilient multi-tier systems where the caller must not only handle expected failures but also degrade gracefully when the LLM returns surprising shapes.
