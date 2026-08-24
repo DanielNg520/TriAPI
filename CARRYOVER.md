@@ -152,53 +152,80 @@ see `feedback_target_repo_docs_stay_in_target_repo` memory.
 
 ## Next up
 
-- **Virtual Codebase Plan (Tiered Planner-Materializer architecture) is
-  still queued.** `VIRTUAL_CODEBASE_PLAN.md` at this repo's root (restored
-  2026-08-23 — had been deleted in commit `8998db5`, before this session;
-  the user asked for it back). **User wants to work on this one together,
-  personally** — hold off starting it solo; wait for the user.
-- **Tier 5 (local librarian) landed 2026-08-24 — see `PLAN.md` Phase 29 for
-  the full write-up.** Delivered design differs from the original queued
-  plan below in one deliberate way: **no reader/writer split** — the
-  intended reader model (`jina-reranker-v2`) turned out to actually be an
-  OCR tool, not a text reranker, so the design was simplified to one
-  unified model (`mistral-small:latest` via Ollama) doing both staleness
-  judgment and drafting in a single pass. `scripts/librarian_escalate.py` +
-  `tests/test_tier5_librarian.py` (9 tests, green) + `tier_5_librarian`
-  block in `config/tiers.yaml` are all in place and routed via
-  `dispatcher.is_doc_target()`. The `@`-content pre-check landed as planned
-  (`llm_client.detect_email_like_content()`, plain regex, advisory-only).
-  Five real integration bugs surfaced and were fixed by hand while landing
-  this (endpoint resolution in `probe_models()`, a dropped `judge` import
-  that broke design-check for *every* tier, `librarian_escalate.py`'s
-  config-key/schema mismatch with the real `tiers.yaml`, a DeepSeek-peak-
-  hours check wrongly gating a tier that never calls DeepSeek, and
-  `probe_models()` having zero retry tolerance for transient upstream
-  blips) — full detail in `PLAN.md` Phase 29, not repeated here.
-  **Not yet done / worth a look next session:**
-  - `librarian_escalate.py`'s own OpenRouter-fallback-leg endpoint
-    resolution wasn't directly audited for the same `tier_config.get
-    ('endpoint')`-is-always-`None` risk pattern the `probe_models()` fix
-    addressed elsewhere — inspect by reading, not by assuming it's fine.
-  - The original dispatch run for this feature (`20260824-003439-4075d4`)
-    is still `stopped_on_failure` in `triapi`'s own state — its actual
-    intent was completed by hand (Tier 1/Claude CLI had already split the
-    oversized test file correctly during its own escalation attempt; the
-    smoke test and docs were finished directly) rather than through a
-    clean dispatch resolution, so `triapi status` won't show it as
-    `completed`. That's fine — the real deliverable is landed and tested;
-    no need to force the run's own bookkeeping to agree.
-  - **Follow-on task queued for once Tier 5 exists: consolidate all
-    target-repo-specific content out of TriAPI's own docs.** A supervisor
-    survey (2026-08-24) found ~700 lines of `PLAN.md`'s historical record
-    (17 sections spanning many phases, heavily interleaved with genuinely
-    generic TriAPI bug fixes) plus a few illustrative mentions in
-    `AGENTS.md`/`README.md` that name a target repo and should relocate to
-    that repo's own docs per the rule above. **Both the planning and the
-    execution go through TriAPI itself** (`triapi plan` against this repo,
-    then `triapi dispatch`, Tier 5 doing the actual doc rewriting) — do not
-    hand-draft the plan and do not write a one-off script that calls the
-    librarian model directly; that defeats the point of building Tier 5.
+**Priority order, per user directive 2026-08-24: finish the librarian
+improvements first, then the OpenRouter fixes, then the architecture
+items.** The Virtual Codebase Plan is separate — it's on hold for the user
+specifically, not part of this sequence.
+
+1. **Librarian improvements — plan drafted 2026-08-24, run
+   `20260824-125438-2f1aeb`, awaiting approval/dispatch.** Two changes to
+   `scripts/librarian_escalate.py`, motivated by real live-run pain landing
+   Tier 5: (a) drop the JSON-envelope-around-a-SEARCH/REPLACE-diff prompt
+   format — every other tier gets the edit-block format directly via
+   `edit_blocks.build_edit_prompt_header()`, but the librarian nests a diff
+   inside a JSON string, which real runs against `mistral-small:latest`
+   struggled to produce reliably; redesign as two plain-text steps (a
+   minimal staleness check, then a plain edit-block prompt only if stale —
+   no JSON anywhere) instead. (b) add a cheap, non-LLM staleness pre-check
+   (git-based heuristic) ahead of Tier 5 so a real model call isn't spent
+   on every doc-shaped target by default — advisory/no-op-safe, never
+   overrides an explicit instruction to check a specific file. Draft via
+   `triapi plan --project-dir`, don't hand-build.
+2. **OpenRouter fixes — three items, bucketed together:**
+   - `librarian_escalate.py`'s own OpenRouter-fallback-leg endpoint
+     resolution wasn't directly audited for the same `tier_config.get
+     ('endpoint')`-is-always-`None` risk pattern the `probe_models()` fix
+     addressed elsewhere (2026-08-24) — inspect by reading, not by
+     assuming it's fine.
+   - Stale duplicate DeepSeek peak-hours check: `budget_guard.
+     check_tier3_peak_hours_ok()` is the real gate and is correct (Beijing
+     weekend off-peak included); `dispatcher._is_deepseek_peak_hours()` is
+     a separate, older, advisory-only duplicate that only checks a single
+     hardcoded `06:00-10:00 UTC` window with no weekend exception. Fix:
+     `dispatcher.py` should call the real gate instead of maintaining its
+     own copy.
+   - OpenRouter's content filter false-positives on `[PHONE]` for TriAPI's
+     own digit-heavy log/doc content (run_ids, timestamps) — confirmed
+     live, can wedge an item's *entire* escalation ladder (Tier 4 AND
+     Tier 2, since both are OpenRouter-routed and share the same
+     unsanitized `context_blob`), not just Tier 4. `llm_client.
+     _sanitize_for_openrouter_content_filter()` only strips email-shaped
+     tokens. Fix: add a phone-number-shaped regex case (careful not to
+     mangle legitimate digit-heavy content like hex hashes/line numbers),
+     and reconsider whether `logs/*.log`/`logs/*.jsonl` should be eligible
+     as raw LLM context at all.
+3. **Architecture items** (both already flagged as TriAPI self-feature
+   work — plan/dispatch through the pipeline, don't hand-build):
+   - A named backend registry (`backends:` section in `tiers.yaml`
+     defining each reusable model config once) so tier↔model reassignment
+     is a one-line pointer change instead of rewriting a tier's whole
+     `provider`/`endpoint`/`api_key_secret`/`models` block by hand.
+   - A complexity-aware router ahead of the tier ladder that reads a
+     dispatch prompt/plan upfront and decides how much machinery a task
+     actually needs — a large multi-phase plan gets the full ladder, a
+     pure doc-reconcile task routes straight to Tier 5. Depends on Tier 5
+     (done) and probably the backend registry above.
+
+**Separately, on hold for the user (not part of the ordering above):**
+- **Virtual Codebase Plan (Tiered Planner-Materializer architecture).**
+  `VIRTUAL_CODEBASE_PLAN.md` at this repo's root (restored 2026-08-23 —
+  had been deleted in commit `8998db5`; the user asked for it back).
+  **User wants to work on this one together, personally** — hold off
+  starting it solo.
+- **Follow-on task queued for once Tier 5 exists (it does now):
+  consolidate all target-repo-specific content out of TriAPI's own docs.**
+  A supervisor survey (2026-08-24) found ~700 lines of `PLAN.md`'s
+  historical record (17 sections spanning many phases, heavily interleaved
+  with genuinely generic TriAPI bug fixes) plus a few illustrative
+  mentions in `AGENTS.md`/`README.md` that name a target repo and should
+  relocate to that repo's own docs per the rule above. **Both the planning
+  and the execution go through TriAPI itself** (`triapi plan` against this
+  repo, then `triapi dispatch`, Tier 5 doing the actual doc rewriting) —
+  do not hand-draft the plan and do not write a one-off script that calls
+  the librarian model directly; that defeats the point of building Tier 5.
+
+## Historical notes (already resolved, kept for context)
+
 - **Self-fix `20260824-011749-b8ba34` (the `llm_client.py` `KeyError:
   'choices'` fix) is fully resolved (2026-08-24).** Phases 1-2 (the
   `_call_openai_api()` guard + regression tests) landed via the pipeline;
