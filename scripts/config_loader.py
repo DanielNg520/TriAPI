@@ -9,6 +9,7 @@ RESOURCE_GUARD_PATH = Path(__file__).resolve().parent.parent / "config" / "resou
 
 REQUIRED_KEYS = [
     "tier_1_planner",
+    "tier_1_manager",
     "tier_2_manager",
     "tier_3_debugger",
     "tier_4_worker",

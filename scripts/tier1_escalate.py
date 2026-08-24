@@ -116,6 +116,7 @@ def escalate(
             prompt=prompt,
             system_prompt=system_prompt,
             is_tier4=False,
+            effort=tier1.get('effort'),
         )
     except Exception:
         return {"status": "error"}

@@ -22,8 +22,6 @@ import sys
 import time
 from pathlib import Path
 
-import requests
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, hivemind_util, lessons, llm_client
 from scripts.config_loader import load_tiers
@@ -180,22 +178,20 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     log.info("[%s] Tier 4 (%s/%s) drafting %s", task_id, tier4.get('provider', 'ollama'), model, target_path)
 
     secrets = load_secrets()
-    try:
-        response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
-            provider=tier4.get('provider', 'ollama'),
-            endpoint=tier4.get('endpoint'),
-            api_key=secrets.get(tier4.get('api_key_secret', 'open_router_api_key')),
-            model=model,
-            prompt=prompt,
-            system_prompt='',
-            is_tier4=True
-        )
-    except requests.RequestException as e:
-        log.error("[%s] Tier 4 request failed: %s", task_id, e)
-        return _tier4_fail(task_id, threshold, str(e))
-    except Exception as e:
-        log.error("[%s] Tier 4 request failed: %s", task_id, e)
-        return _tier4_fail(task_id, threshold, str(e))
+    # A systemic/connectivity error here (Ollama down, timeout, HTTP error)
+    # must NOT be downgraded to an ordinary build_failed/escalate result --
+    # orchestrator.run_task()'s caller wraps this function specifically to
+    # crash the pipeline (raise) on any exception, matching how tiers 1-3
+    # fail hard on the same class of error. Do not add a try/except here.
+    response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+        provider=tier4.get('provider', 'ollama'),
+        endpoint=tier4.get('endpoint'),
+        api_key=secrets.get(tier4.get('api_key_secret', 'open_router_api_key')),
+        model=model,
+        prompt=prompt,
+        system_prompt='',
+        is_tier4=True
+    )
 
     log_cost({
         "timestamp": time.time(),

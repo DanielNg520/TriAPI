@@ -2,6 +2,11 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
+  # Primary planner: OpenRouter's free stealth/ox-alpha model. On any failure
+  # (content-filter 403, rate limit, connectivity), planner.py falls back to
+  # tier_1_manager's Claude CLI (Sonnet 5, high effort) instead of erroring
+  # out -- there is no separate fallback block here by design, it always
+  # falls back to tier_1_manager's config.
   provider: openrouter
   api_key_secret: open_router_api_key
   name: "OpenRouter"
@@ -17,8 +22,11 @@ tier_1_manager:
   enabled: true
   provider: "cli"
   models:
-    default: "claude-code"
+    default: "claude-sonnet-5"
   default_model: "default"
+  # Reasoning effort passed to `claude -p --effort <level>`. Valid CLI values:
+  # low, medium, high, xhigh, max.
+  effort: "high"
 
 tier_2_manager:
   provider: openrouter

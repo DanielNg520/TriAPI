@@ -143,6 +143,7 @@ class SelfFixTests(unittest.TestCase):
             mock.patch.object(triapi.resource_guard, "resume_services", side_effect=resume),
             mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
             mock.patch.object(triapi, "load_tiers", return_value={"self_fix": {"enabled": True}}),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(triapi, "_breakdown_and_dispatch", side_effect=fail_dispatch),
             mock.patch.object(
                 triapi.self_fix, "capture_crash", return_value=Path("/tmp/bug.json")
@@ -167,6 +168,7 @@ class SelfFixTests(unittest.TestCase):
             mock.patch.object(triapi.resource_guard, "resume_services"),
             mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
             mock.patch.object(triapi, "load_tiers", side_effect=ValueError("bad yaml")),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(
                 triapi, "_breakdown_and_dispatch", side_effect=RuntimeError("original crash")
             ),
@@ -186,6 +188,7 @@ class SelfFixTests(unittest.TestCase):
             mock.patch.object(triapi.resource_guard, "resume_services"),
             mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
             mock.patch.object(triapi, "load_tiers", return_value={"self_fix": {"enabled": True}}),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(
                 triapi, "_breakdown_and_dispatch", side_effect=RuntimeError("dispatch crash")
             ),

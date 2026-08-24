@@ -1,4 +1,4 @@
-# Carryover — 2026-08-20
+# Carryover — 2026-08-23
 
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
@@ -14,8 +14,6 @@ vs. must route through `triapi plan`/`dispatch`).
 
 ## Current state
 
-- **Tier 1 Configuration Restored (2026-08-23)**: Resolved a conflict where tier1_escalate.py was using the tier_1_planner config (leading to OpenRouter rate limit crashes with ox-alpha). Tier 1 now correctly reads from a dedicated tier_1_manager config and defaults to the Claude CLI, with fixed stdin piping to avoid argument-list limits.
-
 - **Queue items #1-#6 from the 2026-08-19 carryover are ALL DONE** as of
   tonight (2026-08-20): #1-#3 (TriAPI's own repo), #4a (already fixed
   2026-08-19), #4b/#5 (oh-my-llama webui.py + AGENTS.md deep-clean), #4c
@@ -26,7 +24,14 @@ vs. must route through `triapi plan`/`dispatch`).
   fresh regenerated plans this session, not resumed as originally
   written) — safe to delete next time it's in the way, not urgent.
 - **Provider Decoupling Complete (2026-08-22)**: LLM client routing (`llm_client.py`), config loading (`config_loader.py`), and fallback behaviors (`_call_gemini_fallback` / `_fallback_ollama`) are fully decoupled and dynamic. TriAPI now routes correctly through OpenRouter, DeepSeek, and local fallbacks without hardcoded model strings. All changes are committed.
-- **Fall Fast, Fall Hard Mechanism Complete (2026-08-23)**: Silent API fallbacks were removed. Tiers are now gated by a pre-flight `probe_models` test, and any systemic LLM API error during execution instantly collapses the pipeline with a `RuntimeError` rather than escalating.
+- **Openrouter-branch self-audit + hand-fix (2026-08-23), NOT YET COMMITTED**:
+  7 bugs found and fixed (6 from a fork audit + 1 found live — a
+  content-filter issue that had fully bricked `triapi plan`). Full detail in
+  `PLAN.md`'s "Phase 21" entry. Test suite: `tests/test_branch_features.py`
+  68/68 passing (was hanging before the fix); `tests/test_judge.py` has 10
+  pre-existing, unrelated failures (confirmed via `git stash`), not touched.
+  **Working tree has all fixes applied but nothing is committed yet** —
+  review `git diff` and commit next session if not done by end of this one.
 - **oh-my-llama Consolidation Phase 5:** still only 5G left, blocked on
   the 7-day production soak of `src/semai/`'s daemon runtime. Not
   started; nothing to do until the soak completes or the user says to

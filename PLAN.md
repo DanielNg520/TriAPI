@@ -1205,6 +1205,15 @@ LLM stop generating when the task calls for copying.
 - [x] **`orchestrator.py` Fail-Fast Hooks**: Rewrote the Tier 4 (`try/except`) and Tier 3/2/1 escalation loops. If a tier fails its unit tests (`build_failed`), the pipeline gracefully escalates. If a tier suffers a backend error, the orchestrator instantly raises a `RuntimeError` and collapses the pipeline.
 - [x] **Model Probe Pre-flight Gate**: Implemented `probe_models()` in `llm_client.py` and hooked it into `cmd_dispatch` inside `triapi.py`. TriAPI now actively pings all configured models with a dummy payload before launching a dispatch run, refusing to start if any configured backend is dead.
 
+**Correction (2026-08-23, see Phase 21):** this phase's claims of "ripped out
+all try/except safety nets" and a Tier 4 loop that "instantly raises a
+RuntimeError" were not fully true — `tier4_worker.run()` still caught
+`requests.RequestException`/`Exception` around its LLM call and downgraded
+it to an ordinary result, so Tier 4 never actually failed hard. Also,
+`_fallback_request` was removed from `llm_client.py` here but two call
+sites in `planner.py` still referenced `llm_client._fallback_request()`,
+which would have raised `AttributeError` if ever hit. Both fixed in Phase 21.
+
 ---
 
 ## Phase 20: Tier 1 Configuration Fix (2026-08-23)
@@ -1213,3 +1222,22 @@ LLM stop generating when the task calls for copying.
 
 - [x] **Tier 1 Separation**: Added a distinct `tier_1_manager` block to `tiers.yaml` (defaulting to the `cli` provider) to stop `tier1_escalate.py` from hijacking the `tier_1_planner` configuration. This resolved an issue where OpenRouter's `stealth/ox-alpha` was being routed massive repair prompts, hitting an upstream shared pool rate limit (`429`).
 - [x] **Claude CLI stdin Patches**: Corrected `llm_client.py`'s handling of the `cli` provider to pass the prompt via `stdin` (`input=prompt`) instead of a positional argv flag (`-p prompt`) to avoid the kernel's `execve()` argument-list limit, and updated the system prompt flag from `--system` to `--system-prompt` to match the latest Claude Code CLI version.
+
+---
+
+## Phase 21: openrouter-branch self-audit + fixes (2026-08-23)
+
+**Goal**: verify the branch's stated goal (all 4 tiers config-driven/hot-swappable, pre-flight probe, fail-fast) against actual code, not prior phases' self-reported status (per standing "verify, don't trust status" practice). A background research fork audited the diff against `main`; findings were then hand-fixed directly (not routed through `triapi plan`/`dispatch`, per explicit exception granted in this session for the one blocker that made the pipeline unable to plan at all — see item 7).
+
+**Findings and fixes (all applied to the working tree same session):**
+1. `llm_client._call_claude_cli()` never passed `--model`/`--effort` to `claude -p`, so Tier 1 silently used the CLI's own default model/effort instead of a verified Sonnet 5 high. Fixed: `execute_llm()`/`_call_claude_cli()` gained an `effort` parameter, threaded from `tier_1_manager.effort` in `config/tiers.yaml` (new field, value `high`); `tier_1_manager.models.default` is now `claude-sonnet-5` (was the meaningless placeholder `claude-code`).
+2. `probe_models()` iterated `tier_1_planner` but never `tier_1_manager` — a real Claude-CLI outage/misconfig for the repair tier would sail through the pre-flight probe undetected. Fixed: probes both.
+3. `config_loader.REQUIRED_KEYS` was missing `tier_1_manager`. Fixed: added.
+4. `tier4_worker.run()` still caught `requests.RequestException`/`Exception` around its LLM call (see Phase 19 correction above) and downgraded systemic errors to an ordinary result instead of letting them crash the pipeline like tiers 1-3. Fixed: the try/except was removed; exceptions now propagate to `orchestrator.run_task()`'s existing crash-on-exception wrapper around the Tier 4 call.
+5. The `probe_models()` call added to `cmd_dispatch` (Phase 19) makes real network/CLI calls and wasn't mocked in `tests/test_branch_features.py`'s `SelfFixTests` — those 3 tests hung indefinitely instead of running deterministically. Fixed: `mock.patch.object(triapi.llm_client, "probe_models")` added to each.
+6. `test.py`, `test_audit.py`, `test_llama.py`, `planner_backup.py` were committed debug/scratch cruft at repo root, not referenced by `AGENTS.md`'s file index or any real test/build path. Removed via `git rm`.
+7. **Found live while attempting to route the fix through `triapi plan` itself, not part of the original audit**: `tier_1_planner`'s OpenRouter `stealth/ox-alpha` 403s on every call once `planner.py`'s usual context blob (`AGENTS.md`/`PLAN.md`/`README.md`) is injected — OpenRouter's content filter flags the `git@github.com:...` SSH URLs those docs legitimately contain as PII (`"Request blocked by content filter: [EMAIL]"`), which fully bricked `triapi plan` for this repo. This is a chicken-and-egg problem (can't route a planner fix through a broken planner), so per the user's explicit in-session direction, this one was hand-fixed as a narrow exception to "never hand-write code without being asked" — `stealth/ox-alpha` stays `tier_1_planner`'s primary (deliberately, per the user), `tier_1_manager`'s Claude CLI (Sonnet 5, high) is now its fallback on any failure. Fixed: `planner._sanitize_for_content_filter()` scrubs email-like tokens from the prompt sent to non-cli providers only; both the `cli`-branch and non-cli-branch failure paths now call a new `_fallback_to_tier1_manager_cli()` helper — which also fixed the two dead `llm_client._fallback_request()` call sites flagged in the Phase 19 correction above (that function never existed post-Phase-19). Verified live end-to-end: `plan_turn()` returned `status: ok` (`"banana"`, a literal smoke-test instruction) via the OpenRouter primary path after sanitization.
+
+**Verification**: `tests/test_branch_features.py` 68/68 passing, no hangs (previously hung indefinitely per finding 5). `tests/test_judge.py` has 10 pre-existing failures (`KeyError: 'api_key_secret'` in test fixtures missing that key) — confirmed via `git stash` comparison these predate this session's changes and are unrelated; not fixed here, out of scope. `probe_models()` run for real against all 5 tier configs (`tier_4_worker`, `tier_3_debugger`, `tier_2_manager`, `tier_1_planner`, `tier_1_manager`) succeeded.
+
+**Also removed**: a stale, never-dispatched "OpenRouter Refactor Audit" plan (`run_id 20260823-163408-8eee04`, 9 unchecked `verify_only` steps) was appended to `AGENTS.md` and blocking new `triapi plan` runs. Its entire purpose — auditing this exact refactor — is superseded by the findings above, so it was removed as moot rather than dispatched or force-marked complete (it was never actually run, so marking it complete would be dishonest).

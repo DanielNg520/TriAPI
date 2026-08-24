@@ -29,6 +29,7 @@ plans can be priced/scheduled with that cost in mind.
 """
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -49,6 +50,18 @@ log = get_logger("planner")
 # re-deriving the rule.
 TIER3_DEEPSEEK_PEAK_UTC_START = 6  # inclusive
 TIER3_DEEPSEEK_PEAK_UTC_END = 10  # exclusive
+
+# Repo docs (README.md/AGENTS.md) legitimately contain `git@github.com:...`
+# SSH URLs, which OpenRouter's free stealth/ox-alpha model's content filter
+# flags as PII ("Request blocked by content filter: [EMAIL]") and 403s the
+# whole call -- confirmed live 2026-08-23. Only applied to the copy of the
+# context blob sent to non-cli providers; the CLI path never hits this
+# filter and is left untouched.
+_EMAIL_LIKE_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+
+
+def _sanitize_for_content_filter(text: str) -> str:
+    return _EMAIL_LIKE_RE.sub(lambda m: m.group(0).replace("@", "(at)"), text)
 
 
 def in_tier3_deepseek_peak_utc(now: datetime | None = None) -> bool:
@@ -122,7 +135,7 @@ def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
     local Claude CLI ('cli'), planner.py shells out to `claude -p` natively
     with tools (Read,Glob,Grep), --output-format json, --add-dir, and
     --resume, parses its JSON output, and falls back to
-    llm_client._fallback_request() on failure. Non-'cli' providers and the
+    _fallback_to_tier1_manager_cli() on failure. Non-'cli' providers and the
     'cli' fallback enrich the prompt with a context blob (AGENTS.md,
     PLAN.md, README.md) since they lack tools, and are dispatched through
     llm_client.execute_llm(). execute_llm() returns no cross-turn session
@@ -190,6 +203,37 @@ def _extract_claude_result(stdout: str) -> str | None:
     return None
 
 
+def _fallback_to_tier1_manager_cli(enriched_message: str) -> dict:
+    """Fall back to tier_1_manager's Claude CLI (Sonnet 5, high effort).
+
+    Used whenever tier_1_planner's primary path (Claude CLI native tool-use,
+    or OpenRouter) fails for any reason -- this is the one path guaranteed
+    not to depend on OpenRouter, so it's the fallback of last resort for
+    planning turns.
+    """
+    tier1_mgr = config_loader.load_tiers().get("tier_1_manager", {})
+    model = tier1_mgr.get("models", {}).get(tier1_mgr.get("default_model", "default"))
+    try:
+        response_text, _billing, _in, _out = llm_client.execute_llm(
+            provider="cli",
+            endpoint=None,
+            api_key=None,
+            model=model,
+            prompt=enriched_message,
+            system_prompt=SYSTEM_PROMPT,
+            effort=tier1_mgr.get("effort"),
+        )
+    except Exception as exc:
+        log.error("Planning turn fallback also failed: %s", exc)
+        return {"status": "error", "reason": str(exc)}
+    return {
+        "status": "ok",
+        "text": response_text,
+        "session_id": "stateless",
+        "notional_cost_usd": 0.0,
+    }
+
+
 def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1: dict, provider: str) -> dict:
     """Dispatch a planning turn.
 
@@ -198,7 +242,7 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
     parses the JSON from stdout even when the return code is non-zero. On a
     successful parse the result is returned; on any failure or parse error a
     warning is logged and the call falls back to
-    llm_client._fallback_request('cli', enriched_message, SYSTEM_PROMPT, False).
+    _fallback_to_tier1_manager_cli(enriched_message).
 
     The 'cli' fallback and every non-'cli' provider lack CLI tools, so the
     prompt is enriched first: build_context_blob() (imported from
@@ -236,19 +280,7 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
             cmd.extend(["--resume", session_id])
 
         def _fallback() -> dict:
-            try:
-                response_text, _billing, _in, _out = llm_client._fallback_request(
-                    "cli", enriched_message, SYSTEM_PROMPT, False
-                )
-            except Exception as exc:
-                log.error("Planning turn fallback also failed: %s", exc)
-                return {"status": "error", "reason": str(exc)}
-            return {
-                "status": "ok",
-                "text": response_text,
-                "session_id": "stateless",
-                "notional_cost_usd": 0.0,
-            }
+            return _fallback_to_tier1_manager_cli(enriched_message)
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -275,7 +307,12 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
         )
         return _fallback()
 
-    # Non-'cli' providers: enrich and dispatch through execute_llm().
+    # Non-'cli' providers (e.g. tier_1_planner's OpenRouter stealth/ox-alpha):
+    # enrich and dispatch through execute_llm(). Content sent off-box is
+    # sanitized against OpenRouter's PII content filter (see
+    # _sanitize_for_content_filter's docstring). On any failure, fall back to
+    # tier_1_manager's Claude CLI (Sonnet 5, high effort) rather than erroring
+    # the whole planning turn out.
     try:
         endpoint = tier1.get("endpoint")
         api_key_secret = tier1.get("api_key_secret")
@@ -288,12 +325,12 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
             endpoint=endpoint,
             api_key=api_key,
             model=model,
-            prompt=enriched_message,
+            prompt=_sanitize_for_content_filter(enriched_message),
             system_prompt=SYSTEM_PROMPT,
         )
     except Exception as exc:
-        log.error("Planning turn failed via execute_llm (provider=%s): %s", provider, exc)
-        return {"status": "error", "reason": str(exc)}
+        log.warning("Planning turn failed via execute_llm (provider=%s): %s. Falling back to tier_1_manager CLI.", provider, exc)
+        return _fallback_to_tier1_manager_cli(enriched_message)
 
     log.info(
         "Planning turn ok: provider=%s billing=%s in_tokens=%d out_tokens=%d response_len=%d",
