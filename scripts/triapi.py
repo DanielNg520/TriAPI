@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, planner, resource_guard, self_fix
+from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, llm_client, planner, resource_guard, self_fix
 from scripts.config_loader import load_resource_guard_services, load_tiers, load_unload_ollama_models_flag
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
@@ -344,6 +344,7 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
     crash: tuple[Exception, object] | None = None
     bug_path: Path | None = None
     try:
+        llm_client.probe_models()
         _breakdown_and_dispatch(state)
     except Exception as exc:
         bug_path = self_fix.capture_crash(exc, run_id=run_id, context="cmd_dispatch:foreground")

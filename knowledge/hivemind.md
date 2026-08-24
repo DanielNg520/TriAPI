@@ -517,3 +517,25 @@ if result.get("status") == "error":
 #### Rule of Thumb
 
 > **Catch exceptions and `"error"` statuses from a tier only when you can do something useful with them (retry, alert, degrade gracefully). Otherwise, let them propagate. A pipeline that silently falls through every tier on any failure is not resilient — it's just slow to report a broken environment.**
+
+### Pre-Flight Validation Before Long-Running Operations
+
+When starting a long-running, expensive, or stateful operation (like a dispatch that may run for hours unattended), validate all external dependencies **before** doing any real work — and place that validation inside the same `try/except/finally` block that handles resource cleanup and crash recovery.
+
+**Why this matters:** Without the pre-flight check, a dispatch could spend minutes (or hours) breaking down a plan, executing phases, and mutating run state — only to discover at some later point that the LLM backend is unreachable. That's wasted time, wasted money, and messy partial state to clean up. Failing fast at the start is strictly better.
+
+**How to apply it:**
+
+1. **Probe early, probe cheaply.** Call a lightweight health-check function (`llm_client.probe_models()`) that verifies connectivity/auth to all configured LLM endpoints before any real work begins.
+
+2. **Keep the probe inside the existing crash-recovery `try` block.** In the diff, `probe_models()` is placed inside the same `try` that wraps `_breakdown_and_dispatch(state)`. This means:
+   - A probe failure is caught by the same `except` handler that captures crashes, saves a bug report, and queues a self-fix — consistent failure semantics.
+   - The `finally` block (which restores Ollama state and resumes paused services) still runs, so no resources leak just because the probe failed.
+
+3. **Don't let validation block resource teardown.** The probe must be inside the `try`, not before it. If the probe hangs or throws, the `finally` still fires. This is the same discipline as putting all cleanup in `finally` — the validation step is just another operation that can fail, and it must not bypass the cleanup path.
+
+**General rule:** Before any operation that (a) takes significant time, (b) muts persistent state, or (c) acquires external resources — run a quick dependency health check, and put it inside the same `try/except/finally` that handles cleanup. Fail fast, clean up reliably, and let the existing crash-recovery infrastructure handle the failure uniformly.
+
+**In this specific change:**
+- `llm_client.probe_models()` was added as the first line inside the `try` block of `cmd_dispatch`, before `_breakdown_and_dispatch(state)`.
+- This means a dead LLM backend is detected immediately, the crash is captured via `self_fix.capture_crash()`, and the `finally` block restores Ollama state and resumes resource-guarded services — all before any plan breakdown or phase execution begins.

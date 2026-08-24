@@ -104,3 +104,28 @@ def _call_openai_api(
     input_tokens = usage.get("prompt_tokens", 0)
     output_tokens = usage.get("completion_tokens", 0)
     return response_text, provider, input_tokens, output_tokens
+
+
+def probe_models():
+    """Probe each tier's default model with a ping/pong exchange."""
+    config = config_loader.load_tiers()
+    secrets = secrets_loader.load_secrets()
+    for tier in ['tier_4_worker', 'tier_3_debugger', 'tier_2_manager', 'tier_1_planner']:
+        try:
+            tier_config = config[tier]
+            provider = tier_config['provider']
+            endpoint = tier_config['endpoint']
+            default_model = tier_config['default_model']
+            model_name = tier_config['models'][default_model]
+            api_key_secret = tier_config['api_key_secret']
+            execute_llm(
+                provider,
+                endpoint,
+                secrets.get(api_key_secret, ''),
+                model_name,
+                'ping',
+                'reply pong',
+                is_tier4=(tier == 'tier_4_worker'),
+            )
+        except Exception as e:
+            raise RuntimeError(f"Probe failed for {tier}: {e}")
