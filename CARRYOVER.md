@@ -14,6 +14,8 @@ vs. must route through `triapi plan`/`dispatch`).
 
 ## Current state
 
+- **Tier 1 Configuration Restored (2026-08-23)**: Resolved a conflict where tier1_escalate.py was using the tier_1_planner config (leading to OpenRouter rate limit crashes with ox-alpha). Tier 1 now correctly reads from a dedicated tier_1_manager config and defaults to the Claude CLI, with fixed stdin piping to avoid argument-list limits.
+
 - **Queue items #1-#6 from the 2026-08-19 carryover are ALL DONE** as of
   tonight (2026-08-20): #1-#3 (TriAPI's own repo), #4a (already fixed
   2026-08-19), #4b/#5 (oh-my-llama webui.py + AGENTS.md deep-clean), #4c

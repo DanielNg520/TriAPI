@@ -46,8 +46,8 @@ def _primary_request(
 
 def _call_claude_cli(prompt: str, system_prompt: str) -> Tuple[str, str, int, int]:
     """Run the local `claude` CLI."""
-    cmd = ["claude", "-p", prompt, "--system", system_prompt]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    cmd = ["claude", "-p", "--system-prompt", system_prompt]
+    result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, check=True)
     response_text = result.stdout.strip()
     # CLI does not reliably report token counts; zero them out.
     return response_text, "cli", 0, 0

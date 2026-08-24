@@ -15,6 +15,10 @@ tier_1_planner:
 
 tier_1_manager:
   enabled: true
+  provider: "cli"
+  models:
+    default: "claude-code"
+  default_model: "default"
 
 tier_2_manager:
   provider: openrouter

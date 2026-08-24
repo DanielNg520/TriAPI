@@ -103,13 +103,13 @@ def escalate(
 
     secrets = load_secrets()
     config = load_tiers()
-    tier1 = config["tier_1_planner"]
-    model_name = tier1["models"][tier1["default_model"]]
-    endpoint = tier1["endpoint"]
+    tier1 = config.get("tier_1_manager", {})
+    provider = tier1.get("provider", "cli")
+    model_name = tier1.get("models", {}).get(tier1.get("default_model", "default"), "claude-code")
 
     try:
         raw_result, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
-            provider=tier1.get('provider', 'openrouter'),
+            provider=provider,
             endpoint=tier1.get('endpoint'),
             api_key=secrets.get(tier1.get('api_key_secret', 'open_router_api_key')),
             model=model_name,

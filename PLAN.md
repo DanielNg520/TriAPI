@@ -1204,3 +1204,12 @@ LLM stop generating when the task calls for copying.
 - [x] **`llm_client.py` Consolidation**: Ripped out `_fallback_request`, `_fallback_ollama`, and all `try/except` safety nets. `execute_llm()` is now a pure passthrough that will aggressively raise HTTP exceptions.
 - [x] **`orchestrator.py` Fail-Fast Hooks**: Rewrote the Tier 4 (`try/except`) and Tier 3/2/1 escalation loops. If a tier fails its unit tests (`build_failed`), the pipeline gracefully escalates. If a tier suffers a backend error, the orchestrator instantly raises a `RuntimeError` and collapses the pipeline.
 - [x] **Model Probe Pre-flight Gate**: Implemented `probe_models()` in `llm_client.py` and hooked it into `cmd_dispatch` inside `triapi.py`. TriAPI now actively pings all configured models with a dummy payload before launching a dispatch run, refusing to start if any configured backend is dead.
+
+---
+
+## Phase 20: Tier 1 Configuration Fix (2026-08-23)
+
+**Goal**: Restore Tier 1's role as a robust Claude CLI-based final repair tier without reverting the configuration-driven design established in Phase 17.
+
+- [x] **Tier 1 Separation**: Added a distinct `tier_1_manager` block to `tiers.yaml` (defaulting to the `cli` provider) to stop `tier1_escalate.py` from hijacking the `tier_1_planner` configuration. This resolved an issue where OpenRouter's `stealth/ox-alpha` was being routed massive repair prompts, hitting an upstream shared pool rate limit (`429`).
+- [x] **Claude CLI stdin Patches**: Corrected `llm_client.py`'s handling of the `cli` provider to pass the prompt via `stdin` (`input=prompt`) instead of a positional argv flag (`-p prompt`) to avoid the kernel's `execve()` argument-list limit, and updated the system prompt flag from `--system` to `--system-prompt` to match the latest Claude Code CLI version.
