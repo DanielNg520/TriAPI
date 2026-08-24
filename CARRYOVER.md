@@ -1,4 +1,4 @@
-# Carryover — 2026-08-23
+# Carryover — 2026-08-23 (end of session)
 
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
@@ -14,24 +14,24 @@ vs. must route through `triapi plan`/`dispatch`).
 
 ## Current state
 
-- **Queue items #1-#6 from the 2026-08-19 carryover are ALL DONE** as of
-  tonight (2026-08-20): #1-#3 (TriAPI's own repo), #4a (already fixed
-  2026-08-19), #4b/#5 (oh-my-llama webui.py + AGENTS.md deep-clean), #4c
-  (`ohmyllama/state.py` package split, done correctly this time). Full
-  bug-by-bug detail — including four real TriAPI pipeline bugs found and
-  fixed live along the way — is in `PLAN.md`'s "2026-08-20 — Queue drain"
-  entry. `queued_plans/` is now stale (both plans in it were superseded by
-  fresh regenerated plans this session, not resumed as originally
-  written) — safe to delete next time it's in the way, not urgent.
-- **Provider Decoupling Complete (2026-08-22)**: LLM client routing (`llm_client.py`), config loading (`config_loader.py`), and fallback behaviors (`_call_gemini_fallback` / `_fallback_ollama`) are fully decoupled and dynamic. TriAPI now routes correctly through OpenRouter, DeepSeek, and local fallbacks without hardcoded model strings. All changes are committed.
-- **Openrouter-branch self-audit + hand-fix (2026-08-23), NOT YET COMMITTED**:
-  7 bugs found and fixed (6 from a fork audit + 1 found live — a
-  content-filter issue that had fully bricked `triapi plan`). Full detail in
-  `PLAN.md`'s "Phase 21" entry. Test suite: `tests/test_branch_features.py`
-  68/68 passing (was hanging before the fix); `tests/test_judge.py` has 10
-  pre-existing, unrelated failures (confirmed via `git stash`), not touched.
-  **Working tree has all fixes applied but nothing is committed yet** —
-  review `git diff` and commit next session if not done by end of this one.
+- **`openrouter` branch merged into `main` (2026-08-23), commit `47cddb4`,
+  NOT pushed to any remote.** All 4 tiers are now config-driven/hot-swappable
+  through `config/tiers.yaml` + `llm_client.py`'s single `execute_llm()`
+  dispatch point, with a working `probe_models()` pre-flight gate and
+  consistent fail-fast across all 4 tiers. Current tier assignments: Tier 1
+  repair = Claude CLI (`claude-sonnet-5`, effort `high`, `tier_1_manager`);
+  Tier 1 planning = OpenRouter `stealth/ox-alpha` (`tier_1_planner`),
+  falling back to Tier 1's own CLI config on any failure; Tier 2 = Nemotron 3
+  via OpenRouter; Tier 3 = dots-note via OpenRouter; Tier 4 = local Qwen via
+  Ollama. Full bug-by-bug detail (8 real bugs found and fixed pre-merge,
+  including one that had fully bricked `triapi plan`) is in `PLAN.md`'s
+  "Phase 21" entry. **Test suite: 141/141 passing on `main` post-merge.**
+- The `openrouter` branch itself still exists locally, now fully merged —
+  safe to delete (`git branch -d openrouter`) once confirmed not needed for
+  anything else; not done yet, not urgent.
+- **Queue items #1-#6 from the 2026-08-19 carryover, and the 2026-08-20
+  queue drain**, are done — see `PLAN.md` for that history if ever needed;
+  nothing outstanding from either.
 - **oh-my-llama Consolidation Phase 5:** still only 5G left, blocked on
   the 7-day production soak of `src/semai/`'s daemon runtime. Not
   started; nothing to do until the soak completes or the user says to
@@ -39,8 +39,8 @@ vs. must route through `triapi plan`/`dispatch`).
 
 ## Next up
 
-- **#6 — Virtual Codebase Plan (Tiered Planner-Materializer
-  architecture):** see `VIRTUAL_CODEBASE_PLAN.md` at this repo's root.
-  **User wants to work on this one together, personally** — hold off
-  starting it solo; wait for the user.
+- Nothing queued. `VIRTUAL_CODEBASE_PLAN.md` (the prior "#6" item) was
+  deleted by the user directly (commit `8998db5`, before this session) —
+  no longer an open item; ask the user if/how they want to revisit it
+  rather than assuming it's still pending.
 - Otherwise: oh-my-llama's 5G once the soak clears.
