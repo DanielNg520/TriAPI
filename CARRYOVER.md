@@ -39,8 +39,11 @@ vs. must route through `triapi plan`/`dispatch`).
 
 ## Next up
 
-- Nothing queued. `VIRTUAL_CODEBASE_PLAN.md` (the prior "#6" item) was
-  deleted by the user directly (commit `8998db5`, before this session) —
-  no longer an open item; ask the user if/how they want to revisit it
-  rather than assuming it's still pending.
+- **Virtual Codebase Plan (Tiered Planner-Materializer architecture) is
+  still queued.** `VIRTUAL_CODEBASE_PLAN.md` itself was deleted by the user
+  directly (commit `8998db5`, before this session) — that removed the
+  write-up, not the item; the plan's substance would need to be re-derived
+  or re-described by the user before work starts. **User wants to work on
+  this one together, personally** — hold off starting it solo; wait for the
+  user.
 - Otherwise: oh-my-llama's 5G once the soak clears.
