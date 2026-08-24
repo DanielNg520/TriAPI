@@ -209,13 +209,6 @@ see `feedback_target_repo_docs_stay_in_target_repo` memory.
   fully-specified one-line doc edit. `AGENTS.md` confirmed at 73,380 chars
   (still under the 73,728 ceiling, but tight — worth trimming further
   before the next addition). Full suite green (83 tests).
-- **Self-fix drafts that are noise, not real bugs — do not dispatch:**
-  `20260824-021425-61d397`, `20260823-204847-f50c6c` (both OpenRouter 429s),
-  `20260824-024330-8c34fa` (an OpenRouter free-model 502, "Service
-  temporarily overloaded"). All auto-captured from `probe_models()` hitting
-  real, transient upstream issues during a heavy-usage night; `probe_models
-  ()` itself now has retry tolerance (see below) so this specific failure
-  mode should recur far less going forward.
 - **`llm_client.probe_models()` gained retry tolerance, 2026-08-24.** It
   had zero tolerance for a single transient blip on *any* tier — one
   OpenRouter 429 or a free model's temporary 502 aborted the entire
