@@ -1194,3 +1194,13 @@ LLM stop generating when the task calls for copying.
 - [x] **`planner.py` Context Enrichment**: Since cloud models lack file search capabilities, `planner.py` automatically injects repo context (`AGENTS.md`, `PLAN.md`, `README.md`) using `build_context_blob` for non-CLI providers.
 - [x] **`planner.py` Legacy CLI Refinements**: If the provider is `cli`, the script manually executes a subprocess to `claude -p` using the proper `--tools Read,Glob,Grep`, `--output-format json`, and `--resume` flags, and gracefully falls back to `llm_client._fallback_request()` if the CLI fails or hits quota limits.
 - [x] **`llm_client.py` Logging Fix**: Discovered and patched an `AttributeError` crash inside `llm_client.py` where `tri_logging.warning()` was improperly called without fetching a logger instance first.
+
+---
+
+## Phase 19: Fall Fast Fall Hard Architecture (2026-08-23)
+
+**Goal**: Eradicate silent API fallbacks and escalation masking. If an LLM endpoint fails fundamentally (e.g. 403 Spend Cap, 429 Rate Limit, 503 Gateway), the pipeline must instantly crash to alert the operator instead of burning cycles letting lower tiers attempt to parse a systemic backend outage.
+
+- [x] **`llm_client.py` Consolidation**: Ripped out `_fallback_request`, `_fallback_ollama`, and all `try/except` safety nets. `execute_llm()` is now a pure passthrough that will aggressively raise HTTP exceptions.
+- [x] **`orchestrator.py` Fail-Fast Hooks**: Rewrote the Tier 4 (`try/except`) and Tier 3/2/1 escalation loops. If a tier fails its unit tests (`build_failed`), the pipeline gracefully escalates. If a tier suffers a backend error, the orchestrator instantly raises a `RuntimeError` and collapses the pipeline.
+- [x] **Model Probe Pre-flight Gate**: Implemented `probe_models()` in `llm_client.py` and hooked it into `cmd_dispatch` inside `triapi.py`. TriAPI now actively pings all configured models with a dummy payload before launching a dispatch run, refusing to start if any configured backend is dead.
