@@ -1,31 +1,22 @@
-"""Tier 1: Claude Code CLI escalation client.
+"""Tier 1: LLM escalation client.
 
-Called after Tier 3 (DeepSeek) fails to resolve the build. Shells out to
-`claude -p` with a minimal --system-prompt override (avoids Claude Code's
-default system prompt + CLAUDE.md auto-discovery, which otherwise adds
-~60K tokens of overhead per call -- irrelevant here since the task is a
-one-shot text fix, not a coding session) and --tools "" (no tool access
-needed; the file contents are inlined in the prompt and the fix is
-extracted from the text response, same pattern as Tier 3).
-
-Must only be called after budget_guard.check_tier1_ok() passes. Uses the
-Claude Pro/Max subscription (no ANTHROPIC_API_KEY), never metered billing.
-
-DO NOT pass --bare: it forces ANTHROPIC_API_KEY/apiKeyHelper auth and
-never reads the OAuth/keychain subscription login, which would silently
-switch this tier to metered billing -- the opposite of what budget_guard
-is protecting against.
+Called after Tier 3 (DeepSeek) fails to resolve the build. Dispatches the
+repair prompt through llm_client.execute_llm using the tier_1_planner
+config (provider/endpoint/model). Must only be called after
+budget_guard.check_tier1_ok() passes.
 """
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, lessons
+from scripts import llm_client
+from scripts.config_loader import load_tiers
+from scripts.secrets_loader import load_secrets
 from scripts.budget_guard import check_tier1_ok
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
@@ -110,70 +101,39 @@ def escalate(
             "block, using the language tag appropriate for this file (or no tag for " \
             "plain text/markdown) -- no explanation."
 
-    # `prompt` (target file contents + context_blob, up to 20K chars/file --
-    # tier4_worker.build_context_blob()'s own cap -- times however many
-    # context files an item names) is piped via stdin, NOT passed as a CLI
-    # argv token. Found for real 2026-08-12: passing it as `-p prompt`
-    # hit the kernel's execve() argument-list size limit
-    # (`OSError: [Errno 7] Argument list too long`) on an item with several
-    # sizeable context files, an UNCAUGHT crash that took down the entire
-    # unattended dispatch process -- the same failure shape as the
-    # subprocess.TimeoutExpired crash tier4_worker.run_build() was already
-    # fixed for. `claude`'s own `[prompt]` CLI arg is documented optional
-    # (`claude -p --help`: "Arguments: prompt  Your prompt"), reading from
-    # stdin when omitted -- exactly what's needed here, and with no
-    # practical size limit the way argv has.
-    try:
-        result = subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--output-format",
-                "json",
-                "--tools",
-                "",
-                "--system-prompt",
-                system_prompt,
-            ],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return {"status": "error", "reason": f"Tier 1 subprocess failed to run: {e}"}
-    if result.returncode != 0:
-        return {"status": "error", "reason": result.stderr.strip()}
+    secrets = load_secrets()
+    config = load_tiers()
+    tier1 = config.get("tier_1_manager", {})
+    provider = tier1.get("provider", "cli")
+    model_name = tier1.get("models", {}).get(tier1.get("default_model", "default"), "claude-code")
 
     try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        return {"status": "error", "reason": f"Failed to parse CLI output: {e}"}
-    if not isinstance(data, dict):
-        return {"status": "error", "reason": "Claude CLI output must be a JSON object"}
-    usage = data.get("usage", {})
-    if not isinstance(usage, dict):
-        usage = {}
+        raw_result, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+            provider=provider,
+            endpoint=tier1.get('endpoint'),
+            api_key=secrets.get(tier1.get('api_key_secret', 'open_router_api_key')),
+            model=model_name,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            is_tier4=False,
+            effort=tier1.get('effort'),
+        )
+    except Exception:
+        return {"status": "error"}
 
     log_cost(
         {
             "timestamp": time.time(),
             "tier": "tier_1",
-            "model": "claude-sonnet-5",
+            "model": model_name,
             "task_id": task_id,
-            "input_tokens": usage.get("input_tokens", 0),
-            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
-            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "cost_usd": 0.0,
-            "notional_cost_usd": data.get("total_cost_usd", 0.0),
-            "billing": "subscription",
+            "notional_cost_usd": 0.0,
+            "billing": billing_type,
         }
     )
-
-    raw_result = data.get("result")
-    if not isinstance(raw_result, str):
-        return {"status": "error", "reason": "Claude CLI result missing or not a string"}
 
     if editing:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, raw_result)
@@ -181,7 +141,7 @@ def escalate(
             return {
                 "status": "fix_rejected",
                 "reason": f"Could not apply proposed edit: {err}",
-                "notional_cost_usd": data.get("total_cost_usd", 0.0),
+                "notional_cost_usd": 0.0,
             }
         fixed_code = new_content
     else:
@@ -190,7 +150,7 @@ def escalate(
             return {
                 "status": "fix_rejected",
                 "reason": "Tier 1 response truncated mid-generation (unterminated code fence); refusing to write incomplete file.",
-                "notional_cost_usd": data.get("total_cost_usd", 0.0),
+                "notional_cost_usd": 0.0,
             }
 
     guard = content_guard.check_write(task_id, target_path, fixed_code)
@@ -198,7 +158,7 @@ def escalate(
         return {
             "status": "fix_rejected",
             "reason": guard["reason"],
-            "notional_cost_usd": data.get("total_cost_usd", 0.0),
+            "notional_cost_usd": 0.0,
         }
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,7 +166,7 @@ def escalate(
 
     return {
         "status": "fix_applied",
-        "notional_cost_usd": data.get("total_cost_usd", 0.0),
+        "notional_cost_usd": 0.0,
     }
 
 

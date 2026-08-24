@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, planner, resource_guard, self_fix
+from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, llm_client, planner, resource_guard, self_fix
 from scripts.config_loader import load_resource_guard_services, load_tiers, load_unload_ollama_models_flag
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
@@ -321,8 +321,9 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
     snapshot_ollama_host = None
     try:
         tiers_cfg = load_tiers()
-        snapshot_ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
-        ollama_snapshot = resource_guard.snapshot_ollama_state(ollama_host=snapshot_ollama_host)
+        if tiers_cfg["tier_4_worker"].get("provider") == "ollama":
+            snapshot_ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
+            ollama_snapshot = resource_guard.snapshot_ollama_state(ollama_host=snapshot_ollama_host)
     except Exception as exc:
         snapshot_ollama_host = None
         log.warning("Could not snapshot Ollama state before dispatch: %s", exc)
@@ -332,16 +333,18 @@ def cmd_dispatch(run_id: str, background: bool) -> None:
         try:
             if tiers_cfg is None:
                 tiers_cfg = load_tiers()
-            default_model_key = tiers_cfg["tier_4_worker"]["default_model"]
-            keep_model = tiers_cfg["tier_4_worker"].get("models", {}).get(default_model_key, default_model_key)
-            ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
-            unloaded = resource_guard.unload_other_ollama_models(keep_model=keep_model, ollama_host=ollama_host)
-            log.info("Unloaded other Ollama models for this dispatch: %s", unloaded)
+            if tiers_cfg["tier_4_worker"].get("provider") == "ollama":
+                default_model_key = tiers_cfg["tier_4_worker"]["default_model"]
+                keep_model = tiers_cfg["tier_4_worker"].get("models", {}).get(default_model_key, default_model_key)
+                ollama_host = tiers_cfg["tier_4_worker"]["endpoint"]
+                unloaded = resource_guard.unload_other_ollama_models(keep_model=keep_model, ollama_host=ollama_host)
+                log.info("Unloaded other Ollama models for this dispatch: %s", unloaded)
         except Exception as exc:
             log.warning("Could not unload other Ollama models before dispatch: %s", exc)
     crash: tuple[Exception, object] | None = None
     bug_path: Path | None = None
     try:
+        llm_client.probe_models()
         _breakdown_and_dispatch(state)
     except Exception as exc:
         bug_path = self_fix.capture_crash(exc, run_id=run_id, context="cmd_dispatch:foreground")

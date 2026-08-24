@@ -1,6 +1,6 @@
-"""Tier 4: local Ollama drafting + build loop.
+"""Tier 4: OpenRouter drafting + build loop.
 
-Asks a local Ollama model to draft/fix code for a task, writes it to the
+Asks an OpenRouter model to draft/fix code for a task, writes it to the
 target file, runs the project's build command, and tracks consecutive
 build failures in logs/state/<task_id>.json. Designed to be invoked once
 per attempt (e.g. by an orchestrator or Antigravity via MCP), not as a
@@ -22,11 +22,10 @@ import sys
 import time
 from pathlib import Path
 
-import requests
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks, hivemind_util, lessons
+from scripts import content_guard, edit_blocks, hivemind_util, lessons, llm_client
 from scripts.config_loader import load_tiers
+from scripts.secrets_loader import load_secrets
 from scripts.state import clear_state, read_state, record_failure
 from scripts.tri_logging import get_logger
 
@@ -116,20 +115,6 @@ def build_prompt(description: str, target_path: Path, last_stderr: str, context_
     return "\n\n".join(parts)
 
 
-def call_ollama(host: str, model: str, prompt: str) -> dict:
-    resp = requests.post(
-        f"{host}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False, "options": {"num_ctx": 24576}},
-        timeout=300,
-    )
-    try:
-        resp.raise_for_status()
-    except requests.HTTPError:
-        log.error("Ollama request failed (model=%s): %s %s", model, resp.status_code, resp.text[:500])
-        raise
-    return resp.json()
-
-
 def run_build(build_cmd: str, workdir: str, timeout: int = 300) -> tuple[bool, str]:
     try:
         result = subprocess.run(
@@ -190,31 +175,32 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
             f"{hivemind_code}"
         )
 
-    log.info("[%s] Tier 4 (Ollama/%s) drafting %s", task_id, model, target_path)
+    log.info("[%s] Tier 4 (%s/%s) drafting %s", task_id, tier4.get('provider', 'ollama'), model, target_path)
 
-    try:
-        ollama_response = call_ollama(tier4["endpoint"], model, prompt)
-    except requests.RequestException as e:
-        # Ollama unreachable/down (connection refused, timeout, HTTP error --
-        # already logged inside call_ollama for the HTTPError case). Treat
-        # like a build failure so the existing consecutive-failure/escalation
-        # counter handles it, instead of an uncaught exception that crashes
-        # the whole (potentially hours-long, unattended) dispatch run.
-        log.error("[%s] Tier 4 request to Ollama failed: %s", task_id, e)
-        return _tier4_fail(task_id, threshold, str(e))
+    secrets = load_secrets()
+    # A systemic/connectivity error here (Ollama down, timeout, HTTP error)
+    # must NOT be downgraded to an ordinary build_failed/escalate result --
+    # orchestrator.run_task()'s caller wraps this function specifically to
+    # crash the pipeline (raise) on any exception, matching how tiers 1-3
+    # fail hard on the same class of error. Do not add a try/except here.
+    response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+        provider=tier4.get('provider', 'ollama'),
+        endpoint=tier4.get('endpoint'),
+        api_key=secrets.get(tier4.get('api_key_secret', 'open_router_api_key')),
+        model=model,
+        prompt=prompt,
+        system_prompt='',
+        is_tier4=True
+    )
 
-    response_text = ollama_response["response"]
     log_cost({
         "timestamp": time.time(),
         "tier": "tier_4",
         "model": model,
         "task_id": task_id,
-        # Ollama's own names for prompt/completion tokens -- kept as-is
-        # (not renamed to input_tokens/output_tokens) so a raw log line is
-        # traceable back to the Ollama API docs without a translation step.
-        "prompt_eval_count": ollama_response.get("prompt_eval_count", 0),
-        "eval_count": ollama_response.get("eval_count", 0),
-        "cost_usd": 0.0,  # local inference -- no per-token bill
+        "prompt_eval_count": input_tokens,
+        "eval_count": output_tokens,
+        "cost_usd": 0.0,
     })
 
     if editing:

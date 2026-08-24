@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 SECRETS_PATH = Path(__file__).resolve().parent.parent / "config" / "secrets.enc.yaml"
+SOPS_CONFIG_PATH = Path(__file__).resolve().parent.parent / ".sops.yaml"
 
 
 def load_secrets() -> dict:
@@ -20,7 +21,7 @@ def load_secrets() -> dict:
         )
     try:
         result = subprocess.run(
-            ["sops", "-d", "--output-type", "json", str(SECRETS_PATH)],
+            ["sops", "--config", str(SOPS_CONFIG_PATH), "-d", "--output-type", "json", str(SECRETS_PATH)],
             capture_output=True,
             text=True,
             check=True,
@@ -32,7 +33,7 @@ def load_secrets() -> dict:
         raise RuntimeError(f"sops failed to decrypt {SECRETS_PATH}: {e.stderr.strip()}") from e
 
     secrets = json.loads(result.stdout)
-    required = ["deepseek_api_key", "ollama_host", "google_ai_studio_api_key"]
+    required = ["deepseek_api_key", "ollama_host", "google_ai_studio_api_key", "open_router_api_key"]
     missing = [k for k in required if k not in secrets]
     if missing:
         raise ValueError(f"{SECRETS_PATH} is missing required keys: {missing}")

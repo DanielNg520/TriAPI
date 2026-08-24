@@ -35,6 +35,7 @@ DEFAULT_TIER3_PEAK_HOURS_UTC = [
 ]
 
 LA_TZ = ZoneInfo("America/Los_Angeles")
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 def check_tier1_ok() -> dict:
     """Refuses if ANTHROPIC_API_KEY is set -- its presence routes `claude -p`
@@ -123,12 +124,16 @@ def check_tier3_peak_hours_ok() -> dict:
     """Refuses if the current UTC time falls inside a DeepSeek peak-hour
     window (2x pricing). Peak windows are read from config/tiers.yaml and
     fall back to DEFAULT_TIER3_PEAK_HOURS_UTC when not configured."""
+    now_utc = datetime.now(timezone.utc)
+    now_beijing = now_utc.astimezone(BEIJING_TZ)
+    if now_beijing.weekday() in (5, 6):
+        log.debug("Tier 3 bypass: weekend off-peak rate in effect")
+        return {"ok": True, "reason": "weekend off-peak rate in effect"}
     config = load_tiers()
     peak_windows = config.get("tier_3_debugger", {}).get("peak_hours_utc")
     if peak_windows is None:
         peak_windows = DEFAULT_TIER3_PEAK_HOURS_UTC
 
-    now_utc = datetime.now(timezone.utc)
     now_la = now_utc.astimezone(LA_TZ)
     now_minutes = now_utc.hour * 60 + now_utc.minute
 

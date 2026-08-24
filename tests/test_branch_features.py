@@ -143,6 +143,7 @@ class SelfFixTests(unittest.TestCase):
             mock.patch.object(triapi.resource_guard, "resume_services", side_effect=resume),
             mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
             mock.patch.object(triapi, "load_tiers", return_value={"self_fix": {"enabled": True}}),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(triapi, "_breakdown_and_dispatch", side_effect=fail_dispatch),
             mock.patch.object(
                 triapi.self_fix, "capture_crash", return_value=Path("/tmp/bug.json")
@@ -167,6 +168,7 @@ class SelfFixTests(unittest.TestCase):
             mock.patch.object(triapi.resource_guard, "resume_services"),
             mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
             mock.patch.object(triapi, "load_tiers", side_effect=ValueError("bad yaml")),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(
                 triapi, "_breakdown_and_dispatch", side_effect=RuntimeError("original crash")
             ),
@@ -186,6 +188,7 @@ class SelfFixTests(unittest.TestCase):
             mock.patch.object(triapi.resource_guard, "resume_services"),
             mock.patch.object(triapi, "load_resource_guard_services", return_value=[]),
             mock.patch.object(triapi, "load_tiers", return_value={"self_fix": {"enabled": True}}),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(
                 triapi, "_breakdown_and_dispatch", side_effect=RuntimeError("dispatch crash")
             ),
@@ -646,6 +649,18 @@ class Tier3PeakHoursTests(unittest.TestCase):
 
     def test_mid_second_peak_window_refuses(self) -> None:
         result = self._check_at(datetime(2026, 8, 17, 8, 0, tzinfo=timezone.utc))
+        self.assertFalse(result["ok"])
+        self.assertIn("06:00-10:00", result["reason"])
+
+    def test_weekend_passes_in_peak(self) -> None:
+        # Aug 23, 2026 is a Sunday in Beijing Time.
+        result = self._check_at(datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc))
+        self.assertTrue(result["ok"])
+        self.assertIn("weekend off-peak", result["reason"].lower())
+
+    def test_weekday_refuses_in_peak(self) -> None:
+        # Aug 24, 2026 is a Monday. Regular peak hours apply.
+        result = self._check_at(datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc))
         self.assertFalse(result["ok"])
         self.assertIn("06:00-10:00", result["reason"])
 

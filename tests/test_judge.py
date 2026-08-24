@@ -25,6 +25,7 @@ class JudgeTests(unittest.TestCase):
                 "models": {"deepseek-chat": "deepseek-chat-v3"},
                 "pricing": {"deepseek-chat": {"prompt_cache_hit_tokens": 0.0}},
                 "endpoint": "https://api.deepseek.com",
+                "api_key_secret": "deepseek_api_key",
             }
         }
 

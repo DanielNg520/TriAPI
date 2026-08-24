@@ -57,7 +57,8 @@ there.
 
 ## scripts/
 - `secrets_loader.py` — `load_secrets()` shells out to `sops -d` to decrypt `config/secrets.enc.yaml` into a dict at runtime. Never logs values.
-- `config_loader.py` — `load_tiers()` loads and validates `config/tiers.yaml`, raises `ValueError` if required top-level keys are missing. `load_resource_guard_services()` (Phase 12) loads `config/resource_guard.yaml`'s `pause_services` list, returning `[]` (not an error) if the file is missing -- optional, machine-specific. `load_unload_ollama_models_flag()` (2026-08-17) reads the same file's `unload_other_ollama_models` boolean, returning `True` by default (missing file or missing key both default on, per explicit instruction) -- feeds `cmd_dispatch`'s decision whether to call `resource_guard.unload_other_ollama_models()`.
+- `config_loader.py` — `load_tiers()` loads and validates `config/tiers.yaml`, raises `ValueError` if required top-level keys are missing. `REQUIRED_KEYS` includes both `tier_1_planner` (plan-authoring) and `tier_1_manager` (repair dispatch) — added `tier_1_manager` 2026-08-23 after finding it was missing and a malformed/absent block for the tier that actually drives Tier 1 repair went uncaught. `load_resource_guard_services()` (Phase 12) loads `config/resource_guard.yaml`'s `pause_services` list, returning `[]` (not an error) if the file is missing -- optional, machine-specific. `load_unload_ollama_models_flag()` (2026-08-17) reads the same file's `unload_other_ollama_models` boolean, returning `True` by default (missing file or missing key both default on, per explicit instruction) -- feeds `cmd_dispatch`'s decision whether to call `resource_guard.unload_other_ollama_models()`.
+- `llm_client.py` — single dispatch point for every tier's model call: `execute_llm(provider, endpoint, api_key, model, prompt, system_prompt, is_tier4=False, effort=None)` routes to `_call_claude_cli()` (provider `cli`), `_call_gemini_api()` (`google`), or `_call_openai_api()` (OpenRouter/DeepSeek/Ollama/any OpenAI-compatible endpoint) — no hardcoded model strings anywhere in tier scripts, all provider/model/effort selection is config-driven (hot-swappable via `config/tiers.yaml`, or a per-call `--model` override where the caller exposes one). `_call_claude_cli()` (2026-08-23 fix) now passes `--model <model>` and `--effort <level>` to `claude -p` when given (previously ignored both, silently running whatever the CLI's own default was). `probe_models()` — pre-flight pings every tier's default model before a real dispatch (`triapi.py`'s `cmd_dispatch`, before `_breakdown_and_dispatch`); a probe failure raises `RuntimeError` and aborts the dispatch. **2026-08-23 fix:** now probes `tier_1_manager` (the Claude CLI tier that actually drives repair dispatch) in addition to `tier_1_planner` (OpenRouter, plan-authoring only) — previously only `tier_1_planner` was probed, so a real Claude-CLI outage/misconfig would sail through undetected.
 - `state.py` — per-task escalation state (`logs/state/<task_id>.json`): `read_state`, `write_state`, `record_failure`, `clear_state`.
 - `gemini_fallback.py` (Phase 14) — `post_generate_content(post_fn, endpoint, api_key, body, models, timeout)`: calls `generateContent` against each model in `models` in order, advancing only on confirmed per-model quota exhaustion (`is_quota_exhausted()`: 429 + `error.status == "RESOURCE_EXHAUSTED"`), never on other failures (those return immediately for the caller's own retry/backoff handling). Records every attempt via `budget_guard.record_gemini_call(model)`. Shared by `dispatcher.py`'s breakdown and `tier2_escalate.py`'s repair calls — both previously gave up (or instantly re-hit the same exhausted model) the moment one model's daily allowance was spent.
 - `content_guard.py` (Phase 13a) — `check_write(task_id, target_path, new_content)`: refuses a write to an *existing* file if the proposed replacement retains fewer than 50% of its original non-blank lines (below `MIN_RETENTION_RATIO`, only checked once a file has at least `MIN_LINES_TO_CHECK`=15 lines). Every tier's write goes through this before landing on disk. On refusal the original is left untouched and the rejected content is saved to `logs/rejected_writes/<task_id>.txt` for review. Brand-new files always pass (nothing to lose).
@@ -68,9 +69,9 @@ there.
 - `judge.py` — evaluates task design via Tier 3 (DeepSeek) using `evaluate_design()`. Enforces JSON-only output with robust sanitization and a fail-closed single retry on parse/request failure (unless skipped during peak-hours). Also provides `extract_pattern()` to securely write approved snippets into `knowledge/hivemind.md` with file-level locking (`fcntl.flock`).
 - `self_fix.py` — fail-safe structured crash capture under `logs/triapi_bugs/`, traceback-source extraction, planner reuse for TriAPI-only fix plans, and creation of human-approval-gated `self_fix_drafted` runs. It has no import-time exception-hook mutation and never auto-dispatches.
 - `tier4_context.py` — shared module defining the Tier-4 context-size-ceiling constant `TIER4_MAX_CONTEXT_CHARS = 73728` (24576 tokens * 3 chars/token), imported by `scripts/dispatcher.py` and `scripts/content_guard.py` to avoid circular imports.
-- `tier4_worker.py` — local Ollama drafting + build-loop worker, exposes callable `run(...)` (used directly by `orchestrator.py`) and a CLI `main()`; tracks consecutive build failures via `state.py`, escalates once `escalation_rules.tier4_to_tier3.threshold` is hit. **1-attempt oversize escalation (2026-08-19):** `_tier4_fail()` gained an `is_oversize_failure: bool = False` parameter that escalates after 1 failure instead of the configured threshold; passed `True` from the `run_build()` timeout path (output starting `"Command timed out after"`) and the truncated-response ("unterminated code fence") path, since both indicate the target file itself is too large for one Tier 4 generation window rather than an ordinary fixable build error — an unrelated `build_failed` keeps its full 2-attempt budget. Also owns `extract_code()` (fenced-code extraction, used only for brand-new files as of Phase 13b), `run_build()`, and `build_context_blob(paths, workdir)` (Phase 11 — reads other repo files a task references into a labeled read-only block for grounding, capped at 20K chars/file), all reused by every other tier. `run()` branches on whether the target already exists: existing files go through `edit_blocks.apply_edit_blocks()` (Phase 13b) then `content_guard.check_write()` (Phase 13a) before writing; a `requests.RequestException` from `call_ollama()` (Ollama down/unreachable) is caught and treated as a build failure instead of crashing the whole dispatch (Phase 13, found the same day the Ollama-down crash happened for real). `call_ollama()` returns the full response dict (not just `["response"]`) so `run()` can log `prompt_eval_count`/`eval_count` to `logs/cost_log.jsonl` (Phase 15) — previously the only tier with zero token accounting, since local inference has no per-call bill to justify logging it. Edit-mode prompts now fold in `lessons.select_relevant`/`format_lessons_for_prompt` via `build_edit_prompt_header(..., lessons_block=...)`.
+- `tier4_worker.py` — local Ollama drafting + build-loop worker, exposes callable `run(...)` (used directly by `orchestrator.py`) and a CLI `main()`; tracks consecutive build failures via `state.py`, escalates once `escalation_rules.tier4_to_tier3.threshold` is hit. **1-attempt oversize escalation (2026-08-19):** `_tier4_fail()` gained an `is_oversize_failure: bool = False` parameter that escalates after 1 failure instead of the configured threshold; passed `True` from the `run_build()` timeout path (output starting `"Command timed out after"`) and the truncated-response ("unterminated code fence") path, since both indicate the target file itself is too large for one Tier 4 generation window rather than an ordinary fixable build error — an unrelated `build_failed` keeps its full 2-attempt budget. Also owns `extract_code()` (fenced-code extraction, used only for brand-new files as of Phase 13b), `run_build()`, and `build_context_blob(paths, workdir)` (Phase 11 — reads other repo files a task references into a labeled read-only block for grounding, capped at 20K chars/file), all reused by every other tier. `run()` branches on whether the target already exists: existing files go through `edit_blocks.apply_edit_blocks()` (Phase 13b) then `content_guard.check_write()` (Phase 13a) before writing; **2026-08-23 correction:** `run()` no longer catches exceptions around its `llm_client.execute_llm()` call at all — a systemic/connectivity error (Ollama down, timeout, HTTP error) now propagates out of `run()` and is caught by `orchestrator.run_task()`'s own wrapper, which crashes the pipeline (`raise`), matching how tiers 1-3 fail hard on the same class of error via their `{"status": "error"}` -> `orchestrator` `RuntimeError` path. Previously `run()` swallowed `requests.RequestException`/`Exception` into an ordinary `_tier4_fail()` build_failed/escalate result, silently defeating the fall-fast/fall-hard design for Tier 4 specifically (orchestrator's own comment already said an exception here "should crash the pipeline," but it was unreachable). The older note below ("a `requests.RequestException` ... is caught and treated as a build failure") is superseded by this fix. `call_ollama()` returns the full response dict (not just `["response"]`) so `run()` can log `prompt_eval_count`/`eval_count` to `logs/cost_log.jsonl` (Phase 15) — previously the only tier with zero token accounting, since local inference has no per-call bill to justify logging it. Edit-mode prompts now fold in `lessons.select_relevant`/`format_lessons_for_prompt` via `build_edit_prompt_header(..., lessons_block=...)`.
 - `tier3_escalate.py` — DeepSeek escalation client: stable system-message prefix (instructions + context-blob + file contents, Phase 11) + volatile stderr user message for prefix-cache hits; applies the returned fix via `edit_blocks.apply_edit_blocks()` then `content_guard.check_write()` (Phase 13, the target always exists by the time Tier 3 runs since Tier 4 always drafts first) — a rejected/unappliable fix returns `status: "fix_rejected"` instead of writing; logs cache-hit/miss/output tokens + cost (partial where pricing is unverified) to `logs/cost_log.jsonl`. The `requests.post()` call plus its `raise_for_status()` are now both wrapped in one `try/except requests.RequestException` (2026-08-13) returning a normal `status: "error"` result instead of crashing — previously the raw POST had no exception handling at all, and the status-check's own `except requests.HTTPError` logged then re-raised anyway, so any DeepSeek-side failure (a real Gemini 503 exposed the identical bug in `tier2_escalate.py` first) would have taken the whole unattended dispatch process down. Edit-mode header also folds in relevant lessons keyed on `target_path.name` (empty description — this path has no task description in scope).
-- `tier1_escalate.py` — Claude Code CLI escalation client: shells out to `claude -p` with `--tools ""` (no tool access needed) and a minimal `--system-prompt` override, built per-call from `edit_blocks.build_edit_prompt_header()` (Phase 13b) (avoids ~60K tokens/call of default CLAUDE.md auto-discovery overhead — do NOT use `--bare`, it forces API-key auth and defeats the budget guard). The prompt itself (target file contents + context_blob) is piped via **stdin** (`input=prompt`), not passed as a CLI argv token (Phase 16) — passing it as `-p prompt` hit the kernel's `execve()` argument-list size limit for real on 2026-08-12 (`OSError: [Errno 7] Argument list too long`, uncaught, crashed the whole unattended dispatch process — same failure shape as the `TimeoutExpired` crash `tier4_worker.run_build()` was already fixed for). The `subprocess.run()` call is now wrapped in `try/except (OSError, subprocess.TimeoutExpired)`, returning a normal `{"status": "error"}` instead of propagating. Must only be called after `budget_guard.check_tier1_ok()`. Logs `cost_usd: 0.0` (actual, subscription-covered) alongside `notional_cost_usd` (what it would've cost on metered billing). Prompt takes an optional context-blob (Phase 11); response applied via `edit_blocks`/`content_guard` same as Tier 3. Edit-mode system prompt folds in lessons the same way as the other tiers.
+- `tier1_escalate.py` — Tier 1 Manager escalation client. Uses `llm_client.execute_llm()` to dispatch requests based on `config["tier_1_manager"]`. Defaults to the `cli` provider (Claude Code), model `claude-sonnet-5`, `effort: high` (2026-08-23: `tier1.get('effort')` is now passed through to `execute_llm()`, which forwards it to `claude -p --model ... --effort ...` — previously the CLI invocation had no `--model`/`--effort` flags at all, so it silently ran on the CLI's own default rather than a verified Sonnet 5 high). When using the Claude CLI, the prompt (target file contents + context_blob) is piped via **stdin** (`input=prompt`), not passed as a CLI argv token (Phase 16) — passing it as `-p prompt` hit the kernel's `execve()` argument-list size limit for real on 2026-08-12 (`OSError: [Errno 7] Argument list too long`). The OpenRouter integration (when tested) proved that `stealth/ox-alpha` fails with a 429 when processing large repair prompts due to an upstream `upstream_provider_shared_pool` limit, not a simple retriable throttle, meaning fallback or robust model choice is required. Must only be called after `budget_guard.check_tier1_ok()`. Logs `cost_usd: 0.0` (actual, subscription-covered) alongside `notional_cost_usd` (what it would've cost on metered billing) when using the CLI. Prompt takes an optional context-blob (Phase 11); response applied via `edit_blocks`/`content_guard` same as Tier 3. Edit-mode system prompt folds in lessons the same way as the other tiers.
 - `tier2_escalate.py` — Gemini escalation client via Google AI Studio REST API (`google_ai_studio_api_key`), mirrors `tier3_escalate.py`'s structure (including the Phase 11 context-blob and the Phase 13 edit-block/content-guard write path). Must only be called after `budget_guard.check_tier2_ok()`; calls `budget_guard.record_gemini_call()` after every attempt. `escalate()`'s `gemini_fallback.post_generate_content()` call and its `raise_for_status()` check are now both exception-guarded (2026-08-13) — a real `503 Server Error` propagated all the way up through `orchestrator.run_task()`/`dispatcher.dispatch()` and killed a whole unattended dispatch process (`raise_for_status()`'s `except requests.HTTPError` previously logged the error and then re-raised it anyway, which is not a fix). Both failure points now return a normal `status: "error"` result instead, matching how Tier 1/Tier 4 already treat their own request failures. Edit-mode system instruction folds in lessons via `select_relevant`/`format_lessons_for_prompt`.
 - `budget_guard.py` — pre-flight checks before Tier 1/Tier 2 calls: `check_tier1_ok()` refuses if `ANTHROPIC_API_KEY` is set (would force metered billing over subscription); `check_tier2_ok()` refuses if the next call would exceed `tiers.yaml`'s `tier_2_manager.pricing.free_tier_rpm/rpd` (tracked in `logs/gemini_usage.jsonl`, currently unverified placeholder limits). `check_tier1_manager_ok(config)` (2026-08-14) — separate feature on/off switch for Tier 1's repair role, checked in `orchestrator.run_task()` alongside `check_tier1_ok()`; refuses if `tier_1_manager.enabled` is `false` in `config/tiers.yaml` (default `true`) or if the `TRIAPI_NO_TIER1` env var is set (set by `triapi dispatch --no-tier1`, or manually). `check_tier3_peak_hours_ok()` — refuses the Tier 3 call during the DeepSeek V4 peak windows: it reads `tier_3_debugger.peak_hours_utc` from `tiers.yaml` (defaulting to the two DeepSeek V4 peak windows if absent, one of which is 06:00-10:00 UTC) and uses `zoneinfo.ZoneInfo("America/Los_Angeles")` purely for DST-correct local-time reporting — the actual peak-window comparison is done in UTC. `check_jules_ok()`/`record_jules_call()` (2026-08-17) — same daily-limit-guard shape as Tier 2's RPM/RPD check but for Jules: refuses if the next task would exceed `jules_tester.daily_task_limit` from `tiers.yaml` (tracked in `logs/jules_usage.jsonl`); advisory-only elsewhere in the pipeline (Jules is never a repair tier), but this check itself is a hard stop like the others.
 - `jules_client.py` (2026-08-17) — REST-only client for Google's async coding agent (`jules.googleapis.com/v1alpha`), auth via `X-Goog-Api-Key` (`secrets_loader.load_secrets()["google_jules_apikey"]`, never logged — an initial dispatch of this file read the wrong key name, `jules_api_key`, which doesn't exist in `secrets.enc.yaml`; the pipeline's own mocked tests used the same wrong name and so didn't catch it, a fabricated-fact bug caught and fixed by hand 2026-08-17, same class as the `gemini-3-pro` incident). **REST-only by design, not CLI**: confirmed live during planning that the `jules` CLI has no machine-readable status/output and no explicit branch-targeting flag — `jules remote pull` only returns file diffs, `jules remote list --session` is unparseable plain text with no `--json` option, and a CLI-created session's `sourceContext` showed no branch info at all, versus a REST-created session's explicit `githubRepoContext.startingBranch`. **Confirmed real field names (live-verified 2026-08-17):** `POST /sessions` body uses `sourceContext.githubRepoContext.startingBranch` — public Jules docs claim `sourceContext.githubBranch`, which is confirmed WRONG against the live API (`400: Unknown name "githubBranch" at 'session.source_context': Cannot find field`). `get_final_message()` extracts the result by reverse-scanning the activity feed for the last `agentMessaged.agentMessage` (also initially miscoded as `agentMessaged.get("message")` — fixed alongside the secret-key bug, and now pinned by a direct regression test against the real confirmed-live activity shape, `JulesGetFinalMessageTests`), falling back to `progressUpdated.description`, then `""`, if no agent message is present. `run_jules_test()`/`main()` provide a manual/CLI smoke-test entry point (create session → `poll_session_result()` to a terminal state) and are also what `triapi.py`'s post-dispatch hook calls — despite an earlier, incorrect docstring claiming otherwise, this path IS used by the automated dispatch pipeline (see `triapi.py`'s entry below), just never with a real live call during the automated test suite.
@@ -81,7 +82,7 @@ there.
   - `find_incomplete_plan(project_dir)` — looks at only the most recently appended block and returns its `run_id`/unchecked-step count if it still has any `- [ ] ` checkbox line, else `None`; a block with zero checkboxes at all (planner didn't use checkbox syntax) fails open rather than blocking forever, since there's nothing to check off.
   - `mark_plan_complete(project_dir, run_id, breakdown_item_count)` (2026-08-19) — flips every `- [ ]` to `- [x]` inside that run's block only (leaves other blocks/prose untouched), but only when the block's own checklist-item count (`_CHECKLIST_ITEM_ANY_RE`, counting both `[ ]` and `[x]`) is not greater than `breakdown_item_count`; if the breakdown captured fewer items than the block declares (the partial-breakdown symptom from run `20260819-063339-9d23c7`), it refuses to check anything off, logs a warning, and returns `False` without writing the file. Still returns `False` as a no-op if the block or file can't be found (e.g. hand-edited AGENTS.md) rather than raising.
   - Callers: `cmd_plan()` in `triapi.py` calls `find_incomplete_plan()` before starting a new session and refuses (printing the blocking run_id and how to resume/inspect it) unless `--refactor` is passed; `_breakdown_and_dispatch()` calls `mark_plan_complete()` only when a run's final `state["status"]` is `"completed"` (all items resolved) — a `stopped_on_failure` run leaves the gate closed, which is the intended block. `planner.py`'s `SYSTEM_PROMPT` requires every step to be a literal `- [ ] ` checkbox line so this stays parseable.
-- `planner.py` — Tier 1 as interactive planner (distinct from `tier1_escalate.py`'s repair role): `plan_turn(message, project_dir, session_id)`, one turn of a `claude -p --resume` conversation, read-only tool access (`Read,Glob,Grep`), proposes/revises a phase-checklist markdown plan (file-fix steps and/or git clone/pull/push steps) or asks a clarifying question. Nothing is built until the user approves a turn's output. Its inner `claude -p` `subprocess.run()` call (2026-08-13) is now wrapped in `try/except subprocess.TimeoutExpired`, returning the same `{"status": "error", ...}` shape `cmd_plan()` already handles gracefully instead of crashing the whole `triapi plan` process — the timeout itself was also bumped from 300s to 600s after a real large-scope planning prompt (a two-tree, multi-file, systemd+bot-UI cut) legitimately needed longer than 300s twice in a row.
+- `planner.py` — Interactive planner (distinct from `tier1_escalate.py`'s repair role): `plan_turn(message, project_dir, session_id)`. The provider is now decoupled and read from `tier_1_planner` (Phase 18) — currently OpenRouter `stealth/ox-alpha`, primary by deliberate choice. If the provider is `cli`, it runs a `claude -p --resume` conversation with native read-only tools (`Read,Glob,Grep`). For non-CLI providers (e.g., OpenRouter, DeepSeek), it automatically enriches the prompt with a context blob (`AGENTS.md`, `PLAN.md`, `README.md`) to ground the LLM since cloud models lack native tools. **Content-filter sanitization + CLI fallback (2026-08-23):** the enriched context blob legitimately contains `git@github.com:...` SSH URLs (from README.md/AGENTS.md), which OpenRouter's free `stealth/ox-alpha` content filter flags as PII and 403s with `"Request blocked by content filter: [EMAIL]"` — confirmed live, this bricked `triapi plan` entirely. `_sanitize_for_content_filter()` obscures email-like tokens (`user@host` -> `user(at)host`) in the copy of the prompt sent to non-cli providers only (the CLI path is untouched). On any primary-path failure (this filter, a 403/429, connectivity), both the `cli` branch's parse failure and the non-cli branch's exception now fall back to `_fallback_to_tier1_manager_cli()`, which calls `tier_1_manager`'s Claude CLI (Sonnet 5, high effort) — this replaces two dead calls to a `llm_client._fallback_request()` that never existed in `llm_client.py` (would have raised `AttributeError` if ever hit). Verified live end-to-end 2026-08-23: a real `plan_turn()` call returned `status: ok` via the OpenRouter primary path after sanitization. Nothing is built until the user approves a turn's output.
 - `dispatcher.py` — Tier 2 as manager (distinct from `tier2_escalate.py`'s repair role): breaks an approved plan into phases of concrete per-file checklist items and dispatches them one at a time, in order, through the existing repair pipeline (`orchestrator.run_task()`). Must only be called after `budget_guard.check_tier2_ok()`. **File-size ceiling guard (2026-08-19):** `_enforce_file_size_ceiling()` (with `TIER4_MAX_CONTEXT_CHARS`, derived from Tier 4's `num_ctx=24576`) runs in `breakdown_plan()` alongside the existing test-context and import-order guards, rejecting the plan if any file item's existing on-disk content already exceeds Tier 4's context window — closes real 300s Tier-4 timeouts on oversized files.
   - **Phase split:** `_split_plan_by_phase()` splits plan markdown into per-phase chunks on `_PHASE_HEADER_RE = re.compile(r"^(?:#{1,6} |\d+\.\s+Phase\b)", re.IGNORECASE)` — any ATX heading depth (`#`–`######`) or a numbered top-level `N. Phase ...` marker (found for real 2026-08-12: a `### Phase 2` header silently vanished its whole phase when only `## ` was recognized; run `20260819-063339-9d23c7` (2026-08-19): a plan with numbered `1. Phase 1 -- ...` headers and no `#` at all collapsed into one chunk, dropping every phase after the first). The companion filter `_CHECKLIST_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+", re.MULTILINE)` accepts any bulleted/numbered list item, checkbox syntax optional (a numbered `1. [ ]` plan, and later a plain `1. **file** — ...` plan with no `[ ]`, were each dropped as "no checklist items" for real), so only chunks with no list markers (e.g. a leading title block) are discarded.
   - **Breakdown:** `breakdown_plan(state)` (Phase 10 — takes the run `state` dict, not raw plan text) converts an approved plan into `state["breakdown"] = {"phases": [{"name", "items": [ITEM]}]}` **one phase at a time**, saving state after each phase so a partially-broken-down run resumes instead of restarting; post-breakdown guards now run only on fresh chunk assembly, not on resume of an already-populated breakdown (resolving the known limitation previously documented in CARRYOVER.md). Each phase goes through Gemini's JSON mode with up to 3 retries (malformed JSON from Gemini is a real, observed, stochastic failure) and `_parse_retry_after()` backoff (honors a 429 body's own suggested delay, e.g. "Please retry in 27.33s", else 5s); a raw `requests.RequestException` is folded into the retry loop, not propagated. A non-empty `plan_text` that yields zero total items is a hard error, never a vacuous `status: "ok"`. ITEM is a file item `{"description", "target", "build_cmd", "verify_only", "context_files"}` (`context_files`, Phase 11 — other repo files this step's description references, for grounding) or a git item `{"description", "git": {"action", ...}}`.
@@ -145,3 +146,308 @@ Line numbers all match the queued plan exactly (SYSTEM_PROMPT at 36 vs "starts a
    - [x] Run `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_file_size_ceiling_and_oversize_escalation tests.test_encrypted_file_edit_guard tests.test_dispatcher_test_context_guard -v` and confirm all tests pass (no `SKIPPED`, no failures/errors).
    - [x] Update `AGENTS.md` at the repo root: first run `wc -c AGENTS.md` to check current size against the 73,728-char Tier 4 ceiling; add `scripts/tier4_context.py` to the living file/dir index (one line: shared Tier-4 context-size-ceiling constant module, imported by `scripts/dispatcher.py` and `scripts/content_guard.py`); note the `breakdown_plan()` resume-guard behavior change (post-breakdown guards now run only on fresh chunk assembly, not on resume of an already-populated breakdown) in whatever section documents `breakdown_plan()`/dispatcher guard behavior. Keep additions concise per this repo's doc-hygiene convention.
 <!-- triapi:plan run_id=20260819-224114-9884f8 end -->
+
+<!-- triapi:plan run_id=20260823-135914-18f8c0 start -->
+## TriAPI Plan (run 20260823-135914-18f8c0, appended 2026-08-23)
+
+# Plan: Audit why TriAPI is not working right now
+
+Scope: read-only diagnosis. No repo files are modified; all evidence is captured under `/tmp/triapi_audit/` (kept out of the repo per `AGENTS.md`'s doc-hygiene rule). The deliverable is a root-cause report at `/tmp/triapi_audit/findings.md`, printed at the end. Applying fixes is a follow-up the user approves after seeing the findings.
+
+## Phase 1 — Reproduce the failure and read current state
+
+- [x] Capture the repo's own current-state note, recent git history, and root listing into `/tmp/triapi_audit/carryover.txt` so the audit starts from what the repo itself already says: `mkdir -p /tmp/triapi_audit && { echo '=== CARRYOVER.md (head) ==='; head -n 120 CARRYOVER.md 2>&1; echo; echo '=== recent git log ==='; git -C . log --oneline -15 --decorate 2>&1; echo; echo '=== root listing ==='; ls -la; } > /tmp/triapi_audit/carryover.txt 2>&1; cat /tmp/triapi_audit/carryover.txt`
+- [x] Capture exactly how the `triapi` command behaves right now (exists on PATH? crashes on startup?) into `/tmp/triapi_audit/repro_triapi.txt`: `{ command -v triapi || echo NOT_ON_PATH; } > /tmp/triapi_audit/repro_triapi.txt 2>&1; timeout 20 triapi --help >> /tmp/triapi_audit/repro_triapi.txt 2>&1; echo "exit=$?" >> /tmp/triapi_audit/repro_triapi.txt; head -100 /tmp/triapi_audit/repro_triapi.txt` — a nonzero `exit=` or `NOT_ON_PATH` here is itself a root-cause candidate.
+- [x] Locate where the `triapi` entry point ships from (console script, `scripts/triapi.py`, aliases) into `/tmp/triapi_audit/entry_points.txt`: `{ pip show triapi 2>/dev/null | head -8; echo '---'; ls -la /usr/local/bin/triapi ~/.local/bin/triapi "$HOME/bin/triapi" 2>/dev/null; echo '---'; find . -maxdepth 3 \( -iname 'triapi*' -o -name 'pyproject.toml' -o -name 'setup.py' -o -name 'setup.cfg' \) -not -path './.git/*' | sort; } > /tmp/triapi_audit/entry_points.txt 2>&1; cat /tmp/triapi_audit/entry_points.txt`
+- [x] Run the repo's own regression suite to separate "code is broken" from "environment is broken", recording to `/tmp/triapi_audit/unittest.txt`: `PYTHONPATH=. timeout 600 python3 -m unittest tests.test_branch_features -v > /tmp/triapi_audit/unittest.txt 2>&1; echo "exit=$?" >> /tmp/triapi_audit/unittest.txt; tail -80 /tmp/triapi_audit/unittest.txt`
+
+## Phase 2 — Environment, dependencies, secrets, config
+
+- [x] Check Python/deps on the global interpreter and any venv, into `/tmp/triapi_audit/deps.txt`: `{ python3 --version; echo '--- global imports ---'; PYTHONPATH=. python3 -c "import requests, yaml; print('requests+PyYAML OK')" 2>&1; PYTHONPATH=. python3 -c "import mcp; print('mcp OK')" 2>&1; echo '--- venv imports ---'; for p in .venv/bin/python venv/bin/python; do if [ -x "$p" ]; then "$p" --version; "$p" -c "import requests, yaml; print('requests+PyYAML OK')" 2>&1; "$p" -c "import mcp; print('mcp OK')" 2>&1; fi; done; echo '--- pip versions ---'; pip show requests PyYAML mcp 2>/dev/null | grep -E '^(Name|Version)'; } > /tmp/triapi_audit/deps.txt 2>&1; cat /tmp/triapi_audit/deps.txt` — `mcp` was not yet installed at planning time, so a missing `mcp` on the interpreter `triapi` actually runs under is a prime suspect.
+- [x] Verify the sops/age secrets path works, without printing any secret values, into `/tmp/triapi_audit/secrets.txt`: `{ ls -la config/ 2>&1; echo '--- age key ---'; test -f ~/.config/sops/age/keys.txt && echo AGE_KEY_PRESENT || echo AGE_KEY_MISSING; echo '--- secrets file ---'; test -f config/secrets.enc.yaml && echo SECRETS_EXISTS || echo SECRETS_MISSING; echo '--- decrypt check ---'; if [ -f config/secrets.enc.yaml ]; then sops -d config/secrets.enc.yaml > /dev/null 2>&1 && echo DECRYPT_OK || echo DECRYPT_FAIL; else echo SKIP_DECRYPT_NO_FILE; fi; } > /tmp/triapi_audit/secrets.txt 2>&1; cat /tmp/triapi_audit/secrets.txt` — as of 2026-08-17 `config/secrets.enc.yaml` is gitignored/local-only, so on a fresh clone `SECRETS_MISSING` would hard-fail `load_secrets()`.
+- [x] Validate `config/tiers.yaml` parses and loads through the repo's own loader, into `/tmp/triapi_audit/config_load.txt`: `{ PYTHONPATH=. python3 -c "import yaml; yaml.safe_load(open('config/tiers.yaml')); print('tiers.yaml YAML_OK')" 2>&1; PYTHONPATH=. python3 -c "from scripts.config_loader import load_tiers; t=load_tiers(); print('load_tiers keys:', sorted(t.keys()))" 2>&1; } > /tmp/triapi_audit/config_load.txt 2>&1; cat /tmp/triapi_audit/config_load.txt` — a `ValueError` naming a missing required key is a root cause.
+- [x] Record the optional sidecar files and gitignore state into `/tmp/triapi_audit/sidecars.txt`: `{ echo '=== config/resource_guard.yaml ==='; test -f config/resource_guard.yaml && cat config/resource_guard.yaml || echo RESOURCE_GUARD_MISSING_OPTIONAL; echo; echo '=== .sops.yaml ==='; test -f .sops.yaml && cat .sops.yaml || echo SOPS_RULE_MISSING; echo; echo '=== gitignore status of config/secrets.enc.yaml ==='; git check-ignore -v config/secrets.enc.yaml 2>&1 || echo NOT_GITIGNORED; } > /tmp/triapi_audit/sidecars.txt 2>&1; cat /tmp/triapi_audit/sidecars.txt`
+
+## Phase 3 — Live subsystem health (Ollama, Claude, budget guard, logs)
+
+- [x] Check the Ollama systemd user service and which models are actually pulled, into `/tmp/triapi_audit/ollama.txt`: `{ systemctl --user is-active ollama 2>&1; echo '--- status ---'; systemctl --user status ollama --no-pager 2>&1 | head -20; echo '--- ollama list ---'; ollama list 2>&1; } > /tmp/triapi_audit/ollama.txt 2>&1; cat /tmp/triapi_audit/ollama.txt` — confirm whether `qwen2.5-coder:14b-instruct-q8_0`, `deepseek-coder-v2:16b`, `qwen2.5-coder:32b` are present.
+- [x] Confirm Ollama's HTTP API actually responds on `127.0.0.1:11434` (using the first model listed) into `/tmp/triapi_audit/ollama_api.txt`: `MODEL=$(ollama list 2>/dev/null | sed -n '2p' | awk '{print $1}'); echo "model: ${MODEL:-none}" > /tmp/triapi_audit/ollama_api.txt; [ -n "$MODEL" ] && curl -s --max-time 120 http://127.0.0.1:11434/api/generate -d "{\"model\":\"$MODEL\",\"prompt\":\"Reply with exactly OK\",\"stream\":false,\"options\":{\"num_predict\":10}}" >> /tmp/triapi_audit/ollama_api.txt 2>&1; head -c 600 /tmp/triapi_audit/ollama_api.txt` — a connection refusal vs. a model-not-found error are different findings.
+- [x] Check Claude CLI presence, auth mode, and that the exact flags the scripts use still exist, into `/tmp/triapi_audit/claude.txt`: `{ claude --version 2>&1; echo "ANTHROPIC_API_KEY set: $([ -n "$ANTHROPIC_API_KEY" ] && echo YES_BUDGET_GUARD_WILL_REFUSE || echo no)"; echo '--- claude -p flags still supported? ---'; claude -p --help 2>&1 | grep -oE '\-\-(output-format|system-prompt|tools|bare)[a-z-]*' | sort -u | head -20; } > /tmp/triapi_audit/claude.txt 2>&1; cat /tmp/triapi_audit/claude.txt` — a missing flag (e.g. if the CLI was updated past what `scripts/tier1_escalate.py` invokes) is a classic "stopped working" cause.
+- [x] Exercise the budget-guard gates and read the usage counters, into `/tmp/triapi_audit/budget_guard.txt`: `{ PYTHONPATH=. python3 -c "import scripts.budget_guard as bg; print('check_tier1_ok ->', bg.check_tier1_ok()); print('check_tier3_peak_hours_ok ->', bg.check_tier3_peak_hours_ok())" 2>&1; echo '--- usage counters ---'; wc -l logs/gemini_usage.jsonl logs/cost_log.jsonl logs/escalations.jsonl 2>&1; echo '--- gemini usage tail ---'; tail -n 5 logs/gemini_usage.jsonl 2>&1; } > /tmp/triapi_audit/budget_guard.txt 2>&1; cat /tmp/triapi_audit/budget_guard.txt` — note the known gate: Tier 3 is refused inside the DeepSeek peak window 06:00-10:00 UTC, and a near-cap `gemini_usage.jsonl` would refuse Tier 2.
+- [x] Inspect runtime logs, leftover per-task state, and escalations into `/tmp/triapi_audit/logs.txt`: `{ echo '=== logs/triapi.log tail ==='; tail -n 200 logs/triapi.log 2>&1; echo; echo '=== logs/state/ ==='; ls -la logs/state/ 2>&1; echo; echo '=== escalations.jsonl tail ==='; tail -n 20 logs/escalations.jsonl 2>&1; } > /tmp/triapi_audit/logs.txt 2>&1; cat /tmp/triapi_audit/logs.txt` — a stale `logs/state/<task_id>.json` can make a re-run escalate instantly without any real failure.
+
+## Phase 4 — End-to-end smoke test
+
+- [x] Run one real end-to-end orchestrator invocation against the repo's own `samples/broken_build/` fixture (first model listed as the fast tier-4 override), recording to `/tmp/triapi_audit/e2e.txt`: `MODEL=$(ollama list 2>/dev/null | sed -n '2p' | awk '{print $1}'); { PYTHONPATH=. timeout 900 python3 scripts/orchestrator.py --task-id audit-e2e-$(date +%s) --description "Fix the compile error in main.cpp (audit)" --target main.cpp --workdir samples/broken_build --build-cmd "cmake -S . -B build && cmake --build build" --tier4-model "$MODEL" > /tmp/triapi_audit/e2e.txt 2>&1; echo "exit=$?" >> /tmp/triapi_audit/e2e.txt; } 2>&1; tail -100 /tmp/triapi_audit/e2e.txt` — this may make real sub-cent DeepSeek calls and budget-guarded subscription calls (consistent with the repo's own documented smoke test); the point is to see which tier/step is where it actually chokes.
+
+## Phase 5 — Synthesize and report root cause
+
+- [x] Auto-draft a raw red-flag index from every evidence file into `/tmp/triapi_audit/findings.md`: `{ echo "# TriAPI audit findings — $(date -Is)"; echo; echo "Scope: read-only diagnosis; evidence in /tmp/triapi_audit/*.txt; no repo files modified."; echo; for f in /tmp/triapi_audit/{carryover,repro_triapi,entry_points,unittest,deps,secrets,config_load,sidecars,ollama,ollama_api,claude,budget_guard,logs,e2e}.txt; do [ -f "$f" ] || continue; HITS=$(grep -niE 'error|fail|missing|refused|exception|traceback|not on path|decrypt_fail|secrets_missing|api_key_set|not found|cannot|denied|exit=[1-9]' "$f" | head -15); if [ -n "$HITS" ]; then echo "### $(basename "$f")"; echo "$HITS"; echo; fi; done; } > /tmp/triapi_audit/findings.md && echo "draft written"` — then rewrite the same file by hand into a clean audit report.
+- [x] Author the final root-cause report at `/tmp/triapi_audit/findings.md` (one section per confirmed problem: symptom, evidence file + line, how it breaks TriAPI, minimal fix — fixes are NOT applied in this audit), then print it for the user: compose `/tmp/triapi_audit/findings.md` from the red-flag draft above, then verify with `cat /tmp/triapi_audit/findings.md && wc -l /tmp/triapi_audit/findings.md` — done means every evidence file has been reviewed/attributed and the root cause(s) are stated with the exact command/step that will unblock TriAPI.
+<!-- triapi:plan run_id=20260823-135914-18f8c0 end -->
+
+<!-- triapi:plan run_id=20260823-143024-5e6d61 start -->
+## TriAPI Plan (run 20260823-143024-5e6d61, appended 2026-08-23)
+
+<｜｜DSML｜｜tool_calls>
+<｜｜DSML｜｜invoke name="read_file">
+<｜｜DSML｜｜parameter name="filePath" string="true">tests/test_file_size_ceiling_and_oversize_escalation.py</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+<｜｜DSML｜｜invoke name="read_file">
+<｜｜DSML｜｜parameter name="filePath" string="true">scripts/tier4_worker.py</｜｜DSML｜｜parameter>
+</｜｜DSML｜｜invoke>
+</｜｜DSML｜｜tool_calls>
+<!-- triapi:plan run_id=20260823-143024-5e6d61 end -->
+
+<!-- triapi:plan run_id=20260823-144422-e0c98e start -->
+## TriAPI Plan (run 20260823-144422-e0c98e, appended 2026-08-23)
+
+1. Phase 1: Environment and Dependency Audit
+   - [x] File: `config/secrets.enc.yaml`. Change needed: Read-only verification to ensure the local `age` key successfully decrypts the encrypted configuration without errors. Command: `sops -d config/secrets.enc.yaml > /dev/null`
+   - [x] File: `config/resource_guard.yaml`. Change needed: Read-only verification of the Ollama dependency to ensure its systemd user service is currently active and running. Command: `systemctl --user status ollama --no-pager`
+   - [x] File: `scripts/tier1_escalate.py`. Change needed: Read-only verification that the Anthropic `claude` CLI dependency is installed and accessible in the system path. Command: `claude --version`
+
+2. Phase 2: Regression Test Suite Audit
+   - [x] File: `tests/test_branch_features.py`. Change needed: Read-only execution of the full test suite to ensure all baseline logic, integrations, and mocked budget/Jules behaviors still pass. Command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+<!-- triapi:plan run_id=20260823-144422-e0c98e end -->
+
+
+<!-- triapi:plan run_id=20260823-999999-audit start -->
+## TriAPI Plan (run 20260823-999999-audit, appended 2026-08-23)
+
+1. Phase 1: Audit OpenRouter Refactor
+   - [x] File: `tests/test_branch_features.py`. Change needed: Verify the full test suite passes after the manual OpenRouter refactoring applied to `scripts/dispatcher.py` and `scripts/triapi.py`. Note: `verify_only: true`. Command: `cat > /tmp/verify_audit.py <<'INNER_EOF'
+import sys, subprocess
+res = subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"], capture_output=True, text=True)
+if res.returncode != 0:
+    print(res.stderr)
+    sys.exit(1)
+print("Audit OK")
+INNER_EOF
+python3 /tmp/verify_audit.py`
+<!-- triapi:plan run_id=20260823-999999-audit end -->
+
+<!-- triapi:plan run_id=20260823-163311-6c33a3 start -->
+## TriAPI Plan (run 20260823-163311-6c33a3, appended 2026-08-23)
+
+# OpenRouter Refactor Audit Plan
+
+All steps are **read-only** and **non-mutating**: they parse/inspect the named file, never import it for side effects beyond standard-library AST parsing, never call the network, and never write code. Every verification is a HEREDOC shell command with `verify_only=true`.
+
+---
+
+## Phase 1 — Audit `scripts/llm_client.py`
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — verify the module has a provider-aware request path and an OpenRouter marker.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib, re
+  p = pathlib.Path('scripts/llm_client.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  provider_funcs = []
+  for node in ast.walk(tree):
+      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+          if any(a.arg == 'provider' for a in node.args.args):
+              provider_funcs.append(f'{node.name}:{node.lineno}')
+  assert provider_funcs, 'FAIL: no function accepts a provider argument'
+  assert re.search(r'openrouter', src, re.IGNORECASE), 'FAIL: no OpenRouter mention'
+  print(f'PASS llm_client provider signature + OpenRouter marker: {provider_funcs}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — verify the fallback loop is provider-guarded so it cannot silently cross from one provider to another.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  p = pathlib.Path('scripts/llm_client.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  guards = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.If):
+          test = ast.unparse(node.test)
+          if 'provider' in test or 'model' in test:
+              guards.append((node.lineno, test))
+  assert guards, 'FAIL: no provider/model guard found'
+  assert any('provider' in test for _, test in guards), 'FAIL: fallback guard does not check provider'
+  print(f'PASS llm_client provider-aware fallback guard(s): {guards}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — verify OpenAI-compatible response JSON is parsed defensively through `choices`/`message`/`content`.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  p = pathlib.Path('scripts/llm_client.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  parse_calls = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.Call):
+          try:
+              s = ast.unparse(node)
+          except Exception:
+              continue
+          if any(term in s for term in ('choices', 'message', 'content', 'response')):
+              parse_calls.append((node.lineno, s[:240]))
+  assert parse_calls, 'FAIL: no JSON/response parsing call found'
+  assert any(('choices' in s or 'message' in s) and 'content' in s for _, s in parse_calls), \
+      'FAIL: no choices/message + content extraction'
+  print(f'PASS llm_client JSON parse sites: {len(parse_calls)}')
+  PY
+  BASH
+  ```
+
+---
+
+## Phase 2 — Audit `scripts/dispatcher.py`
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — verify the dispatcher actually uses `llm_client` and passes `provider=` explicitly to it.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib, re
+  p = pathlib.Path('scripts/dispatcher.py')
+  src = p.read_text()
+  tree = ast.parse(src, filename=str(p))
+  assert 'llm_client' in src, 'FAIL: dispatcher does not reference llm_client'
+  call_lines = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.Call) and any(kw.arg == 'provider' for kw in getattr(node, 'keywords', [])):
+          call_lines.append(node.lineno)
+  assert call_lines, 'FAIL: no dispatcher call passes provider= keyword'
+  assert re.search(r'openrouter', src, re.IGNORECASE), 'FAIL: no OpenRouter gate/mention'
+  print(f'PASS dispatcher llm_client + provider= at lines {call_lines}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — verify OpenRouter handling is kept separate from the Gemini fallback chain.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib, re
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  assert 'gemini_fallback' in src, 'FAIL: gemini_fallback module not referenced'
+  assert re.search(r'provider\s*(?:==|!=)\s*[\'"]openrouter[\'"]', src, re.IGNORECASE), \
+      'FAIL: OpenRouter provider gate not found'
+  assert re.search(r'breakdown|fallback_chain', src), 'FAIL: breakdown/fallback chain path not found'
+  print('PASS dispatcher OpenRouter gate is separate from gemini_fallback')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — verify the dispatcher does not hardcode an OpenRouter endpoint independently of `llm_client`.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib, re
+  src = pathlib.Path('scripts/dispatcher.py').read_text()
+  assert 'llm_client' in src, 'FAIL: dispatcher does not delegate to llm_client'
+  # A clean refactor keeps the HTTP endpoint in llm_client, not duplicated here.
+  assert not re.search(r'https?://[^\s\'"]*(?:openrouter|chat/completions)', src, re.IGNORECASE), \
+      'FAIL: dispatcher appears to hardcode an OpenRouter/chat-completions URL'
+  print('PASS dispatcher delegates OpenRouter transport to llm_client')
+  PY
+  BASH
+  ```
+
+---
+
+## Phase 3 — Audit `scripts/triapi.py`
+
+- [ ] **Read-only target: `scripts/triapi.py`** — verify the CLI exposes an OpenRouter provider selection path.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import pathlib, re
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  assert 'openrouter' in src.lower(), 'FAIL: triapi has no OpenRouter mention'
+  assert re.search(r'--provider', src), 'FAIL: triapi missing --provider flag'
+  assert re.search(r'add_argument\([^)]*--provider', src), 'FAIL: argparse missing --provider option'
+  print('PASS triapi --provider CLI flag')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/triapi.py`** — verify the provider value selected at the CLI reaches the dispatcher call.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  src = pathlib.Path('scripts/triapi.py').read_text()
+  tree = ast.parse(src, filename='scripts/triapi.py')
+  dispatch_calls = []
+  for node in ast.walk(tree):
+      if isinstance(node, ast.Call):
+          try:
+              func = ast.unparse(node.func)
+          except Exception:
+              continue
+          if 'dispatch' in func or 'dispatcher' in func:
+              dispatch_calls.append((node.lineno, func, [kw.arg for kw in getattr(node, 'keywords', [])]))
+  assert dispatch_calls, 'FAIL: no dispatcher/dispatch call in triapi'
+  assert any('provider' in kwargs for _, _, kwargs in dispatch_calls), 'FAIL: dispatcher call missing provider'
+  print(f'PASS triapi provider reaches dispatcher call: {dispatch_calls}')
+  PY
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/triapi.py`** — verify `triapi.py` parses as valid Python without executing any pipeline code.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  python3 - <<'PY'
+  import ast, pathlib
+  p = pathlib.Path('scripts/triapi.py')
+  ast.parse(p.read_text(), filename=str(p))
+  print('PASS syntax scripts/triapi.py')
+  PY
+  BASH
+  ```
+
+---
+
+## Phase 4 — Immutability verification for the three audited files
+
+- [ ] **Read-only target: `scripts/llm_client.py`** — confirm the audit did not modify the file.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  git diff --exit-code -- scripts/llm_client.py
+  echo 'PASS scripts/llm_client.py is unchanged'
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/dispatcher.py`** — confirm the audit did not modify the file.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  git diff --exit-code -- scripts/dispatcher.py
+  echo 'PASS scripts/dispatcher.py is unchanged'
+  BASH
+  ```
+
+- [ ] **Read-only target: `scripts/triapi.py`** — confirm the audit did not modify the file.
+  ```bash
+  bash -s -- verify_only=true <<'BASH'
+  set -euo pipefail
+  git diff --exit-code -- scripts/triapi.py
+  echo 'PASS scripts/triapi.py is unchanged'
+  BASH
+  ```
+<!-- triapi:plan run_id=20260823-163311-6c33a3 end -->

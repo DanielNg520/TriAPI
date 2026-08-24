@@ -1,4 +1,4 @@
-# Carryover — 2026-08-20
+# Carryover — 2026-08-23
 
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
@@ -23,17 +23,15 @@ vs. must route through `triapi plan`/`dispatch`).
   entry. `queued_plans/` is now stale (both plans in it were superseded by
   fresh regenerated plans this session, not resumed as originally
   written) — safe to delete next time it's in the way, not urgent.
-- **TriAPI's own repo has uncommitted changes from tonight's emergency
-  mid-dispatch fixes**, not yet committed (I don't commit without being
-  asked): `scripts/tier4_worker.py` (timeout default), `scripts/
-  content_guard.py` (oversized-write shrink-allow fix), `scripts/
-  dispatcher.py` (`_PHASE_HEADER_RE` bold-markdown fix,
-  `_item_deletes_target_file` false-positive fix), `tests/
-  test_content_guard.py` (new), `tests/test_file_size_ceiling_and_
-  oversize_escalation.py`, `tests/test_plan_phase_split_and_completion_
-  guard.py`. Full suite green (139/139) as of the last check. Ask the
-  user before committing, or route through a `triapi plan` self-hosted
-  run if that's preferred over a direct commit.
+- **Provider Decoupling Complete (2026-08-22)**: LLM client routing (`llm_client.py`), config loading (`config_loader.py`), and fallback behaviors (`_call_gemini_fallback` / `_fallback_ollama`) are fully decoupled and dynamic. TriAPI now routes correctly through OpenRouter, DeepSeek, and local fallbacks without hardcoded model strings. All changes are committed.
+- **Openrouter-branch self-audit + hand-fix (2026-08-23), NOT YET COMMITTED**:
+  7 bugs found and fixed (6 from a fork audit + 1 found live — a
+  content-filter issue that had fully bricked `triapi plan`). Full detail in
+  `PLAN.md`'s "Phase 21" entry. Test suite: `tests/test_branch_features.py`
+  68/68 passing (was hanging before the fix); `tests/test_judge.py` has 10
+  pre-existing, unrelated failures (confirmed via `git stash`), not touched.
+  **Working tree has all fixes applied but nothing is committed yet** —
+  review `git diff` and commit next session if not done by end of this one.
 - **oh-my-llama Consolidation Phase 5:** still only 5G left, blocked on
   the 7-day production soak of `src/semai/`'s daemon runtime. Not
   started; nothing to do until the soak completes or the user says to

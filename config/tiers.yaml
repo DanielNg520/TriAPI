@@ -2,27 +2,46 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  name: "Claude Code CLI"
-  invocation: "claude -p"
-  model: "sonnet"
+  # Primary planner: OpenRouter's free stealth/ox-alpha model. On any failure
+  # (content-filter 403, rate limit, connectivity), planner.py falls back to
+  # tier_1_manager's Claude CLI (Sonnet 5, high effort) instead of erroring
+  # out -- there is no separate fallback block here by design, it always
+  # falls back to tier_1_manager's config.
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter"
+  endpoint: "https://openrouter.ai/api/v1"
+  models:
+    default: "stealth/ox-alpha"
+  default_model: "default"
   role: "strategic planning"
   automatable: true
-  outputs: ["PLAN.json", "ARCHITECTURE.md"]
+  outputs: ["PLAN.md", "ARCHITECTURE.md"]
 
 tier_1_manager:
   enabled: true
+  provider: "cli"
+  models:
+    default: "claude-sonnet-5"
+  default_model: "default"
+  # Reasoning effort passed to `claude -p --effort <level>`. Valid CLI values:
+  # low, medium, high, xhigh, max.
+  effort: "high"
 
 tier_2_manager:
-  name: "Gemini (Google AI Studio API)"
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter Nemotron"
   # The Antigravity 2.0 desktop app is a GUI with no headless mode and stays
   # available as a manual review surface, but automated escalation calls the
   # underlying Gemini model directly via the Google AI Studio REST API --
   # not through the desktop app.
-  endpoint: "https://generativelanguage.googleapis.com"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
+    default: "nvidia/nemotron-3-ultra-550b-a55b:free"
     flash: "gemini-3.5-flash"
-    pro: "gemini-2.5-pro"  # was "gemini-3.5-pro", confirmed 2026-08-10 via GET /v1beta/models that no such model exists. Re-checked 2026-08-16: no plain "gemini-3-pro" exists either (only gemini-3.1-pro-preview and image-only gemini-3-pro-image variants) -- default_model change to a Gemini 3 Pro model was reverted pending a stable (non-preview) release.
-  default_model: flash
+    pro: "gemini-2.5-pro"
+  default_model: default
   # Tried in order whenever the current model's free-tier quota is
   # exhausted for the day -- confirmed live 2026-08-10 that Google buckets
   # this per model (error body: quotaId
@@ -62,13 +81,20 @@ tier_2_manager:
     free_tier_rpd: 1500
     notes: "billing-enabled Tier 1+ paid project (confirmed 2026-08-19); RPM/RPD below are a conservative floor, not independently verified for the specific flash models used here -- see comment above"
 
-tier_3_debugger:
-  name: "DeepSeek"
-  endpoint: "https://api.deepseek.com"
+gemini_fallback:
+  endpoint: "https://generativelanguage.googleapis.com"
   models:
-    flash: "deepseek-v4-flash"
-    pro: "deepseek-v4-pro"
-  default_model: flash
+    flash: "gemini-3.5-flash"
+  api_key_secret: google_ai_studio_api_key
+
+tier_3_debugger:
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter Dots"
+  endpoint: "https://openrouter.ai/api/v1"
+  models:
+    default: "dots-studio/dots-3-note-preview:free"
+  default_model: default
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
   peak_hours_utc:
@@ -91,23 +117,20 @@ tier_3_debugger:
       cache_miss_per_mtok_usd: null  # not given in source doc -- verify before relying on it
       cache_hit_per_mtok_usd: 0.003625
       output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
+    default:
+      cache_miss_per_mtok_usd: 0.0
+      cache_hit_per_mtok_usd: 0.0
+      output_per_mtok_usd: 0.0
 
 tier_4_worker:
-  name: "Ollama local"
+  provider: ollama
+  api_key_secret: null
+  name: "Local Ollama"
   endpoint: "http://localhost:11434"
   models:
-    default: "qwen2.5-coder:14b-instruct-q6_K"
+    default: "qwen2.5-coder:14b-instruct-q8_0"
     polyglot: "deepseek-coder-v2:16b"
     heavy: "qwen2.5-coder:32b"
-  # default_model set to 'default' model. Switched Q8_0 -> Q6_K 2026-08-19
-  # (user instruction): Q8_0 (18.4GB) left only ~1.6GB headroom against this
-  # machine's ~20GB available RAM (iGPU has just 512MB real VRAM, everything
-  # else is GTT/shared system RAM) and was timing out (300s) on every real
-  # drafting prompt during this session's Self-Improvement dispatch. Q6_K
-  # (~12GB) plus 24k context (~4.6GB KV cache) lands at ~16.6GB total --
-  # notably more headroom, and roughly the same total footprint as Q5_K_M at
-  # 32k context would have been, but with better weight fidelity for equal
-  # risk. See tier4_worker.py's call_ollama() for the paired num_ctx=24576.
   default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
   # Local Ollama is not guaranteed to be running (build/verification fails
@@ -118,6 +141,11 @@ tier_4_worker:
   # Project-specific; callers may override per invocation.
   build_commands:
     - "cmake --build build"
+
+ollama_fallback:
+  endpoint: "http://localhost:11434"
+  models:
+    default: "qwen2.5-coder:14b-instruct-q6_K"
 
 escalation_rules:
   # Claude (Tier 1) is deliberately last in the automated chain, after

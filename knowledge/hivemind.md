@@ -411,3 +411,131 @@ When a validation guard rejects an item, ask whether the rejection reflects a fu
 - **Use guards to enforce the correct tool, not just to say "no".** Sops-encrypted files must never be drafted/patched by an AI tier because SEARCH/REPLACE on ciphertext corrupts the MAC. The guard refuses such items but tells the caller the correct shape: make it `verify_only: true` and express the change as an immutable `sops set`/`--set` shell command in `build_cmd`.
 
 - **Don't re-run creation-time guards on resume.** Post-breakdown guards now run only when `newly_broken_down` is true. Re-running them on an already-populated breakdown would let unrelated drift (e.g. AGENTS.md growing) retroactively block a resumable run that was valid when it was created. Validation should be anchored to the moment the state was produced, not re-litigated under later conditions.
+
+### Centralize LLM provider calls behind a shared client abstraction and normalize failure/usage outcomes
+
+When multiple escalation tiers need to call LLM providers, don't let each tier hand-build provider-specific HTTP requests, parse provider-specific response shapes, and reimplement fallback/error handling. Instead, introduce a single client API (e.g. `llm_client.execute_llm(...)`) that accepts provider, endpoint, API key, model, prompt, and system prompt, and returns a normalized result: `(response_text, billing_type, prompt_tokens, output_tokens)`.
+
+This diff shows the payoff:
+
+- The tier no longer imports provider-specific helpers (`gemini_fallback`) or constructs raw `requests.post(...)` payloads.
+- Provider-specific concerns (request schema, usage metadata fields like `candidatesTokenCount`, fallback-model selection) live behind the client.
+- The caller receives normalized token counts and billing type instead of hardcoding `"billing": "free_tier"` or digging through `data["candidates"][0]["content"]["parts"][0]["text"]`.
+- Error handling becomes consistent with the rest of the system: `except Exception` at the escalation boundary returns a normal `{"status": "error"}` result, so a transient API failure doesn't crash the entire unattended dispatch process. Previously, direct `requests.HTTPError`/connection failures could propagate uncaught and take down the orchestrator.
+
+General guidelines:
+
+- **Define a stable internal client contract** that hides vendor-specific API differences. Callers should only consume normalized text, usage counts, and billing metadata.
+- **Catch provider failures at the orchestration boundary** and convert them into domain results (e.g. status `"error"`/`"skipped"`/`"fix_rejected"`) so the caller can decide fallback/handoff instead of crashing.
+- **Keep model fallback logic centralized**; don't let each tier reimplement “try default model, then fallback chain” with raw HTTP calls.
+- **Use one cost-log shape across tiers** so accounting is uniform, even when providers report tokens differently.
+
+### Provider-Agnostic LLM Client Pattern
+
+Centralize external LLM API calls behind a shared client abstraction so callers do not know provider-specific endpoints, auth, or response shapes. Keep provider differences at the boundary, and treat provider failures as ordinary pipeline failures rather than uncaught crashes.
+
+- **Use one client module for all providers.** Replace ad-hoc `requests.post` + JSON parsing in each tier with a common `llm_client.execute_llm(provider=..., endpoint=..., api_key=..., model=..., prompt=...)` entry point.
+- **Return canonical fields from the client.** The client should normalize provider-specific token names (e.g. Ollama's `prompt_eval_count` vs. OpenRouter's `prompt_tokens`) into one shape like `(response_text, billing_type, input_tokens, output_tokens)`. Cost/reporting code then has a single schema across all tiers.
+- **Resolve provider-specific config defensively.** Use `tier4.get('provider', 'ollama')`, `tier4.get('endpoint')`, and `secrets.get(tier4.get('api_key_secret', 'open_router_api_key'))` so old configs and new configs keep working without hard-coding a provider name in the worker.
+- **Log dynamically, not by hard-coded provider.** A log line like `"Tier 4 (%s/%s) drafting %s"` with the configured provider name makes multi-provider runs traceable without code changes.
+- **Catch both expected and unexpected request failures.** Catch `requests.RequestException` first for transport/HTTP errors, then a broad `Exception` for anything else. Convert both into the same failure-result object (e.g. `_tier4_fail(...)`) so an unattended/tiered pipeline can retry or escalate instead of crashing mid-run.
+- **Don't let an external LLM outage become a hard crash.** Modeling provider errors as build/verification failures lets the existing consecutive-failure threshold and escalation state machine handle the outage naturally.
+
+This pattern keeps agent/worker code focused on task logic while making provider swaps, multi-provider support, and consistent cost accounting a shared concern.
+
+### Treat fallback services as first-class config blocks, not code branches
+
+- Keep a single source of truth for every tier and fallback route in one central config file. Scripts should read model names, endpoints, API-key secret references, and escalation rules from that file rather than embedding them in code.
+- Add a dedicated config block for each fallback/alternative service (`gemini_fallback`, `ollama_fallback`) alongside the primary tier blocks. A fallback is a distinct deployment decision: it has its own endpoint, model, and credential secret, and should be independently maintainable.
+- Separate *normal-path* tier config from *degraded-path* fallback config. The primary block describes what a tier does by default; the fallback block describes what to use when the primary is unavailable. This keeps changes additive and low-risk: adding a fallback should not require rewriting existing tier definitions.
+- Capture operational constraints and rationale in the config itself: `automatable` flags, quota/pricing notes, verified dates, and fallback ordering. This makes the failure-handling policy auditable and prevents future contributors from silently reversing a deliberate decision.
+- Use logical names in fallback chains and map them to concrete services in config. This lets orchestration code stay generic (`try fallback chain`, `read next fallback from config`) while all provider-specific details remain centralized.
+
+**Consequence:** When a new fallback provider is discovered or verified, it can be added as a new config stanza with full context, and every script that depends on the config automatically sees the updated failure-handling path without code changes.
+
+### Removing Fallback Logic: The Danger of Silent Resilience Loss
+
+When you remove a fallback or error-handling path from a codebase, you must audit every caller for now-unhandled failure modes and update signatures for newly-dead parameters. In this change, the entire multi-provider fallback chain was deleted from `execute_llm`, but the public function signature still advertises `is_tier4: bool = False` — a parameter that now does nothing. Any caller that previously relied on automatic failover (e.g., tier-4 jobs routing to Ollama when the primary CLI failed, or non-tier-4 jobs falling back to DeepSeek/Gemini) will now get an unhandled exception on primary failure instead of a graceful fallback.
+
+**Actionable rules:**
+
+1. **Before deleting a fallback path**, enumerate all callers and confirm they either (a) handle the exception themselves, or (b) are being updated in the same change to do so. A silent removal of resilience is a common source of production outages.
+2. **Remove dead parameters immediately.** The `is_tier4` argument is now vestigial; leaving it in the signature misleads future maintainers into thinking tier-based routing still exists.
+3. **If fallbacks are intentionally moved elsewhere** (e.g., to a higher-level orchestrator), add a comment in the simplified function pointing to the new location, rather than leaving the simplification unexplained.
+4. **Consider whether the fallback was removed for good reason** (e.g., masking configuration errors, adding latency, or creating confusing billing attribution). If so, document that decision in the module docstring or a design doc so the deletion doesn't look like an oversight.
+
+### Fail-Fast on Infrastructure Failures vs. Legitimate Escalation in Multi-Tier Pipelines
+
+In a multi-tier escalation pipeline (e.g., Tier 4 → Tier 3 → Tier 2 → Tier 1 → human), a critical distinction must be made between two kinds of tier "failure":
+
+1. **Legitimate non-fix**: The tier ran successfully, applied a patch, but the build still failed — or it explicitly declined to fix. This is a *signal to escalate*; the next tier should try.
+
+2. **Infrastructure/dependency failure**: The tier couldn't even run — e.g., Ollama connection timeout, API returned an `"error"` status indicating the tool itself is broken. This is *not* a signal to escalate; lower tiers depend on the same infrastructure and can't help. The pipeline should **crash immediately** instead of burning budget on doomed fallback attempts.
+
+#### The Anti-Pattern (Before)
+
+```python
+except Exception as e:
+    log.warning("Tier 4 raised %s; escalating", e)
+    record_failure(task_id, str(e))
+    break  # silently fall through to Tier 3
+```
+
+And for lower tiers:
+
+```python
+result = tier3_escalate(...)
+# No check for result["status"] == "error" — just continues to check fix_rejected / fix_applied
+```
+
+This means an Ollama outage causes Tier 4 to fail, then Tier 3 (DeepSeek cloud) gets tried, then Tier 2 (Gemini), then Tier 1 (Claude), then human handoff — wasting enormous time and money when the real problem is a broken local Ollama connection that none of the other tiers can fix either.
+
+#### The Correct Pattern (After)
+
+```python
+except Exception as e:
+    # Infrastructure failure — crash, don't escalate
+    log.warning("Tier 4 raised %s; crashing pipeline", e)
+    record_failure(task_id, str(e))
+    raise  # fail fast
+```
+
+And for each escalation tier:
+
+```python
+result = tier3_escalate(...)
+if result.get("status") == "error":
+    raise RuntimeError(f"Tier 3 failed: {result3.get('reason')}")
+```
+
+#### Why This Matters
+
+- **Escalation is for fix-attempts, not for broken tools.** Lower tiers are *different models/tools*, not redundant copies of the same broken one. If Tier 4's *runtime* is broken (Ollama down), Tier 3's cloud API is unaffected — but if the error is about the *task itself* (e.g., "cannot parse target file"), crashing is wrong. The key is distinguishing tooling failures from task failures.
+- **Silent fallback hides systemic outages.** If Ollama is down for 10 minutes, the old code would generate a cascade of useless escalation attempts and eventually a confusing human handoff saying "unresolved after Tier 4 → Tier 3 → Tier 2 → Tier 1." The new code crashes immediately with a clear "Tier 4 raised <Ollama timeout>; crashing pipeline" — much easier to diagnose.
+- **`"error"` status vs. `"fix_rejected"` status.** The escalation functions return `"error"` when *the tool itself failed to run* (network, auth, timeout) and `"fix_rejected"` / `"fix_applied"` when the tool ran but the outcome was a legitimate non-fix or a fix. Only the latter should trigger escalation. The added `raise RuntimeError(...)` guards enforce this contract.
+
+#### Rule of Thumb
+
+> **Catch exceptions and `"error"` statuses from a tier only when you can do something useful with them (retry, alert, degrade gracefully). Otherwise, let them propagate. A pipeline that silently falls through every tier on any failure is not resilient — it's just slow to report a broken environment.**
+
+### Pre-Flight Validation Before Long-Running Operations
+
+When starting a long-running, expensive, or stateful operation (like a dispatch that may run for hours unattended), validate all external dependencies **before** doing any real work — and place that validation inside the same `try/except/finally` block that handles resource cleanup and crash recovery.
+
+**Why this matters:** Without the pre-flight check, a dispatch could spend minutes (or hours) breaking down a plan, executing phases, and mutating run state — only to discover at some later point that the LLM backend is unreachable. That's wasted time, wasted money, and messy partial state to clean up. Failing fast at the start is strictly better.
+
+**How to apply it:**
+
+1. **Probe early, probe cheaply.** Call a lightweight health-check function (`llm_client.probe_models()`) that verifies connectivity/auth to all configured LLM endpoints before any real work begins.
+
+2. **Keep the probe inside the existing crash-recovery `try` block.** In the diff, `probe_models()` is placed inside the same `try` that wraps `_breakdown_and_dispatch(state)`. This means:
+   - A probe failure is caught by the same `except` handler that captures crashes, saves a bug report, and queues a self-fix — consistent failure semantics.
+   - The `finally` block (which restores Ollama state and resumes paused services) still runs, so no resources leak just because the probe failed.
+
+3. **Don't let validation block resource teardown.** The probe must be inside the `try`, not before it. If the probe hangs or throws, the `finally` still fires. This is the same discipline as putting all cleanup in `finally` — the validation step is just another operation that can fail, and it must not bypass the cleanup path.
+
+**General rule:** Before any operation that (a) takes significant time, (b) muts persistent state, or (c) acquires external resources — run a quick dependency health check, and put it inside the same `try/except/finally` that handles cleanup. Fail fast, clean up reliably, and let the existing crash-recovery infrastructure handle the failure uniformly.
+
+**In this specific change:**
+- `llm_client.probe_models()` was added as the first line inside the `try` block of `cmd_dispatch`, before `_breakdown_and_dispatch(state)`.
+- This means a dead LLM backend is detected immediately, the crash is captured via `self_fix.capture_crash()`, and the `finally` block restores Ollama state and resumes resource-guarded services — all before any plan breakdown or phase execution begins.

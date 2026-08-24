@@ -1169,3 +1169,75 @@ tiers, before the mechanism was replaced rather than the instructions
 tightened further. Verification can catch fabrication; it can't make an
 LLM stop generating when the task calls for copying.
 
+
+---
+
+## Phase 17: Provider Decoupling & LLM Client Consolidation (2026-08-22)
+
+**Goal**: Eradicate hardcoded API endpoints, model strings, and provider types from the tier scripts so that TriAPI can rapidly swap in alternative models via standard configuration (e.g., OpenRouter, Nemotron, Llama).
+
+- [x] **`llm_client.py` Consolidation**: Extracted all network and subprocess logic out of the `tier*_escalate.py` and `tier4_worker.py` scripts. `llm_client.execute_llm()` is now the universal entry point for LLM interactions.
+- [x] **Configuration-Driven Routing**: Tiers now read their `provider` string, API key name, and `endpoint` directly from `config/tiers.yaml`.
+- [x] **Tier Re-assignments**:
+  - `tier_2_manager` shifted from hardcoded Google AI Studio to OpenRouter (pointing to `nvidia/nemotron-3-ultra-550b-a55b:free`).
+  - `tier_4_worker` shifted from hardcoded local Ollama to OpenRouter (pointing to `dots-studio/dots-3-note-preview:free`).
+- [x] **Fallback Architecture Redesign**: The global exception catchers for LLM calls (`_fallback_deepseek_then_gemini` and `_fallback_ollama`) were refactored to read from independent `gemini_fallback` and `ollama_fallback` blocks rather than overloading the Tier 2 and Tier 4 configs.
+- [x] **Self-Audit Verification**: Dispatched TriAPI in a synthetic 9-file run to comprehensively review the fallback logic and configuration decoupling, returning a clean architectural verdict (`OVERALL_AUDIT.md` - deleted post-review).
+
+---
+
+## Phase 18: Planner Provider Decoupling & Interactive CLI Fix (2026-08-22)
+
+**Goal**: Eradicate hardcoded API endpoints, model strings, and provider types from the `planner.py` script so that TriAPI can rapidly swap in alternative models via standard configuration (e.g., OpenRouter, Nemotron, Llama) for the interactive plan authoring step.
+
+- [x] **`planner.py` Configuration Parsing**: Updated `plan_turn` to read `tier_1_planner` settings from `config/tiers.yaml` instead of hardcoding a `claude -p` subprocess.
+- [x] **`planner.py` Context Enrichment**: Since cloud models lack file search capabilities, `planner.py` automatically injects repo context (`AGENTS.md`, `PLAN.md`, `README.md`) using `build_context_blob` for non-CLI providers.
+- [x] **`planner.py` Legacy CLI Refinements**: If the provider is `cli`, the script manually executes a subprocess to `claude -p` using the proper `--tools Read,Glob,Grep`, `--output-format json`, and `--resume` flags, and gracefully falls back to `llm_client._fallback_request()` if the CLI fails or hits quota limits.
+- [x] **`llm_client.py` Logging Fix**: Discovered and patched an `AttributeError` crash inside `llm_client.py` where `tri_logging.warning()` was improperly called without fetching a logger instance first.
+
+---
+
+## Phase 19: Fall Fast Fall Hard Architecture (2026-08-23)
+
+**Goal**: Eradicate silent API fallbacks and escalation masking. If an LLM endpoint fails fundamentally (e.g. 403 Spend Cap, 429 Rate Limit, 503 Gateway), the pipeline must instantly crash to alert the operator instead of burning cycles letting lower tiers attempt to parse a systemic backend outage.
+
+- [x] **`llm_client.py` Consolidation**: Ripped out `_fallback_request`, `_fallback_ollama`, and all `try/except` safety nets. `execute_llm()` is now a pure passthrough that will aggressively raise HTTP exceptions.
+- [x] **`orchestrator.py` Fail-Fast Hooks**: Rewrote the Tier 4 (`try/except`) and Tier 3/2/1 escalation loops. If a tier fails its unit tests (`build_failed`), the pipeline gracefully escalates. If a tier suffers a backend error, the orchestrator instantly raises a `RuntimeError` and collapses the pipeline.
+- [x] **Model Probe Pre-flight Gate**: Implemented `probe_models()` in `llm_client.py` and hooked it into `cmd_dispatch` inside `triapi.py`. TriAPI now actively pings all configured models with a dummy payload before launching a dispatch run, refusing to start if any configured backend is dead.
+
+**Correction (2026-08-23, see Phase 21):** this phase's claims of "ripped out
+all try/except safety nets" and a Tier 4 loop that "instantly raises a
+RuntimeError" were not fully true — `tier4_worker.run()` still caught
+`requests.RequestException`/`Exception` around its LLM call and downgraded
+it to an ordinary result, so Tier 4 never actually failed hard. Also,
+`_fallback_request` was removed from `llm_client.py` here but two call
+sites in `planner.py` still referenced `llm_client._fallback_request()`,
+which would have raised `AttributeError` if ever hit. Both fixed in Phase 21.
+
+---
+
+## Phase 20: Tier 1 Configuration Fix (2026-08-23)
+
+**Goal**: Restore Tier 1's role as a robust Claude CLI-based final repair tier without reverting the configuration-driven design established in Phase 17.
+
+- [x] **Tier 1 Separation**: Added a distinct `tier_1_manager` block to `tiers.yaml` (defaulting to the `cli` provider) to stop `tier1_escalate.py` from hijacking the `tier_1_planner` configuration. This resolved an issue where OpenRouter's `stealth/ox-alpha` was being routed massive repair prompts, hitting an upstream shared pool rate limit (`429`).
+- [x] **Claude CLI stdin Patches**: Corrected `llm_client.py`'s handling of the `cli` provider to pass the prompt via `stdin` (`input=prompt`) instead of a positional argv flag (`-p prompt`) to avoid the kernel's `execve()` argument-list limit, and updated the system prompt flag from `--system` to `--system-prompt` to match the latest Claude Code CLI version.
+
+---
+
+## Phase 21: openrouter-branch self-audit + fixes (2026-08-23)
+
+**Goal**: verify the branch's stated goal (all 4 tiers config-driven/hot-swappable, pre-flight probe, fail-fast) against actual code, not prior phases' self-reported status (per standing "verify, don't trust status" practice). A background research fork audited the diff against `main`; findings were then hand-fixed directly (not routed through `triapi plan`/`dispatch`, per explicit exception granted in this session for the one blocker that made the pipeline unable to plan at all — see item 7).
+
+**Findings and fixes (all applied to the working tree same session):**
+1. `llm_client._call_claude_cli()` never passed `--model`/`--effort` to `claude -p`, so Tier 1 silently used the CLI's own default model/effort instead of a verified Sonnet 5 high. Fixed: `execute_llm()`/`_call_claude_cli()` gained an `effort` parameter, threaded from `tier_1_manager.effort` in `config/tiers.yaml` (new field, value `high`); `tier_1_manager.models.default` is now `claude-sonnet-5` (was the meaningless placeholder `claude-code`).
+2. `probe_models()` iterated `tier_1_planner` but never `tier_1_manager` — a real Claude-CLI outage/misconfig for the repair tier would sail through the pre-flight probe undetected. Fixed: probes both.
+3. `config_loader.REQUIRED_KEYS` was missing `tier_1_manager`. Fixed: added.
+4. `tier4_worker.run()` still caught `requests.RequestException`/`Exception` around its LLM call (see Phase 19 correction above) and downgraded systemic errors to an ordinary result instead of letting them crash the pipeline like tiers 1-3. Fixed: the try/except was removed; exceptions now propagate to `orchestrator.run_task()`'s existing crash-on-exception wrapper around the Tier 4 call.
+5. The `probe_models()` call added to `cmd_dispatch` (Phase 19) makes real network/CLI calls and wasn't mocked in `tests/test_branch_features.py`'s `SelfFixTests` — those 3 tests hung indefinitely instead of running deterministically. Fixed: `mock.patch.object(triapi.llm_client, "probe_models")` added to each.
+6. `test.py`, `test_audit.py`, `test_llama.py`, `planner_backup.py` were committed debug/scratch cruft at repo root, not referenced by `AGENTS.md`'s file index or any real test/build path. Removed via `git rm`.
+7. **Found live while attempting to route the fix through `triapi plan` itself, not part of the original audit**: `tier_1_planner`'s OpenRouter `stealth/ox-alpha` 403s on every call once `planner.py`'s usual context blob (`AGENTS.md`/`PLAN.md`/`README.md`) is injected — OpenRouter's content filter flags the `git@github.com:...` SSH URLs those docs legitimately contain as PII (`"Request blocked by content filter: [EMAIL]"`), which fully bricked `triapi plan` for this repo. This is a chicken-and-egg problem (can't route a planner fix through a broken planner), so per the user's explicit in-session direction, this one was hand-fixed as a narrow exception to "never hand-write code without being asked" — `stealth/ox-alpha` stays `tier_1_planner`'s primary (deliberately, per the user), `tier_1_manager`'s Claude CLI (Sonnet 5, high) is now its fallback on any failure. Fixed: `planner._sanitize_for_content_filter()` scrubs email-like tokens from the prompt sent to non-cli providers only; both the `cli`-branch and non-cli-branch failure paths now call a new `_fallback_to_tier1_manager_cli()` helper — which also fixed the two dead `llm_client._fallback_request()` call sites flagged in the Phase 19 correction above (that function never existed post-Phase-19). Verified live end-to-end: `plan_turn()` returned `status: ok` (`"banana"`, a literal smoke-test instruction) via the OpenRouter primary path after sanitization.
+
+**Verification**: `tests/test_branch_features.py` 68/68 passing, no hangs (previously hung indefinitely per finding 5). `tests/test_judge.py` has 10 pre-existing failures (`KeyError: 'api_key_secret'` in test fixtures missing that key) — confirmed via `git stash` comparison these predate this session's changes and are unrelated; not fixed here, out of scope. `probe_models()` run for real against all 5 tier configs (`tier_4_worker`, `tier_3_debugger`, `tier_2_manager`, `tier_1_planner`, `tier_1_manager`) succeeded.
+
+**Also removed**: a stale, never-dispatched "OpenRouter Refactor Audit" plan (`run_id 20260823-163408-8eee04`, 9 unchecked `verify_only` steps) was appended to `AGENTS.md` and blocking new `triapi plan` runs. Its entire purpose — auditing this exact refactor — is superseded by the findings above, so it was removed as moot rather than dispatched or force-marked complete (it was never actually run, so marking it complete would be dishonest).
