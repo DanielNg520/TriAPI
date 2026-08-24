@@ -316,12 +316,12 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             try:
                 result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
             except Exception as e:
-                # An exception here (e.g. Ollama connection/read timeout) shouldn't
-                # crash the whole dispatch or trigger an endless retry loop. Record
-                # the failure so later tiers have context, then escalate.
-                log.warning("[%s] Tier 4 raised %s; escalating", task_id, e)
+                # An exception here (e.g. Ollama connection/read timeout) should
+                # crash the pipeline rather than silently escalating to lower
+                # tiers that can't fix an Ollama connectivity problem.
+                log.warning("[%s] Tier 4 raised %s; crashing pipeline", task_id, e)
                 record_failure(task_id, str(e))
-                break
+                raise
             log.info("[%s] Tier 4 attempt: %s (consecutive_failures=%s)", task_id, result["status"], result.get("consecutive_failures"))
             if result["status"] == "success":
                 resolved_by = "tier_4"
@@ -343,6 +343,8 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             result3 = tier3_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
             )
+            if result3.get("status") == "error":
+                raise RuntimeError(f"Tier 3 failed: {result3.get('reason')}")
             if result3.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
             if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
@@ -361,6 +363,8 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             result2 = tier2_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
             )
+            if result2.get("status") == "error":
+                raise RuntimeError(f"Tier 2 failed: {result2.get('reason')}")
             if result2.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
             if result2.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
@@ -379,6 +383,8 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             result1 = tier1_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
             )
+            if result1.get("status") == "error":
+                raise RuntimeError(f"Tier 1 failed: {result1.get('reason')}")
             if result1.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 1 fix rejected: %s", task_id, result1.get("reason"))
             if result1.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):

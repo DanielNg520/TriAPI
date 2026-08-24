@@ -452,3 +452,68 @@ This pattern keeps agent/worker code focused on task logic while making provider
 - Use logical names in fallback chains and map them to concrete services in config. This lets orchestration code stay generic (`try fallback chain`, `read next fallback from config`) while all provider-specific details remain centralized.
 
 **Consequence:** When a new fallback provider is discovered or verified, it can be added as a new config stanza with full context, and every script that depends on the config automatically sees the updated failure-handling path without code changes.
+
+### Removing Fallback Logic: The Danger of Silent Resilience Loss
+
+When you remove a fallback or error-handling path from a codebase, you must audit every caller for now-unhandled failure modes and update signatures for newly-dead parameters. In this change, the entire multi-provider fallback chain was deleted from `execute_llm`, but the public function signature still advertises `is_tier4: bool = False` — a parameter that now does nothing. Any caller that previously relied on automatic failover (e.g., tier-4 jobs routing to Ollama when the primary CLI failed, or non-tier-4 jobs falling back to DeepSeek/Gemini) will now get an unhandled exception on primary failure instead of a graceful fallback.
+
+**Actionable rules:**
+
+1. **Before deleting a fallback path**, enumerate all callers and confirm they either (a) handle the exception themselves, or (b) are being updated in the same change to do so. A silent removal of resilience is a common source of production outages.
+2. **Remove dead parameters immediately.** The `is_tier4` argument is now vestigial; leaving it in the signature misleads future maintainers into thinking tier-based routing still exists.
+3. **If fallbacks are intentionally moved elsewhere** (e.g., to a higher-level orchestrator), add a comment in the simplified function pointing to the new location, rather than leaving the simplification unexplained.
+4. **Consider whether the fallback was removed for good reason** (e.g., masking configuration errors, adding latency, or creating confusing billing attribution). If so, document that decision in the module docstring or a design doc so the deletion doesn't look like an oversight.
+
+### Fail-Fast on Infrastructure Failures vs. Legitimate Escalation in Multi-Tier Pipelines
+
+In a multi-tier escalation pipeline (e.g., Tier 4 → Tier 3 → Tier 2 → Tier 1 → human), a critical distinction must be made between two kinds of tier "failure":
+
+1. **Legitimate non-fix**: The tier ran successfully, applied a patch, but the build still failed — or it explicitly declined to fix. This is a *signal to escalate*; the next tier should try.
+
+2. **Infrastructure/dependency failure**: The tier couldn't even run — e.g., Ollama connection timeout, API returned an `"error"` status indicating the tool itself is broken. This is *not* a signal to escalate; lower tiers depend on the same infrastructure and can't help. The pipeline should **crash immediately** instead of burning budget on doomed fallback attempts.
+
+#### The Anti-Pattern (Before)
+
+```python
+except Exception as e:
+    log.warning("Tier 4 raised %s; escalating", e)
+    record_failure(task_id, str(e))
+    break  # silently fall through to Tier 3
+```
+
+And for lower tiers:
+
+```python
+result = tier3_escalate(...)
+# No check for result["status"] == "error" — just continues to check fix_rejected / fix_applied
+```
+
+This means an Ollama outage causes Tier 4 to fail, then Tier 3 (DeepSeek cloud) gets tried, then Tier 2 (Gemini), then Tier 1 (Claude), then human handoff — wasting enormous time and money when the real problem is a broken local Ollama connection that none of the other tiers can fix either.
+
+#### The Correct Pattern (After)
+
+```python
+except Exception as e:
+    # Infrastructure failure — crash, don't escalate
+    log.warning("Tier 4 raised %s; crashing pipeline", e)
+    record_failure(task_id, str(e))
+    raise  # fail fast
+```
+
+And for each escalation tier:
+
+```python
+result = tier3_escalate(...)
+if result.get("status") == "error":
+    raise RuntimeError(f"Tier 3 failed: {result3.get('reason')}")
+```
+
+#### Why This Matters
+
+- **Escalation is for fix-attempts, not for broken tools.** Lower tiers are *different models/tools*, not redundant copies of the same broken one. If Tier 4's *runtime* is broken (Ollama down), Tier 3's cloud API is unaffected — but if the error is about the *task itself* (e.g., "cannot parse target file"), crashing is wrong. The key is distinguishing tooling failures from task failures.
+- **Silent fallback hides systemic outages.** If Ollama is down for 10 minutes, the old code would generate a cascade of useless escalation attempts and eventually a confusing human handoff saying "unresolved after Tier 4 → Tier 3 → Tier 2 → Tier 1." The new code crashes immediately with a clear "Tier 4 raised <Ollama timeout>; crashing pipeline" — much easier to diagnose.
+- **`"error"` status vs. `"fix_rejected"` status.** The escalation functions return `"error"` when *the tool itself failed to run* (network, auth, timeout) and `"fix_rejected"` / `"fix_applied"` when the tool ran but the outcome was a legitimate non-fix or a fix. Only the latter should trigger escalation. The added `raise RuntimeError(...)` guards enforce this contract.
+
+#### Rule of Thumb
+
+> **Catch exceptions and `"error"` statuses from a tier only when you can do something useful with them (retry, alert, degrade gracefully). Otherwise, let them propagate. A pipeline that silently falls through every tier on any failure is not resilient — it's just slow to report a broken environment.**

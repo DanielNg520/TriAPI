@@ -24,13 +24,7 @@ def execute_llm(
     Returns:
         (response_text, billing_type, input_tokens, output_tokens)
     """
-    try:
-        return _primary_request(provider, endpoint, api_key, model, prompt, system_prompt)
-    except Exception as exc:
-        log.warning(
-            f"Primary provider '{provider}' failed: {exc}. Falling back..."
-        )
-        return _fallback_request(provider, prompt, system_prompt, is_tier4)
+    return _primary_request(provider, endpoint, api_key, model, prompt, system_prompt)
 
 
 def _primary_request(
@@ -110,83 +104,3 @@ def _call_openai_api(
     input_tokens = usage.get("prompt_tokens", 0)
     output_tokens = usage.get("completion_tokens", 0)
     return response_text, provider, input_tokens, output_tokens
-
-
-def _fallback_request(
-    provider: str, prompt: str, system_prompt: str, is_tier4: bool
-) -> Tuple[str, str, int, int]:
-    """Route to the appropriate fallback chain."""
-    if is_tier4:
-        return _fallback_ollama(prompt, system_prompt)
-    return _fallback_deepseek_then_gemini(prompt, system_prompt)
-
-
-def _fallback_ollama(prompt: str, system_prompt: str) -> Tuple[str, str, int, int]:
-    """Call local Ollama API (ollama_fallback)."""
-    config = config_loader.load_tiers()
-    ollama_fallback_cfg = config.get("ollama_fallback", {})
-    model_name = ollama_fallback_cfg.get("models", {}).get("default")
-    url = ollama_fallback_cfg.get("endpoint")
-    payload = {
-        "model": model_name,
-        "prompt": prompt,
-        "system": system_prompt,
-        "stream": False,
-    }
-    resp = requests.post(url, json=payload, timeout=300)
-    resp.raise_for_status()
-    data = resp.json()
-    response_text = data.get("response", "")
-    input_tokens = data.get("prompt_eval_count", 0)
-    output_tokens = data.get("eval_count", 0)
-    return response_text, "ollama_fallback", input_tokens, output_tokens
-
-
-def _fallback_deepseek_then_gemini(
-    prompt: str, system_prompt: str
-) -> Tuple[str, str, int, int]:
-    """Try DeepSeek (if allowed), then fall back to Gemini."""
-    if budget_guard.check_tier3_peak_hours_ok().get("ok", False):
-        try:
-            return _call_deepseek_fallback(prompt, system_prompt)
-        except Exception as exc:
-            log.warning(
-                f"DeepSeek fallback failed: {exc}. Trying Gemini fallback..."
-            )
-    else:
-        log.warning(
-            "Tier-3 peak hours active; skipping DeepSeek, going straight to Gemini."
-        )
-    return _call_gemini_fallback(prompt, system_prompt)
-
-
-def _call_deepseek_fallback(
-    prompt: str, system_prompt: str
-) -> Tuple[str, str, int, int]:
-    """Call DeepSeek API using tier_3_debugger config."""
-    config = config_loader.load_tiers()
-    tier3_cfg = config.get("tier_3_debugger", {})
-    endpoint = tier3_cfg.get("endpoint", "https://api.deepseek.com")
-    # Resolve model: default_model is a key (e.g. 'flash') -> models.flash
-    default_key = tier3_cfg.get("default_model", "flash")
-    model = tier3_cfg.get("models", {}).get(default_key, "deepseek-v4-flash")
-    api_key = secrets_loader.load_secrets().get("deepseek_api_key")
-
-    return _call_openai_api(
-        endpoint, api_key, model, prompt, system_prompt, "deepseek"
-    )
-
-
-def _call_gemini_fallback(
-    prompt: str, system_prompt: str
-) -> Tuple[str, str, int, int]:
-    """Call Gemini API using gemini_fallback config."""
-    config = config_loader.load_tiers()
-    gemini_fallback_cfg = config.get("gemini_fallback", {})
-    endpoint = gemini_fallback_cfg.get("endpoint")
-    # Fallback model is the flash model from config
-    model = gemini_fallback_cfg.get("models", {}).get("flash")
-    api_key_secret_name = gemini_fallback_cfg.get("api_key_secret", "google_ai_studio_api_key")
-    api_key = secrets_loader.load_secrets().get(api_key_secret_name)
-
-    return _call_gemini_api(endpoint, api_key, model, prompt, system_prompt)

@@ -111,12 +111,12 @@ tier_3_debugger:
       output_per_mtok_usd: 0.0
 
 tier_4_worker:
-  provider: openrouter
-  api_key_secret: open_router_api_key
-  name: "OpenRouter Llama"
-  endpoint: "https://openrouter.ai/api/v1"
+  provider: ollama
+  api_key_secret: null
+  name: "Local Ollama"
+  endpoint: "http://localhost:11434"
   models:
-    default: "meta-llama/llama-3.1-8b-instruct"
+    default: "qwen2.5-coder:14b-instruct-q8_0"
     polyglot: "deepseek-coder-v2:16b"
     heavy: "qwen2.5-coder:32b"
   default_model: default
