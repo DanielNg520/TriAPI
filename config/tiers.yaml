@@ -88,13 +88,19 @@ gemini_fallback:
   api_key_secret: google_ai_studio_api_key
 
 tier_3_debugger:
-  provider: openrouter
-  api_key_secret: open_router_api_key
-  name: "OpenRouter Dots"
-  endpoint: "https://openrouter.ai/api/v1"
+  # Swapped 2026-08-24: real DeepSeek API confirmed live (direct
+  # api.deepseek.com, not via OpenRouter) -- user's call, per this repo's
+  # config-driven/hot-swappable tier design (any API/local model/CLI can
+  # sit in any tier slot). "flash" resolves server-side to DeepSeek's
+  # current flagship (confirmed live: "deepseek-v4-flash"), matching the
+  # pricing.flash block below.
+  provider: deepseek
+  api_key_secret: deepseek_api_key
+  name: "DeepSeek API"
+  endpoint: "https://api.deepseek.com"
   models:
-    default: "dots-studio/dots-3-note-preview:free"
-  default_model: default
+    flash: "deepseek-chat"
+  default_model: flash
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
   peak_hours_utc:
@@ -123,21 +129,24 @@ tier_3_debugger:
       output_per_mtok_usd: 0.0
 
 tier_4_worker:
-  provider: ollama
-  api_key_secret: null
-  name: "Local Ollama"
-  endpoint: "http://localhost:11434"
+  # Swapped 2026-08-24: moved off local Ollama to notes3 (dots-3-note,
+  # via OpenRouter) -- user's call, same hot-swappable-tier rationale as
+  # tier_3_debugger above. This also sidesteps the Phase 25 issue
+  # (genuine, reproducible local-Ollama Tier 4 timeouts on this box):
+  # dispatch no longer depends on local Ollama being up/responsive at all.
+  # Local Ollama models remain available for oh-my-llama's own services --
+  # this only frees TriAPI's dispatch from contending for them.
+  provider: openrouter
+  api_key_secret: open_router_api_key
+  name: "OpenRouter Dots (notes3)"
+  endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "qwen2.5-coder:14b-instruct-q8_0"
-    polyglot: "deepseek-coder-v2:16b"
-    heavy: "qwen2.5-coder:32b"
+    default: "dots-studio/dots-3-note-preview:free"
   default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
-  # Local Ollama is not guaranteed to be running (build/verification fails
-  # with connection refused on localhost:11434), so don't auto-dispatch to
-  # this tier by default; callers that know Ollama is up can override per
-  # invocation.
-  automatable: false
+  # Cloud-hosted now (not local Ollama), so no "is it even running" concern --
+  # safe to auto-dispatch to this tier by default.
+  automatable: true
   # Project-specific; callers may override per invocation.
   build_commands:
     - "cmake --build build"

@@ -93,7 +93,18 @@ def escalate(
     secrets = load_secrets()
 
     default_model = tier2["models"][tier2["default_model"]]
-    models = [tier2["models"][model]] if model else (tier2.get("fallback_chain") or [default_model])
+    # default_model (Nemotron) must be tried first -- fallback_chain exists
+    # only for when its free-tier quota is exhausted for the day (each
+    # model buckets its quota separately, see tiers.yaml's comment on
+    # tier_2_manager.fallback_chain). Previously this used fallback_chain
+    # unconditionally whenever no explicit --model was passed, which meant
+    # every normal Tier 2 call silently used Gemini flash instead of
+    # Nemotron -- found via oh-my-llama's docs/Agent/CARRYOVER.md 2026-08-23.
+    if model:
+        models = [tier2["models"][model]]
+    else:
+        chain = tier2.get("fallback_chain") or []
+        models = [default_model] + [m for m in chain if m != default_model]
 
     target_path = Path(target)
     current_contents = target_path.read_text() if target_path.exists() else None
@@ -121,23 +132,40 @@ def escalate(
         "plain text/markdown) -- no explanation."
     )
 
-    log.info("[%s] Tier 2 (Gemini/%s) escalating for %s", task_id, models[0], target_path)
-
-    try:
-        response_text, billing_type, prompt_tokens, output_tokens = llm_client.execute_llm(
-            provider=tier2.get("provider", "openrouter"),
-            endpoint=tier2.get("endpoint"),
-            api_key=secrets.get(tier2.get("api_key_secret", "open_router_api_key")),
-            model=models[0],
-            prompt=user_content,
-            system_prompt=system_instruction,
-            is_tier4=False,
-        )
-    except Exception:
-        log.error("[%s] Tier 2 request failed", task_id, exc_info=True)
-        return {"status": "error"}
-
+    response_text = None
     model_name = models[0]
+    last_error = None
+    for candidate in models:
+        log.info("[%s] Tier 2 (%s) escalating for %s", task_id, candidate, target_path)
+        try:
+            response_text, billing_type, prompt_tokens, output_tokens = llm_client.execute_llm(
+                provider=tier2.get("provider", "openrouter"),
+                endpoint=tier2.get("endpoint"),
+                api_key=secrets.get(tier2.get("api_key_secret", "open_router_api_key")),
+                model=candidate,
+                prompt=user_content,
+                system_prompt=system_instruction,
+                is_tier4=False,
+            )
+            model_name = candidate
+            break
+        except Exception as e:
+            last_error = e
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            # Only a quota/rate-limit response justifies moving to the next
+            # candidate in fallback_chain -- any other error (auth, 5xx,
+            # network) is treated as a real failure and reported, not masked
+            # by silently trying a different model.
+            if status in (429, 403) and candidate is not models[-1]:
+                log.warning("[%s] Tier 2 model %s unavailable (HTTP %s), trying next", task_id, candidate, status)
+                continue
+            log.error("[%s] Tier 2 request failed on %s: %s", task_id, candidate, e, exc_info=True)
+            return {"status": "error", "reason": f"Tier 2 request failed on {candidate}: {e}"}
+
+    if response_text is None:
+        log.error("[%s] Tier 2 request failed on all candidates: %s", task_id, last_error, exc_info=True)
+        return {"status": "error", "reason": f"Tier 2 request failed on all candidates ({models}): {last_error}"}
+
     cached_tokens = 0
 
     log.info(

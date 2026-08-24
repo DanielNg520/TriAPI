@@ -20,6 +20,9 @@ from scripts.secrets_loader import load_secrets
 from scripts.budget_guard import check_tier1_ok
 from scripts.state import read_state
 from scripts.tier4_worker import extract_code
+from scripts.tri_logging import get_logger
+
+log = get_logger("tier1")
 
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
@@ -118,8 +121,9 @@ def escalate(
             is_tier4=False,
             effort=tier1.get('effort'),
         )
-    except Exception:
-        return {"status": "error"}
+    except Exception as e:
+        log.error("[%s] Tier 1 request failed: %s", task_id, e, exc_info=True)
+        return {"status": "error", "reason": f"Tier 1 request failed: {e}"}
 
     log_cost(
         {
