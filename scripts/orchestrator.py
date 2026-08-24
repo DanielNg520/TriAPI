@@ -10,6 +10,7 @@ across process invocations, matching how Tier 4 is expected to run.
 
 import argparse
 import difflib
+import fnmatch
 import json
 import sys
 import time
@@ -29,6 +30,7 @@ from scripts.tier4_worker import run_build
 from scripts.tri_logging import get_logger
 from scripts import critique
 from scripts import lessons
+from scripts import librarian_escalate
 
 log = get_logger("orchestrator")
 
@@ -282,9 +284,35 @@ def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
     return {"status": "human_handoff", "resolved_by": None, "cost_report": cost_rep}
 
 
+def _is_doc_target(target: str, target_globs: list[str]) -> bool:
+    """Returns True if target matches any of the Tier 5 librarian
+    target_globs (e.g. '*.md', 'docs/*.rst'), routing it to the doc-fix
+    pipeline instead of the code-fix pipeline."""
+    if not target_globs:
+        return False
+    return any(fnmatch.fnmatch(target, pat) for pat in target_globs)
+
+
 def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None, skip_tier4: bool = False) -> dict:
     config = load_tiers()
     build_cmd = build_cmd or " && ".join(config["tier_4_worker"]["build_commands"])
+
+    # Tier 5 (librarian): for standalone single-target runs whose target is a
+    # doc file matched by tier_5_librarian.target_globs, delegate entirely to
+    # librarian_escalate.run() -- which handles the full doc-fix pipeline --
+    # and return its result through the normal cost-report path below.
+    librarian_cfg = config.get("tier_5_librarian")
+    if librarian_cfg and librarian_cfg.get("enabled", True) and _is_doc_target(target, librarian_cfg.get("target_globs", [])):
+        log.info("[%s] Tier 5 (librarian) routing for doc target %s", task_id, target)
+        result = librarian_escalate.run(
+            task_id, description, target, workdir=workdir
+        )
+        cost_rep = report(task_id)
+        return {
+            "status": result.get("status", "error"),
+            "resolved_by": result.get("resolved_by"),
+            "cost_report": cost_rep,
+        }
 
     # tier4_run resolves target against workdir internally; tiers 1-3 don't
     # take a workdir argument, so resolve once here and pass the full path.
@@ -334,7 +362,9 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
                 break
 
     if resolved_by is None:
-        # Tier 3: DeepSeek
+        # Tier 3: DeepSeek (peak billing hours 06:00-10:00 UTC — skipped during
+        # that window since DeepSeek is billed at a premium then; see
+        # scripts/budget_guard.py for the exact window definition)
         before_content = _read_target_text(resolved_target)
         guard3 = check_tier3_peak_hours_ok()
         if not guard3["ok"]:

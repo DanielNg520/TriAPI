@@ -14,6 +14,7 @@ REQUIRED_KEYS = [
     "tier_3_debugger",
     "tier_4_worker",
     "escalation_rules",
+    "tier_5_librarian",
 ]
 
 
@@ -27,6 +28,19 @@ def load_tiers(path: Path = TIERS_PATH) -> dict:
     missing = [k for k in REQUIRED_KEYS if k not in config]
     if missing:
         raise ValueError(f"{path} is missing required top-level keys: {missing}")
+
+    # Validate tier_5_librarian block
+    tier_5 = config.get("tier_5_librarian")
+    if tier_5 is None:
+        raise ValueError(f"{path} is missing required key 'tier_5_librarian'")
+    if not isinstance(tier_5, dict):
+        raise ValueError(f"{path} 'tier_5_librarian' must be a mapping")
+    for subkey in ("models", "target_globs", "max_attempts"):
+        if subkey not in tier_5:
+            raise ValueError(f"{path} 'tier_5_librarian' missing required sub-key '{subkey}'")
+    models = tier_5.get("models")
+    if not isinstance(models, dict) or "primary" not in models:
+        raise ValueError(f"{path} 'tier_5_librarian' must contain models.primary")
 
     return config
 

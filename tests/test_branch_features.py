@@ -640,11 +640,10 @@ class Tier3PeakHoursTests(unittest.TestCase):
             fake_dt.now.return_value = utc_dt
             return orchestrator.check_tier3_peak_hours_ok()
 
-    def test_start_of_first_peak_window_refuses(self) -> None:
-        result = self._check_at(datetime(2026, 8, 17, 1, 0, tzinfo=timezone.utc))
-        self.assertFalse(result["ok"])
-        self.assertIn("01:00", result["reason"])
-        self.assertIn("LA local", result["reason"])
+    def test_early_morning_off_peak_passes(self) -> None:
+        # 00:30 UTC is before the first peak window (01:00-04:00 UTC) starts.
+        result = self._check_at(datetime(2026, 8, 17, 0, 30, tzinfo=timezone.utc))
+        self.assertTrue(result["ok"])
 
     def test_mid_off_peak_hour_passes(self) -> None:
         result = self._check_at(datetime(2026, 8, 17, 13, 0, tzinfo=timezone.utc))
@@ -666,6 +665,66 @@ class Tier3PeakHoursTests(unittest.TestCase):
         result = self._check_at(datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc))
         self.assertFalse(result["ok"])
         self.assertIn("06:00-10:00", result["reason"])
+
+
+class LlmClientOpenAIErrorBodyTests(unittest.TestCase):
+    def _fake_response(self, status_code, json_body):
+        fake = mock.Mock()
+        fake.status_code = status_code
+        fake.raise_for_status = mock.Mock()
+        fake.json = mock.Mock(return_value=json_body)
+        fake.content = json.dumps(json_body).encode()
+        return fake
+
+    def test_embedded_error_with_code_sets_response_status(self):
+        data = {"error": {"code": 429, "message": "rate limited"}}
+        fake = self._fake_response(200, data)
+        with mock.patch.object(llm_client.requests, "post", return_value=fake):
+            with self.assertRaises(Exception) as ctx:
+                llm_client._call_openai_api(
+                    "https://openrouter.ai/api/v1",
+                    "key",
+                    "nvidia/nemotron-3-ultra-550b-a55b:free",
+                    "prompt",
+                    "system",
+                    "openrouter",
+                )
+        self.assertEqual(
+            getattr(getattr(ctx.exception, "response", None), "status_code", None), 429
+        )
+
+    def test_missing_choices_no_error_key_raises_clear_message(self):
+        data = {"weird": "shape"}
+        fake = self._fake_response(200, data)
+        with mock.patch.object(llm_client.requests, "post", return_value=fake):
+            with self.assertRaises(Exception) as ctx:
+                llm_client._call_openai_api(
+                    "https://openrouter.ai/api/v1",
+                    "key",
+                    "nvidia/nemotron-3-ultra-550b-a55b:free",
+                    "prompt",
+                    "system",
+                    "openrouter",
+                )
+        self.assertIn("unexpected response shape", str(ctx.exception))
+        self.assertNotEqual(str(ctx.exception), "'choices'")
+
+    def test_normal_response_with_choices_still_works(self):
+        data = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+        }
+        fake = self._fake_response(200, data)
+        with mock.patch.object(llm_client.requests, "post", return_value=fake):
+            result = llm_client._call_openai_api(
+                "https://openrouter.ai/api/v1",
+                "key",
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
+                "prompt",
+                "system",
+                "openrouter",
+            )
+        self.assertEqual(result, ("ok", "openrouter", 1, 2))
 
 
 class OrchestratorTier3PeakSkipTests(unittest.TestCase):

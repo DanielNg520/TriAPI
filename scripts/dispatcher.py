@@ -14,6 +14,7 @@ disconnect -- resume by re-reading the same run_id.
 Must only be called after budget_guard.check_tier2_ok().
 """
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -30,7 +31,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import gemini_fallback, git_ops, regression_guard, judge, mock_patch_lint, tech_debt, tier3_escalate
+from scripts import gemini_fallback, git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
 from scripts.budget_guard import check_tier2_ok
@@ -943,6 +944,24 @@ def _is_test_target(target: str) -> bool:
     return re.match(r"^tests/test_[^/]+\.py$", target) is not None
 
 
+def is_doc_target(rel_path: str, globs: list[str]) -> bool:
+    """True when `rel_path` matches any of `tier_5_librarian.target_globs`,
+    case-insensitively (fnmatch).
+
+    Used by dispatch() to route documentation targets out of the Tier 4
+    draft/build loop and into the tier_5_librarian escalation path instead.
+    '*.md' matches any .md file (PLAN.md, AGENTS.md, README.md, ...);
+    'docs/**' matches everything under docs/. Backslashes are normalized to
+    slashes and both sides are lowercased so the match is case-insensitive on
+    every platform (fnmatch.fnmatch itself only case-normalizes via
+    os.path.normcase(), which is a no-op on Linux)."""
+    rel_path = rel_path.replace("\\", "/").lower()
+    for pattern in globs:
+        if fnmatch.fnmatch(rel_path, pattern.replace("\\", "/").lower()):
+            return True
+    return False
+
+
 def _dispatch_git_item(task_id: str, git_spec: dict, project_dir: str) -> dict:
     action = git_spec.get("action")
     path = _resolve_path(git_spec.get("path", "."), project_dir)
@@ -1155,6 +1174,10 @@ def dispatch(state: dict) -> dict:
     state["status"] = "dispatching"
     state.setdefault("regression_flags", [])
 
+    # tier_5_librarian routes documentation targets out of the Tier 4
+    # draft/build loop and into the librarian escalation path instead.
+    tier_5 = (load_tiers().get("tier_5_librarian") or {})
+
     if _recheck_regression_flags(state):
         state["status"] = "stopped_on_failure"
         save_run(state)
@@ -1214,18 +1237,40 @@ def dispatch(state: dict) -> dict:
                     build_cmd = item.get("build_cmd") or _default_build_cmd(item["target"])
                     build_cmd = _normalize_build_cmd(build_cmd, state["project_dir"])
 
-                    try:
-                        result = run_task(
-                            task_id=task_id,
-                            description=item["description"],
-                            target=item["target"],
-                            workdir=state["project_dir"],
-                            build_cmd=build_cmd,
-                            context_files=item.get("context_files") or [],
-                            skip_tier4=item.get("skip_tier4", False),
-                        )
-                    except requests.exceptions.RequestException as e:
-                        result = {"status": "error", "reason": str(e), "resolved_by": None}
+                    # Documentation targets (anything matching
+                    # tier_5_librarian.target_globs, e.g. *.md, docs/**) are
+                    # routed to the tier_5_librarian escalation path instead of
+                    # the Tier 4 draft/build loop when tier_5_librarian is
+                    # enabled; a disabled block falls through to the existing
+                    # path unchanged.
+                    doc_target = is_doc_target(
+                        item["target"], tier_5.get("target_globs", [])
+                    )
+                    if tier_5.get("enabled", True) and doc_target:
+                        from scripts import librarian_escalate
+                        log.info("[%s] [ROUTING] %s -> tier_5_librarian", task_id, item["target"])
+                        try:
+                            result = librarian_escalate.run(
+                                task_id=task_id,
+                                description=item["description"],
+                                target=item["target"],
+                                workdir=state["project_dir"],
+                            )
+                        except requests.exceptions.RequestException as e:
+                            result = {"status": "error", "reason": str(e), "resolved_by": None}
+                    else:
+                        try:
+                            result = run_task(
+                                task_id=task_id,
+                                description=item["description"],
+                                target=item["target"],
+                                workdir=state["project_dir"],
+                                build_cmd=build_cmd,
+                                context_files=item.get("context_files") or [],
+                                skip_tier4=item.get("skip_tier4", False),
+                            )
+                        except requests.exceptions.RequestException as e:
+                            result = {"status": "error", "reason": str(e), "resolved_by": None}
 
                 if _is_transient_timeout_failure(result, 3 - attempts):
                     log.warning(

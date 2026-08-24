@@ -29,8 +29,8 @@ there.
 
 ## Conventions, test commands, architecture (quick reference)
 - **Conventions/guidelines:** full detail in `AGENT_GUIDE.md` (agent operating manual — what's safe to hand-edit vs. must route through the dispatch pipeline, phase discipline, verification requirements).
-- **Test commands:** `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v` (full regression suite); `python3 -m py_compile <file>` before any script change is considered done.
-- **Architecture:** full detail in `ARCHITECTURE.md` (4-tier escalation state machine, budget guard rationale, DeepSeek cache-hit economics).
+- **Test commands:** `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v` (full regression suite); `python3 -m py_compile <file>` before any script change is considered done.
+- **Architecture:** full detail in `ARCHITECTURE.md` (5-tier escalation state machine — Tier 5, the doc librarian, added 2026-08-24 — budget guard rationale, DeepSeek cache-hit economics).
 
 ## Root
 - `PLAN.md` — phase-by-phase implementation plan with checklists and end-of-phase tests. The permanent record of TriAPI's own build — read here for *why*, not `CARRYOVER.md`.
@@ -54,6 +54,8 @@ there.
 - `lessons.jsonl` — committed failure-pattern knowledge store (deliberately *not* under `logs/`, which is gitignored wholesale). One JSON object per line with schema `{id, date, category ("bug_fix"|"unresolved_pattern"), component, bug_description, what_went_wrong, fix_description, tags[]}`. Seeded from real historical TriAPI bugs; appended at runtime by `scripts/lessons.add_lesson()` (including auto-capture from `orchestrator.human_handoff()`). Consumed cheaply/locally by `select_relevant()` keyword overlap — no LLM call — and folded into tier edit prompts as a "## Known past mistakes..." do/don't block.
 - `hivemind.md` — central repository of reusable, stripped-down code snippets with XML-wrapped `<triapi_snippet>` blocks. Parsed at runtime to search for patterns matching the task description and file extension, and injected into Tier 4's prompt as reference.
 - `TECH_DEBT.md` — record of accumulated technical debt from judge rejections where the fix-forward build loop failed to compile, storing the file path, file content hash, and reason.
+
+- `tiers.yaml`'s `tier_5_librarian:` block (2026-08-24) — the doc-update tier: `provider: ollama` (endpoint resolves from the `ollama_host` secret at runtime, no static `endpoint` key), `models: {primary: mistral-small:latest, fallback_local: ollama_fallback, fallback_openrouter: stealth/ox-alpha}`, `target_globs: ["*.md", "docs/**"]` (matched by `dispatcher.is_doc_target()`), `verify_command`, `max_attempts`. `escalation_rules.tier5_to_fallbacks` (`threshold: 2`, `chain: [fallback_local, fallback_openrouter, log_and_notify]`) — all-local/free, zero paid-tier calls anywhere in this chain. See `scripts/librarian_escalate.py` below for the runtime logic.
 
 ## scripts/
 - `secrets_loader.py` — `load_secrets()` shells out to `sops -d` to decrypt `config/secrets.enc.yaml` into a dict at runtime. Never logs values.
@@ -100,8 +102,10 @@ there.
 - `resource_guard.py` — `pause_services(services)`/`resume_services(paused)` (Phase 12): stops/starts systemd `--user` services by name via `systemctl --user`, tracking only the subset that was actually active before pausing so it never resurrects something already off for an unrelated reason. Service list comes from `config/resource_guard.yaml` via `config_loader.load_resource_guard_services()`. Self-healing (Phase 12.1): a signal/`atexit` safety net resumes services on `SIGTERM`/`SIGINT`/normal exit even if the caller's own `try`/`finally` doesn't run; a lock file (`logs/resource_guard_lock.json`, gitignored) records what got paused and by which pid, so a hard `SIGKILL`/OOM-kill of the dispatch process gets healed automatically by the *next* call to `pause_services()` instead of leaving services down forever. `unload_other_ollama_models(keep_model, ollama_host)` (2026-08-17) — force-unloads every Ollama-resident model except `keep_model` from `ollama_host`: `GET {ollama_host}/api/ps` to list, then `POST {ollama_host}/api/generate` with `{"model": name, "keep_alive": 0}` per other model. Returns the list of names actually unloaded (matches `pause_services()`'s list-returning convention); intentionally has NO `resume_*` counterpart — Ollama lazily reloads on next use. Failure-proof by design: any `requests.RequestException` on the listing step logs a warning and returns `[]` (no crash, zero models unloaded), and a failing per-model unload logs a warning and continues with the rest rather than aborting. **Ollama service lifecycle (2026-08-19):** `snapshot_ollama_state(ollama_host, service="ollama.service")` records whether the service was active and which models were resident before a dispatch run, starting the service if it was inactive; `restore_ollama_state(snapshot, ollama_host)` reloads whatever was resident and stops the service again if it was inactive before (safe no-op on a `None` snapshot) — full lifecycle ownership for a `triapi dispatch` run's duration, restoring exactly the prior state on exit. See `triapi.py`'s entry above for the `cmd_dispatch` wiring.
 - `tri_logging.py` — centralized logging used by every script above, **on by default**. `TRIAPI_LOG=0` disables, `TRIAPI_LOG_LEVEL` sets verbosity (default `INFO`), `TRIAPI_LOG_FILE` overrides the target (default `logs/triapi.log`). Named `tri_logging`, not `logging`, so it doesn't shadow the stdlib module.
 - (no `mcp_server.py` — Phase 5 was skipped; Antigravity is no longer a dispatcher in this design, and `orchestrator.py`/`triapi.py` are already complete standalone entry points. A future MCP-style integration, if any, points toward Jules, not Antigravity.)
+- `librarian_escalate.py` (Phase 29, 2026-08-24) — Tier 5, the doc-update tier: `run(task_id, description, target, workdir, verify_cmd=None, model_override=None)` resolves `target` against `workdir` with a `realpath` boundary check (refuses before any model call if it would escape), then walks `primary` → `fallback_local` → `fallback_openrouter` (config-resolved per `tiers.yaml`'s `tier_5_librarian` block above), asking the model for a JSON verdict (`{"stale": bool, "updated_content": ...}`) in one pass — a `false`/no-content verdict is an advisory no-op (`{"status": "success", "changed": false}`), never a hard block. A real write goes through `edit_blocks.apply_edit_blocks()` (existing file) or `tier4_worker.extract_code()` (new file), then `content_guard.check_write()`, same as every other tier. Verification failure past `escalation_rules.tier5_to_fallbacks.threshold` calls `_escalate_to_human()` (writes via `orchestrator.human_handoff()`). Routed to from `dispatcher.is_doc_target(rel_path, globs)` (case-insensitive fnmatch over `target_globs`) in the per-step executor, ahead of the Tier 4 draft/build loop, and from `orchestrator.run_task()` for standalone single-target runs. `llm_client.detect_email_like_content()` — plain regex scan (no model call) for email-like tokens/`mailto:`, logged as an advisory `[PRE-CHECK]` warning before any OpenRouter-routed call; complements, never replaces, `_sanitize_for_openrouter_content_filter()`.
 
 ## tests/
+- `test_tier5_librarian.py` (2026-08-24) — regression tests for `scripts/librarian_escalate.py`/`dispatcher.is_doc_target()`/`llm_client.detect_email_like_content()`: config schema, glob truth table, email-detection, the success write path (edit-block apply + cost-log `billing: "local"`), the primary→fallback_local→fallback_openrouter escalation order with paid-tier (DeepSeek/Claude/Gemini) call sentinels proving they're never touched, chain-exhaustion handoff, workdir-boundary refusal, and the advisory no-change verdict. Split out from `tests/test_branch_features.py` for the same size-ceiling reason as `test_mock_patch_lint.py` below.
 - `test_mock_patch_lint.py` — regression tests for `scripts/mock_patch_lint.py` (the mock-patch target/import-binding-mismatch linter above): covers wrong vs. correct patch targets and CLI exit codes, using temporary fixture repos rather than the repo's own files. Split out from `tests/test_branch_features.py`, which had grown well past the size ceiling for further extension.
 - `test_dispatcher_test_context_guard.py` — regression tests for `scripts/dispatcher.py`'s test-file context grounding guard (`_find_anchor_test_file`/`_apply_test_context_guard`): covers companion-script and anchor-test-file auto-inclusion, missing-anchor rejection, and no-fabrication/no-duplication behavior, using temporary fixture repos rather than the repo's own files. Split out as a new file per the "split out, don't keep extending `test_branch_features.py`" convention already used for `test_mock_patch_lint.py`.
 - `test_import_order_guard.py` — regression tests for `scripts/dispatcher.py`'s module import-order guard (`_enforce_module_import_order`/`_extract_imported_modules`/`_SCRIPTS_TARGET_RE`/`_IMPORT_RE`): covers both `from scripts import X` and `import scripts.X` extraction, the exact 2026-08-18 incident shape (importer before creator gets reordered), no-op when already ordered or the module pre-exists on disk, git items skipped, and unresolvable circular imports returning an error string, using temporary fixture repos rather than the repo's own files. Split out as a new file per the same convention as `test_mock_patch_lint.py`/`test_dispatcher_test_context_guard.py`.
@@ -120,334 +124,44 @@ there.
 ## samples/
 - `broken_build/` — fixture C++ project: `main.cpp` has a genuine compile error (copying a `std::vector<std::unique_ptr<Widget>>`, illegal since `unique_ptr` isn't copyable) plus `CMakeLists.txt`. Used for end-to-end pipeline verification (Phase 6) — a full production-config `orchestrator.py` run resolved it correctly at Tier 4 alone, $0 cost. `build/` (CMake output) is gitignored, regenerated by running the smoke test in `README.md`.
 
-<!-- triapi:plan run_id=20260819-224114-9884f8 start -->
-## TriAPI Plan (run 20260819-224114-9884f8, appended 2026-08-20)
+<!-- triapi:plan run_id=20260824-003439-4075d4 start -->
+## TriAPI Plan (run 20260824-003439-4075d4, appended 2026-08-24)
 
-Line numbers all match the queued plan exactly (SYSTEM_PROMPT at 36 vs "starts at line 40" — close enough, minor drift, not worth flagging). The queued plan in `queued_plans/triapi_items_1-3.md` is accurate against current disk state and matches CARRYOVER.md's directive. I'll present it as the plan, in the required checkbox format.
+## Execution Plan — Tier 5 Librarian Tier (doc-update automation)
 
-## Plan: TriAPI self-repo — CARRYOVER items #1, #2, #3
+Grounded in `AGENTS.md`/`PLAN.md`/`README.md`: mirrors the existing tierN_escalate structure, stays config-driven/hot-swappable, keeps the paid code-repair ladder (DeepSeek/Claude/Gemini) completely out of Tier 5's chain, and follows the standing doc-hygiene rules (load-bearing facts in `PLAN.md` + source comments only; `AGENTS.md` index updated at end; no sprawl). No new secrets are needed (Ollama host and OpenRouter key already exist in `config/secrets.enc.yaml`), so no sops operations appear in this plan.
 
-1. Phase 1: Fix `breakdown_plan()` re-running post-breakdown guards on resume
-   - [x] In `scripts/dispatcher.py`, modify `breakdown_plan()` (`def breakdown_plan(state: dict) -> dict:` at line 664) so the three post-breakdown guard calls — `_enforce_module_import_order(state["breakdown"]["phases"], state["project_dir"])` (line 695), `_enforce_file_size_ceiling(state["breakdown"]["phases"], state["project_dir"])` (line 700), and `_enforce_no_raw_edits_to_encrypted_files(state["breakdown"]["phases"], state["project_dir"])` (line 705) — run only when this call performed fresh chunk-to-phase assembly, not on a resume of an already-fully-populated `state["breakdown"]`. Implementation: keep the existing `already_done = len(state["breakdown"]["phases"])` at line 675 (captured before the `for i, chunk in enumerate(chunks):` loop), and also capture `chunks = _split_plan_by_phase(state["plan_text"])`'s length (existing line 674) to compute `newly_broken_down = already_done < len(chunks)` before the loop runs. Wrap the three guard-call blocks (lines 695–709) plus their `save_run(state)` at line 710 in `if newly_broken_down:`, so they fire only when the loop appended at least one new phase this invocation, and are skipped when re-entered purely to resume a state whose `phases` already equals `len(chunks)` at entry (the AGENTS.md-size incident case). Do not alter the empty-plan/zero-items check at lines 723–734 or the final `return {"status": "ok"}` — both must still run unconditionally every call. Add a comment above the new `if newly_broken_down:` gate referencing CARRYOVER.md item #1 and explaining why. Verify: `python3 -m py_compile scripts/dispatcher.py`
-   - [x] In `tests/test_file_size_ceiling_and_oversize_escalation.py` (or a new `tests/test_breakdown_resume_guard_skip.py`, matching this repo's one-file-per-guard-behavior test convention), add a regression test that: (a) builds a `state` with `state["breakdown"]["phases"]` already fully populated (`len(phases) == len(_split_plan_by_phase(state["plan_text"]))`) where one phase's item targets a file currently on disk above `TIER4_MAX_CONTEXT_CHARS`, (b) calls `breakdown_plan(state)` on this already-broken-down state, and (c) asserts it returns `{"status": "ok"}` (not blocked by `_enforce_file_size_ceiling`), since no fresh chunk-to-phase assembly occurred. Also keep/add a test asserting the guard still fires during a genuine fresh initial breakdown (`state["breakdown"]` starts `None` or partially populated, oversized target present), so the fix doesn't disable the guard outright. Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_file_size_ceiling_and_oversize_escalation tests.test_encrypted_file_edit_guard tests.test_dispatcher_test_context_guard -v`
+### Phase 1 — Config block, loader, and local model availability
 
-2. Phase 2: Teach the planner correct `sops` syntax for this box's installed version
-   - [x] In `scripts/planner.py`, edit the `SYSTEM_PROMPT` string constant (`SYSTEM_PROMPT = (` at line 36) to append a new paragraph stating: this box's installed `sops` is version 3.8.1 (confirmed via `sops --version`), which has NO `set` subcommand — `sops --help`'s COMMANDS list is only `exec-env`/`exec-file`/`publish`/`keyservice`/`groups`/`updatekeys`/`help`. Any plan step editing a secrets file in place MUST use the `--set` flag on the default (edit-mode) invocation, never the `sops set FILE key value` subcommand form. Include concrete working syntax: for a nested key, `sops --set '["key"][0] "value"' FILE`; for a top-level key, `sops --set '["key"] "value"' FILE`. State explicitly: "Never generate `sops set FILE key value` — that subcommand does not exist on this box's sops 3.8.1." Append as a distinct new paragraph; do not restructure or shorten existing paragraphs. Verify: `python3 -m py_compile scripts/planner.py`
-   - [x] Confirm no test asserts on literal `SYSTEM_PROMPT` contents by checking `grep -rn "SYSTEM_PROMPT" tests/` (currently no matches). If any test does assert against `SYSTEM_PROMPT` contents, update that assertion to account for the new paragraph in the same step. Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_file_size_ceiling_and_oversize_escalation tests.test_encrypted_file_edit_guard tests.test_dispatcher_test_context_guard -v`
+- [ ] **config/tiers.yaml** — Add a `tier_5_librarian:` top-level block following the existing tier_N schema: `enabled: true`, `role: doc_librarian`, `automatable: true`, `provider: ollama` (endpoint resolved at runtime from the existing `ollama_host` secret, same as `tier_4_worker` — no endpoint hardcoded), `models.primary: mistral-small:latest`, `models.fallback_local` left as a *reference* resolved from the existing `ollama_fallback` block (do not duplicate the model string — read its exact key path in the file during this step), `models.fallback_openrouter` likewise a reference to `tier_1_planner`'s primary (free stealth/ox-alpha) model entry, `target_globs: ["*.md", "docs/**"]` (case-insensitive fnmatch patterns defining "doc-shaped"), `verify_command: null` (null ⇒ built-in structural check), `max_attempts: 2`. Also add `escalation_rules.tier5_to_fallbacks:` with `threshold: 2` (matching `tier4_to_tier3`'s threshold) and ordered `chain: [fallback_local, fallback_openrouter, log_and_notify]`. Verify YAML parses and the block resolves: `python3 -c "from scripts.config_loader import load_tiers; t=load_tiers(); print(t['tier_5_librarian']['models']['primary'])"` — expected output exactly `mistral-small:latest`. Also confirm both local models exist: `ollama list | grep -E 'mistral-small|qwen2.5-coder:14b' || ollama pull mistral-small:latest`.
+- [ ] **scripts/config_loader.py** — Add `tier_5_librarian` to `REQUIRED_KEYS` in `load_tiers()` so a missing/malformed block raises a clear `ValueError` naming the key (same fix pattern as the 2026-08-23 `tier_1_manager` addition); validate that `models.primary`, `target_globs`, and `max_attempts` are present inside the block. Verify: `python3 -m py_compile scripts/config_loader.py && python3 -c "from scripts.config_loader import load_tiers; load_tiers(); print('ok')"` — expected `ok`.
 
-3. Phase 3: Deduplicate the shared `TIER4_MAX_CONTEXT_CHARS`/`MAX_WRITE_CHARS` constant
-   - [x] Create `scripts/tier4_context.py` containing only: a short module docstring (single source of truth for the Tier 4 context-size ceiling, shared by `scripts/dispatcher.py` and `scripts/content_guard.py`, split out to avoid the circular import `dispatcher -> tier4_worker -> content_guard -> dispatcher`), and `TIER4_MAX_CONTEXT_CHARS = 24576 * 3  # tier_4_worker num_ctx=24576 tokens (config/tiers.yaml) * 3 chars/token conservative floor -- see scripts/tier4_worker.py's call_ollama() options={"num_ctx": 24576}, the source of truth` (moved verbatim from `scripts/dispatcher.py` line 416). No other code or imports. Verify: `python3 -m py_compile scripts/tier4_context.py`
-   - [x] Edit `scripts/dispatcher.py`: remove the local definition `TIER4_MAX_CONTEXT_CHARS = 24576 * 3` and its trailing comment at line 416; add `from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS` to the existing `from scripts...` import block (lines 33–39), so it remains importable from `scripts.dispatcher` via plain re-export (no alias). Usages at lines 480 and 487 must keep working unchanged. Verify: `python3 -m py_compile scripts/dispatcher.py`
-   - [x] Edit `scripts/content_guard.py`: remove the local definition `MAX_WRITE_CHARS = 24576 * 3` at line 47 and the cross-referencing comment block at lines 43–46; add `from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS as MAX_WRITE_CHARS` to the import block after line 27 (`from scripts.tri_logging import get_logger`), so `MAX_WRITE_CHARS` remains the name used at lines 61 and 67 unchanged. Replace the removed comment with a one-line comment above the import noting it now shares its value with `scripts.dispatcher.TIER4_MAX_CONTEXT_CHARS` via `scripts/tier4_context.py`. Verify: `python3 -m py_compile scripts/content_guard.py`
-   - [x] Check `tests/test_file_size_ceiling_and_oversize_escalation.py` line 23's `from scripts.dispatcher import (... TIER4_MAX_CONTEXT_CHARS)` and any other match from `grep -rln "TIER4_MAX_CONTEXT_CHARS\|MAX_WRITE_CHARS" tests/` — both names stay importable from their original modules via re-export, so no import path should need to change; if any test imports from a now-removed local-definition path, fix it to import from `scripts.tier4_context` instead. Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_file_size_ceiling_and_oversize_escalation tests.test_encrypted_file_edit_guard tests.test_dispatcher_test_context_guard -v`
+### Phase 2 — '@'-content pre-check (plain code, no model call)
 
-4. Phase 4: Full verification and docs
-   - [x] Run `python3 -m py_compile scripts/dispatcher.py scripts/content_guard.py scripts/tier4_context.py scripts/planner.py` and confirm zero errors/output.
-   - [x] Run `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_file_size_ceiling_and_oversize_escalation tests.test_encrypted_file_edit_guard tests.test_dispatcher_test_context_guard -v` and confirm all tests pass (no `SKIPPED`, no failures/errors).
-   - [x] Update `AGENTS.md` at the repo root: first run `wc -c AGENTS.md` to check current size against the 73,728-char Tier 4 ceiling; add `scripts/tier4_context.py` to the living file/dir index (one line: shared Tier-4 context-size-ceiling constant module, imported by `scripts/dispatcher.py` and `scripts/content_guard.py`); note the `breakdown_plan()` resume-guard behavior change (post-breakdown guards now run only on fresh chunk assembly, not on resume of an already-populated breakdown) in whatever section documents `breakdown_plan()`/dispatcher guard behavior. Keep additions concise per this repo's doc-hygiene convention.
-<!-- triapi:plan run_id=20260819-224114-9884f8 end -->
+- [ ] **scripts/llm_client.py** — Add `detect_email_like_content(text: str) -> list[dict]` next to the existing `_sanitize_for_openrouter_content_filter()`: pure regex/grep-style scan (no LLM, no network) returning one dict per finding `{line_no, snippet, pattern}` using pattern `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}` plus a `mailto:` check. Flag-only semantics: callers log a `[PRE-CHECK]` warning per finding and proceed — this complements, and never replaces, `_sanitize_for_openrouter_content_filter()`, which remains the actual enforcement transform on OpenRouter-bound content. Source comment at the function stating exactly that relationship. Verify: `python3 -m py_compile scripts/llm_client.py && python3 -c "from scripts.llm_client import detect_email_like_content; print(detect_email_like_content('contact foo@bar.com or mailto:x@y.z'))"` — expected a 2-element list; and `python3 -c "from scripts.llm_client import detect_email_like_content; print(detect_email_like_content('clean text'))"` — expected `[]`.
 
-<!-- triapi:plan run_id=20260823-135914-18f8c0 start -->
-## TriAPI Plan (run 20260823-135914-18f8c0, appended 2026-08-23)
+### Phase 3 — `librarian_escalate.py` (one script, whole job)
 
-# Plan: Audit why TriAPI is not working right now
+- [ ] **scripts/librarian_escalate.py** — New file mirroring the structure of the existing tierN_escalate scripts. Expose callable `run(task_id, description, target_path, workdir, verify_cmd=None, model_override=None) -> dict` plus argparse `main()` (flags: `--task-id`, `--description`, `--target`, `--workdir`, `--verify-cmd`, `--model`). Requirements, all config-driven (zero hardcoded model strings):
+  1. **Boundary rule:** resolve `realpath(target_path)` must be inside `realpath(workdir)` — refuse with `ValueError` before any model call, enforcing "target repo's docs never leak into TriAPI's docs and vice versa".
+  2. **Single unified pass:** one prompt to the primary model (`tier_5_librarian.models.primary` via `llm_client.execute_llm(provider="ollama", ...)`) that BOTH assesses staleness/relevance AND drafts the edit. The staleness judgment is advisory-only: a leading JSON verdict (`{"stale": [...], "action": "edit"|"no_change"}`) parsed defensively; `no_change` ⇒ return `{"status": "success", "resolved_by": "tier_5", "changed": false}` and never blocks anything downstream.
+  3. **Write path:** existing files go through `edit_blocks.build_edit_prompt_header()` + `apply_edit_blocks()` (fails closed on non-matching SEARCH blocks); brand-new files use `tier4_worker.extract_code()` full-content extraction. Every write passes `content_guard.check_write()` first (50% retention rule applies to docs ≥15 lines, unchanged).
+  4. **Verification:** run `verify_cmd` if given, else the built-in check — file non-empty, valid UTF-8, no residual `<<<<<<< SEARCH`/`>>>>>>> REPLACE` markers. Failure ⇒ `state.record_failure()`; past `escalation_rules.tier5_to_fallbacks.threshold` walk the chain in order: (a) `fallback_local` model via Ollama, (b) `fallback_openrouter` model via OpenRouter — calling `detect_email_like_content()` on the file content first and logging findings — (c) human handoff: append `logs/escalations.jsonl` + write `logs/escalation_<task_id>.md`. **No DeepSeek, Claude, or Gemini call anywhere in this file.**
+  5. **Cost/state:** append one `logs/cost_log.jsonl` line per model call with raw token counts, `cost_usd: 0.0`, `billing: "local"` or `"free_tier"`; emit structured stdout JSON `{"status": "success"|"human_handoff", "resolved_by": "tier_5"|"tier_5_fallback_local"|"tier_5_fallback_openrouter"|null, "consecutive_failures": N}`.
+  Verify: `python3 -m py_compile scripts/librarian_escalate.py && python3 scripts/librarian_escalate.py --help` — exits 0 and lists all six flags.
 
-Scope: read-only diagnosis. No repo files are modified; all evidence is captured under `/tmp/triapi_audit/` (kept out of the repo per `AGENTS.md`'s doc-hygiene rule). The deliverable is a root-cause report at `/tmp/triapi_audit/findings.md`, printed at the end. Applying fixes is a follow-up the user approves after seeing the findings.
+### Phase 4 — Routing + pre-flight probe
 
-## Phase 1 — Reproduce the failure and read current state
+- [ ] **scripts/dispatcher.py** — Add `is_doc_target(rel_path, globs)` (case-insensitive fnmatch over `tier_5_librarian.target_globs`; `*.md` matches `PLAN.md`/`AGENTS.md`/`README.md`/any `.md`, `docs/**` matches everything under `docs/`). In the per-step executor, when `is_doc_target(step.target)` and `tier_5_librarian.enabled`, call `librarian_escalate.run(...)` instead of the Tier 4 draft/build loop, logging `[ROUTING] <target> -> tier_5_librarian`; a disabled block falls through to the existing path. Verify: `python3 -m py_compile scripts/dispatcher.py && python3 -c "from scripts.dispatcher import is_doc_target; from scripts.config_loader import load_tiers; g=load_tiers()['tier_5_librarian']['target_globs']; assert is_doc_target('README.md',g) and is_doc_target('docs/a/b.md',g) and not is_doc_target('src/main.cpp',g); print('ok')"` — expected `ok`.
+- [ ] **scripts/orchestrator.py** — Same routing for standalone single-target runs: at the top of `run_task()`, if `is_doc_target(target)` and enabled, delegate to `librarian_escalate.run()` and return its result through the normal cost-report path (`cost_report.report(task_id)` still printed). Verify: `python3 -m py_compile scripts/orchestrator.py`.
+- [ ] **scripts/llm_client.py** — Extend `probe_models()` to also probe `tier_5_librarian.models.primary` using the identical mechanism already used for `tier_4_worker`'s model (so a missing/unloaded `mistral-small:latest` aborts dispatch with `RuntimeError` before any real run). Verify: `python3 -m py_compile scripts/llm_client.py && python3 -c "import inspect, scripts.llm_client as m; src=inspect.getsource(m.probe_models); assert 'tier_5_librarian' in src; print('ok')"` — expected `ok`.
 
-- [x] Capture the repo's own current-state note, recent git history, and root listing into `/tmp/triapi_audit/carryover.txt` so the audit starts from what the repo itself already says: `mkdir -p /tmp/triapi_audit && { echo '=== CARRYOVER.md (head) ==='; head -n 120 CARRYOVER.md 2>&1; echo; echo '=== recent git log ==='; git -C . log --oneline -15 --decorate 2>&1; echo; echo '=== root listing ==='; ls -la; } > /tmp/triapi_audit/carryover.txt 2>&1; cat /tmp/triapi_audit/carryover.txt`
-- [x] Capture exactly how the `triapi` command behaves right now (exists on PATH? crashes on startup?) into `/tmp/triapi_audit/repro_triapi.txt`: `{ command -v triapi || echo NOT_ON_PATH; } > /tmp/triapi_audit/repro_triapi.txt 2>&1; timeout 20 triapi --help >> /tmp/triapi_audit/repro_triapi.txt 2>&1; echo "exit=$?" >> /tmp/triapi_audit/repro_triapi.txt; head -100 /tmp/triapi_audit/repro_triapi.txt` — a nonzero `exit=` or `NOT_ON_PATH` here is itself a root-cause candidate.
-- [x] Locate where the `triapi` entry point ships from (console script, `scripts/triapi.py`, aliases) into `/tmp/triapi_audit/entry_points.txt`: `{ pip show triapi 2>/dev/null | head -8; echo '---'; ls -la /usr/local/bin/triapi ~/.local/bin/triapi "$HOME/bin/triapi" 2>/dev/null; echo '---'; find . -maxdepth 3 \( -iname 'triapi*' -o -name 'pyproject.toml' -o -name 'setup.py' -o -name 'setup.cfg' \) -not -path './.git/*' | sort; } > /tmp/triapi_audit/entry_points.txt 2>&1; cat /tmp/triapi_audit/entry_points.txt`
-- [x] Run the repo's own regression suite to separate "code is broken" from "environment is broken", recording to `/tmp/triapi_audit/unittest.txt`: `PYTHONPATH=. timeout 600 python3 -m unittest tests.test_branch_features -v > /tmp/triapi_audit/unittest.txt 2>&1; echo "exit=$?" >> /tmp/triapi_audit/unittest.txt; tail -80 /tmp/triapi_audit/unittest.txt`
+### Phase 5 — Regression tests (mocked, zero-network)
 
-## Phase 2 — Environment, dependencies, secrets, config
+- [ ] **tests/test_branch_features.py** — Add `class TestTier5Librarian(unittest.TestCase)` mirroring the existing tierN test patterns (all HTTP patched exactly as the suite already mocks `jules_client`/`budget_guard`/requests; zero real network calls, including no Ollama and no OpenRouter): (1) config schema — `load_tiers()` exposes the block, and popping `tier_5_librarian` from a temp copy makes `load_tiers()` raise `ValueError`; (2) `is_doc_target` glob truth table incl. `src/main.cpp` negative; (3) `detect_email_like_content` finds address + `mailto:`, clean text ⇒ `[]`; (4) success path — patched Ollama response with a fenced markdown edit lands via the edit-block path, `content_guard.check_write` consulted, cost-log line has `billing: "local"`, result `{"status": "success", "resolved_by": "tier_5"}`; (5) escalation order — force verify failures past threshold and assert the exact call sequence primary → fallback_local → fallback_openrouter → handoff, with model names resolved from config and DeepSeek/Claude/Gemini client functions replaced by fail-if-called sentinels proving the paid ladder is never touched; (6) chain exhaustion writes `logs/escalation_<task_id>.md` and returns `{"status": "human_handoff", "resolved_by": None}`; (7) boundary refusal — target escaping `workdir` raises before any model call; (8) advisory no-change verdict returns `changed: false` success without writing. Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v` — suite exits `OK` with the new tests included in the `Ran N tests` count.
 
-- [x] Check Python/deps on the global interpreter and any venv, into `/tmp/triapi_audit/deps.txt`: `{ python3 --version; echo '--- global imports ---'; PYTHONPATH=. python3 -c "import requests, yaml; print('requests+PyYAML OK')" 2>&1; PYTHONPATH=. python3 -c "import mcp; print('mcp OK')" 2>&1; echo '--- venv imports ---'; for p in .venv/bin/python venv/bin/python; do if [ -x "$p" ]; then "$p" --version; "$p" -c "import requests, yaml; print('requests+PyYAML OK')" 2>&1; "$p" -c "import mcp; print('mcp OK')" 2>&1; fi; done; echo '--- pip versions ---'; pip show requests PyYAML mcp 2>/dev/null | grep -E '^(Name|Version)'; } > /tmp/triapi_audit/deps.txt 2>&1; cat /tmp/triapi_audit/deps.txt` — `mcp` was not yet installed at planning time, so a missing `mcp` on the interpreter `triapi` actually runs under is a prime suspect.
-- [x] Verify the sops/age secrets path works, without printing any secret values, into `/tmp/triapi_audit/secrets.txt`: `{ ls -la config/ 2>&1; echo '--- age key ---'; test -f ~/.config/sops/age/keys.txt && echo AGE_KEY_PRESENT || echo AGE_KEY_MISSING; echo '--- secrets file ---'; test -f config/secrets.enc.yaml && echo SECRETS_EXISTS || echo SECRETS_MISSING; echo '--- decrypt check ---'; if [ -f config/secrets.enc.yaml ]; then sops -d config/secrets.enc.yaml > /dev/null 2>&1 && echo DECRYPT_OK || echo DECRYPT_FAIL; else echo SKIP_DECRYPT_NO_FILE; fi; } > /tmp/triapi_audit/secrets.txt 2>&1; cat /tmp/triapi_audit/secrets.txt` — as of 2026-08-17 `config/secrets.enc.yaml` is gitignored/local-only, so on a fresh clone `SECRETS_MISSING` would hard-fail `load_secrets()`.
-- [x] Validate `config/tiers.yaml` parses and loads through the repo's own loader, into `/tmp/triapi_audit/config_load.txt`: `{ PYTHONPATH=. python3 -c "import yaml; yaml.safe_load(open('config/tiers.yaml')); print('tiers.yaml YAML_OK')" 2>&1; PYTHONPATH=. python3 -c "from scripts.config_loader import load_tiers; t=load_tiers(); print('load_tiers keys:', sorted(t.keys()))" 2>&1; } > /tmp/triapi_audit/config_load.txt 2>&1; cat /tmp/triapi_audit/config_load.txt` — a `ValueError` naming a missing required key is a root cause.
-- [x] Record the optional sidecar files and gitignore state into `/tmp/triapi_audit/sidecars.txt`: `{ echo '=== config/resource_guard.yaml ==='; test -f config/resource_guard.yaml && cat config/resource_guard.yaml || echo RESOURCE_GUARD_MISSING_OPTIONAL; echo; echo '=== .sops.yaml ==='; test -f .sops.yaml && cat .sops.yaml || echo SOPS_RULE_MISSING; echo; echo '=== gitignore status of config/secrets.enc.yaml ==='; git check-ignore -v config/secrets.enc.yaml 2>&1 || echo NOT_GITIGNORED; } > /tmp/triapi_audit/sidecars.txt 2>&1; cat /tmp/triapi_audit/sidecars.txt`
+### Phase 6 — Docs per standing hygiene rules
 
-## Phase 3 — Live subsystem health (Ollama, Claude, budget guard, logs)
-
-- [x] Check the Ollama systemd user service and which models are actually pulled, into `/tmp/triapi_audit/ollama.txt`: `{ systemctl --user is-active ollama 2>&1; echo '--- status ---'; systemctl --user status ollama --no-pager 2>&1 | head -20; echo '--- ollama list ---'; ollama list 2>&1; } > /tmp/triapi_audit/ollama.txt 2>&1; cat /tmp/triapi_audit/ollama.txt` — confirm whether `qwen2.5-coder:14b-instruct-q8_0`, `deepseek-coder-v2:16b`, `qwen2.5-coder:32b` are present.
-- [x] Confirm Ollama's HTTP API actually responds on `127.0.0.1:11434` (using the first model listed) into `/tmp/triapi_audit/ollama_api.txt`: `MODEL=$(ollama list 2>/dev/null | sed -n '2p' | awk '{print $1}'); echo "model: ${MODEL:-none}" > /tmp/triapi_audit/ollama_api.txt; [ -n "$MODEL" ] && curl -s --max-time 120 http://127.0.0.1:11434/api/generate -d "{\"model\":\"$MODEL\",\"prompt\":\"Reply with exactly OK\",\"stream\":false,\"options\":{\"num_predict\":10}}" >> /tmp/triapi_audit/ollama_api.txt 2>&1; head -c 600 /tmp/triapi_audit/ollama_api.txt` — a connection refusal vs. a model-not-found error are different findings.
-- [x] Check Claude CLI presence, auth mode, and that the exact flags the scripts use still exist, into `/tmp/triapi_audit/claude.txt`: `{ claude --version 2>&1; echo "ANTHROPIC_API_KEY set: $([ -n "$ANTHROPIC_API_KEY" ] && echo YES_BUDGET_GUARD_WILL_REFUSE || echo no)"; echo '--- claude -p flags still supported? ---'; claude -p --help 2>&1 | grep -oE '\-\-(output-format|system-prompt|tools|bare)[a-z-]*' | sort -u | head -20; } > /tmp/triapi_audit/claude.txt 2>&1; cat /tmp/triapi_audit/claude.txt` — a missing flag (e.g. if the CLI was updated past what `scripts/tier1_escalate.py` invokes) is a classic "stopped working" cause.
-- [x] Exercise the budget-guard gates and read the usage counters, into `/tmp/triapi_audit/budget_guard.txt`: `{ PYTHONPATH=. python3 -c "import scripts.budget_guard as bg; print('check_tier1_ok ->', bg.check_tier1_ok()); print('check_tier3_peak_hours_ok ->', bg.check_tier3_peak_hours_ok())" 2>&1; echo '--- usage counters ---'; wc -l logs/gemini_usage.jsonl logs/cost_log.jsonl logs/escalations.jsonl 2>&1; echo '--- gemini usage tail ---'; tail -n 5 logs/gemini_usage.jsonl 2>&1; } > /tmp/triapi_audit/budget_guard.txt 2>&1; cat /tmp/triapi_audit/budget_guard.txt` — note the known gate: Tier 3 is refused inside the DeepSeek peak window 06:00-10:00 UTC, and a near-cap `gemini_usage.jsonl` would refuse Tier 2.
-- [x] Inspect runtime logs, leftover per-task state, and escalations into `/tmp/triapi_audit/logs.txt`: `{ echo '=== logs/triapi.log tail ==='; tail -n 200 logs/triapi.log 2>&1; echo; echo '=== logs/state/ ==='; ls -la logs/state/ 2>&1; echo; echo '=== escalations.jsonl tail ==='; tail -n 20 logs/escalations.jsonl 2>&1; } > /tmp/triapi_audit/logs.txt 2>&1; cat /tmp/triapi_audit/logs.txt` — a stale `logs/state/<task_id>.json` can make a re-run escalate instantly without any real failure.
-
-## Phase 4 — End-to-end smoke test
-
-- [x] Run one real end-to-end orchestrator invocation against the repo's own `samples/broken_build/` fixture (first model listed as the fast tier-4 override), recording to `/tmp/triapi_audit/e2e.txt`: `MODEL=$(ollama list 2>/dev/null | sed -n '2p' | awk '{print $1}'); { PYTHONPATH=. timeout 900 python3 scripts/orchestrator.py --task-id audit-e2e-$(date +%s) --description "Fix the compile error in main.cpp (audit)" --target main.cpp --workdir samples/broken_build --build-cmd "cmake -S . -B build && cmake --build build" --tier4-model "$MODEL" > /tmp/triapi_audit/e2e.txt 2>&1; echo "exit=$?" >> /tmp/triapi_audit/e2e.txt; } 2>&1; tail -100 /tmp/triapi_audit/e2e.txt` — this may make real sub-cent DeepSeek calls and budget-guarded subscription calls (consistent with the repo's own documented smoke test); the point is to see which tier/step is where it actually chokes.
-
-## Phase 5 — Synthesize and report root cause
-
-- [x] Auto-draft a raw red-flag index from every evidence file into `/tmp/triapi_audit/findings.md`: `{ echo "# TriAPI audit findings — $(date -Is)"; echo; echo "Scope: read-only diagnosis; evidence in /tmp/triapi_audit/*.txt; no repo files modified."; echo; for f in /tmp/triapi_audit/{carryover,repro_triapi,entry_points,unittest,deps,secrets,config_load,sidecars,ollama,ollama_api,claude,budget_guard,logs,e2e}.txt; do [ -f "$f" ] || continue; HITS=$(grep -niE 'error|fail|missing|refused|exception|traceback|not on path|decrypt_fail|secrets_missing|api_key_set|not found|cannot|denied|exit=[1-9]' "$f" | head -15); if [ -n "$HITS" ]; then echo "### $(basename "$f")"; echo "$HITS"; echo; fi; done; } > /tmp/triapi_audit/findings.md && echo "draft written"` — then rewrite the same file by hand into a clean audit report.
-- [x] Author the final root-cause report at `/tmp/triapi_audit/findings.md` (one section per confirmed problem: symptom, evidence file + line, how it breaks TriAPI, minimal fix — fixes are NOT applied in this audit), then print it for the user: compose `/tmp/triapi_audit/findings.md` from the red-flag draft above, then verify with `cat /tmp/triapi_audit/findings.md && wc -l /tmp/triapi_audit/findings.md` — done means every evidence file has been reviewed/attributed and the root cause(s) are stated with the exact command/step that will unblock TriAPI.
-<!-- triapi:plan run_id=20260823-135914-18f8c0 end -->
-
-<!-- triapi:plan run_id=20260823-143024-5e6d61 start -->
-## TriAPI Plan (run 20260823-143024-5e6d61, appended 2026-08-23)
-
-<｜｜DSML｜｜tool_calls>
-<｜｜DSML｜｜invoke name="read_file">
-<｜｜DSML｜｜parameter name="filePath" string="true">tests/test_file_size_ceiling_and_oversize_escalation.py</｜｜DSML｜｜parameter>
-</｜｜DSML｜｜invoke>
-<｜｜DSML｜｜invoke name="read_file">
-<｜｜DSML｜｜parameter name="filePath" string="true">scripts/tier4_worker.py</｜｜DSML｜｜parameter>
-</｜｜DSML｜｜invoke>
-</｜｜DSML｜｜tool_calls>
-<!-- triapi:plan run_id=20260823-143024-5e6d61 end -->
-
-<!-- triapi:plan run_id=20260823-144422-e0c98e start -->
-## TriAPI Plan (run 20260823-144422-e0c98e, appended 2026-08-23)
-
-1. Phase 1: Environment and Dependency Audit
-   - [x] File: `config/secrets.enc.yaml`. Change needed: Read-only verification to ensure the local `age` key successfully decrypts the encrypted configuration without errors. Command: `sops -d config/secrets.enc.yaml > /dev/null`
-   - [x] File: `config/resource_guard.yaml`. Change needed: Read-only verification of the Ollama dependency to ensure its systemd user service is currently active and running. Command: `systemctl --user status ollama --no-pager`
-   - [x] File: `scripts/tier1_escalate.py`. Change needed: Read-only verification that the Anthropic `claude` CLI dependency is installed and accessible in the system path. Command: `claude --version`
-
-2. Phase 2: Regression Test Suite Audit
-   - [x] File: `tests/test_branch_features.py`. Change needed: Read-only execution of the full test suite to ensure all baseline logic, integrations, and mocked budget/Jules behaviors still pass. Command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
-<!-- triapi:plan run_id=20260823-144422-e0c98e end -->
-
-
-<!-- triapi:plan run_id=20260823-999999-audit start -->
-## TriAPI Plan (run 20260823-999999-audit, appended 2026-08-23)
-
-1. Phase 1: Audit OpenRouter Refactor
-   - [x] File: `tests/test_branch_features.py`. Change needed: Verify the full test suite passes after the manual OpenRouter refactoring applied to `scripts/dispatcher.py` and `scripts/triapi.py`. Note: `verify_only: true`. Command: `cat > /tmp/verify_audit.py <<'INNER_EOF'
-import sys, subprocess
-res = subprocess.run(["python3", "-m", "unittest", "discover", "tests", "-v"], capture_output=True, text=True)
-if res.returncode != 0:
-    print(res.stderr)
-    sys.exit(1)
-print("Audit OK")
-INNER_EOF
-python3 /tmp/verify_audit.py`
-<!-- triapi:plan run_id=20260823-999999-audit end -->
-
-<!-- triapi:plan run_id=20260823-163311-6c33a3 start -->
-## TriAPI Plan (run 20260823-163311-6c33a3, appended 2026-08-23)
-
-# OpenRouter Refactor Audit Plan
-
-All steps are **read-only** and **non-mutating**: they parse/inspect the named file, never import it for side effects beyond standard-library AST parsing, never call the network, and never write code. Every verification is a HEREDOC shell command with `verify_only=true`.
-
----
-
-## Phase 1 — Audit `scripts/llm_client.py`
-
-- [ ] **Read-only target: `scripts/llm_client.py`** — verify the module has a provider-aware request path and an OpenRouter marker.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import ast, pathlib, re
-  p = pathlib.Path('scripts/llm_client.py')
-  src = p.read_text()
-  tree = ast.parse(src, filename=str(p))
-  provider_funcs = []
-  for node in ast.walk(tree):
-      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-          if any(a.arg == 'provider' for a in node.args.args):
-              provider_funcs.append(f'{node.name}:{node.lineno}')
-  assert provider_funcs, 'FAIL: no function accepts a provider argument'
-  assert re.search(r'openrouter', src, re.IGNORECASE), 'FAIL: no OpenRouter mention'
-  print(f'PASS llm_client provider signature + OpenRouter marker: {provider_funcs}')
-  PY
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/llm_client.py`** — verify the fallback loop is provider-guarded so it cannot silently cross from one provider to another.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import ast, pathlib
-  p = pathlib.Path('scripts/llm_client.py')
-  src = p.read_text()
-  tree = ast.parse(src, filename=str(p))
-  guards = []
-  for node in ast.walk(tree):
-      if isinstance(node, ast.If):
-          test = ast.unparse(node.test)
-          if 'provider' in test or 'model' in test:
-              guards.append((node.lineno, test))
-  assert guards, 'FAIL: no provider/model guard found'
-  assert any('provider' in test for _, test in guards), 'FAIL: fallback guard does not check provider'
-  print(f'PASS llm_client provider-aware fallback guard(s): {guards}')
-  PY
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/llm_client.py`** — verify OpenAI-compatible response JSON is parsed defensively through `choices`/`message`/`content`.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import ast, pathlib
-  p = pathlib.Path('scripts/llm_client.py')
-  src = p.read_text()
-  tree = ast.parse(src, filename=str(p))
-  parse_calls = []
-  for node in ast.walk(tree):
-      if isinstance(node, ast.Call):
-          try:
-              s = ast.unparse(node)
-          except Exception:
-              continue
-          if any(term in s for term in ('choices', 'message', 'content', 'response')):
-              parse_calls.append((node.lineno, s[:240]))
-  assert parse_calls, 'FAIL: no JSON/response parsing call found'
-  assert any(('choices' in s or 'message' in s) and 'content' in s for _, s in parse_calls), \
-      'FAIL: no choices/message + content extraction'
-  print(f'PASS llm_client JSON parse sites: {len(parse_calls)}')
-  PY
-  BASH
-  ```
-
----
-
-## Phase 2 — Audit `scripts/dispatcher.py`
-
-- [ ] **Read-only target: `scripts/dispatcher.py`** — verify the dispatcher actually uses `llm_client` and passes `provider=` explicitly to it.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import ast, pathlib, re
-  p = pathlib.Path('scripts/dispatcher.py')
-  src = p.read_text()
-  tree = ast.parse(src, filename=str(p))
-  assert 'llm_client' in src, 'FAIL: dispatcher does not reference llm_client'
-  call_lines = []
-  for node in ast.walk(tree):
-      if isinstance(node, ast.Call) and any(kw.arg == 'provider' for kw in getattr(node, 'keywords', [])):
-          call_lines.append(node.lineno)
-  assert call_lines, 'FAIL: no dispatcher call passes provider= keyword'
-  assert re.search(r'openrouter', src, re.IGNORECASE), 'FAIL: no OpenRouter gate/mention'
-  print(f'PASS dispatcher llm_client + provider= at lines {call_lines}')
-  PY
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/dispatcher.py`** — verify OpenRouter handling is kept separate from the Gemini fallback chain.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import pathlib, re
-  src = pathlib.Path('scripts/dispatcher.py').read_text()
-  assert 'gemini_fallback' in src, 'FAIL: gemini_fallback module not referenced'
-  assert re.search(r'provider\s*(?:==|!=)\s*[\'"]openrouter[\'"]', src, re.IGNORECASE), \
-      'FAIL: OpenRouter provider gate not found'
-  assert re.search(r'breakdown|fallback_chain', src), 'FAIL: breakdown/fallback chain path not found'
-  print('PASS dispatcher OpenRouter gate is separate from gemini_fallback')
-  PY
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/dispatcher.py`** — verify the dispatcher does not hardcode an OpenRouter endpoint independently of `llm_client`.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import pathlib, re
-  src = pathlib.Path('scripts/dispatcher.py').read_text()
-  assert 'llm_client' in src, 'FAIL: dispatcher does not delegate to llm_client'
-  # A clean refactor keeps the HTTP endpoint in llm_client, not duplicated here.
-  assert not re.search(r'https?://[^\s\'"]*(?:openrouter|chat/completions)', src, re.IGNORECASE), \
-      'FAIL: dispatcher appears to hardcode an OpenRouter/chat-completions URL'
-  print('PASS dispatcher delegates OpenRouter transport to llm_client')
-  PY
-  BASH
-  ```
-
----
-
-## Phase 3 — Audit `scripts/triapi.py`
-
-- [ ] **Read-only target: `scripts/triapi.py`** — verify the CLI exposes an OpenRouter provider selection path.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import pathlib, re
-  src = pathlib.Path('scripts/triapi.py').read_text()
-  assert 'openrouter' in src.lower(), 'FAIL: triapi has no OpenRouter mention'
-  assert re.search(r'--provider', src), 'FAIL: triapi missing --provider flag'
-  assert re.search(r'add_argument\([^)]*--provider', src), 'FAIL: argparse missing --provider option'
-  print('PASS triapi --provider CLI flag')
-  PY
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/triapi.py`** — verify the provider value selected at the CLI reaches the dispatcher call.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import ast, pathlib
-  src = pathlib.Path('scripts/triapi.py').read_text()
-  tree = ast.parse(src, filename='scripts/triapi.py')
-  dispatch_calls = []
-  for node in ast.walk(tree):
-      if isinstance(node, ast.Call):
-          try:
-              func = ast.unparse(node.func)
-          except Exception:
-              continue
-          if 'dispatch' in func or 'dispatcher' in func:
-              dispatch_calls.append((node.lineno, func, [kw.arg for kw in getattr(node, 'keywords', [])]))
-  assert dispatch_calls, 'FAIL: no dispatcher/dispatch call in triapi'
-  assert any('provider' in kwargs for _, _, kwargs in dispatch_calls), 'FAIL: dispatcher call missing provider'
-  print(f'PASS triapi provider reaches dispatcher call: {dispatch_calls}')
-  PY
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/triapi.py`** — verify `triapi.py` parses as valid Python without executing any pipeline code.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  python3 - <<'PY'
-  import ast, pathlib
-  p = pathlib.Path('scripts/triapi.py')
-  ast.parse(p.read_text(), filename=str(p))
-  print('PASS syntax scripts/triapi.py')
-  PY
-  BASH
-  ```
-
----
-
-## Phase 4 — Immutability verification for the three audited files
-
-- [ ] **Read-only target: `scripts/llm_client.py`** — confirm the audit did not modify the file.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  git diff --exit-code -- scripts/llm_client.py
-  echo 'PASS scripts/llm_client.py is unchanged'
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/dispatcher.py`** — confirm the audit did not modify the file.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  git diff --exit-code -- scripts/dispatcher.py
-  echo 'PASS scripts/dispatcher.py is unchanged'
-  BASH
-  ```
-
-- [ ] **Read-only target: `scripts/triapi.py`** — confirm the audit did not modify the file.
-  ```bash
-  bash -s -- verify_only=true <<'BASH'
-  set -euo pipefail
-  git diff --exit-code -- scripts/triapi.py
-  echo 'PASS scripts/triapi.py is unchanged'
-  BASH
-  ```
-<!-- triapi:plan run_id=20260823-163311-6c33a3 end -->
+- [ ] **PLAN.md** — Append one concise phase block ("Tier 5 — librarian tier") recording only durable decisions and why: single unified `mistral-small:latest` model doing judgment+drafting (explicitly not a reader/writer split), advisory-only staleness judgment vs. real content_guard/edit_blocks-gated writes, the all-local/all-free escalation chain (ollama_fallback → tier_1_planner's OpenRouter primary → handoff) with the paid ladder deliberately excluded, the grep-only '@' pre-check's placement and its complement-not-replace relationship to `_sanitize_for_openrouter_content_filter()`, and the workdir-boundary enforcement. No session narrative, no play-by-play. Verify: `grep -n "Tier 5" PLAN.md | head -3` shows the new block heading.
+- [ ] **AGENTS.md** — Update the living index: add `scripts/librarian_escalate.py` under `scripts/`, the `tier_5_librarian` block and `escalation_rules.tier5_to_fallbacks` under `config/`, the `detect_email_like_content()` + `probe_models()` additions on the existing `llm_client.py` bullet, routing notes on the `dispatcher.py`/`orchestrator.py` bullets, and the new test class on the test-commands bullet; amend any now-stale "4-tier" phrasing to reflect five tiers. Keep the file under the 73,728-char Tier 4 ceiling — cut nothing functional, add compactly. Verify: `wc -c AGENTS.md` reports < 73728, and final green run: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`.
+<!-- triapi:plan run_id=20260824-003439-4075d4 end -->

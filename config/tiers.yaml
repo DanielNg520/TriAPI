@@ -105,9 +105,12 @@ tier_3_debugger:
   automatable: true
   peak_hours_utc:
     # DeepSeek V4 pricing (effective 2026-08-16T16:00 UTC): 2x cost during
-    # these UTC windows (verified by hand against America/Los_Angeles
-    # PDT/PST wall-clock; see budget_guard.check_tier3_peak_hours_ok(),
-    # which reads this list instead of hardcoding the windows).
+    # these UTC windows (verified live 2026-08-24T07:55:56Z against
+    # America/Los_Angeles PDT wall-clock: UTC 07:55 == LA 00:55, so 06:00-10:00
+    # UTC is "overnight/early-morning" in LA but still a peak window per
+    # DeepSeek's UTC-based schedule). See
+    # budget_guard.check_tier3_peak_hours_ok(), which reads this list
+    # instead of hardcoding the windows.
     - ["01:00", "04:00"]
     - ["06:00", "10:00"]
   pricing:
@@ -151,6 +154,19 @@ tier_4_worker:
   build_commands:
     - "cmake --build build"
 
+tier_5_librarian:
+  enabled: true
+  role: doc_librarian
+  automatable: true
+  provider: ollama
+  models:
+    primary: "mistral-small:latest"
+    fallback_local: ollama_fallback
+    fallback_openrouter: "stealth/ox-alpha"
+  target_globs: ["*.md", "docs/**"]
+  verify_command: null
+  max_attempts: 2
+
 ollama_fallback:
   endpoint: "http://localhost:11434"
   models:
@@ -177,6 +193,9 @@ escalation_rules:
     trigger: claude_code_unresolved
     threshold: 1
     action: log_and_notify
+  tier5_to_fallbacks:
+    threshold: 2
+    chain: [fallback_local, fallback_openrouter, log_and_notify]
 critique:
   enabled: true
   applies_to_tiers: ["tier_3", "tier_1", "tier_2"]

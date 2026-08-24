@@ -3,7 +3,9 @@
 import re
 import subprocess
 import json
+import time
 from typing import Tuple
+from datetime import datetime, timezone
 
 import requests
 
@@ -26,6 +28,49 @@ _EMAIL_LIKE_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 def _sanitize_for_openrouter_content_filter(text: str) -> str:
     return _EMAIL_LIKE_RE.sub(lambda m: m.group(0).replace("@", "(at)"), text)
 
+# detect_email_like_content() is a flag-only scan: it identifies potential
+# email-like tokens and mailto: occurrences so callers can log a [PRE-CHECK]
+# warning and proceed. It does NOT transform or sanitize content. The actual
+# enforcement transform on OpenRouter-bound content is
+# _sanitize_for_openrouter_content_filter(), which remains the authoritative
+# defense.
+def detect_email_like_content(text: str) -> list[dict]:
+    """Scan text for email-like tokens and mailto: occurrences.
+
+    Returns a list of dicts, one per finding, with keys:
+        line_no: 1-based line number where the match occurred.
+        snippet: the matched text.
+        pattern: the regex pattern that matched (email or mailto:).
+    """
+    email_pat = r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    mailto_pat = r"mailto:"
+    findings = []
+    for i, line in enumerate(text.splitlines(), start=1):
+        for m in re.finditer(email_pat, line):
+            findings.append({
+                "line_no": i,
+                "snippet": m.group(),
+                "pattern": email_pat,
+            })
+        for m in re.finditer(mailto_pat, line):
+            findings.append({
+                "line_no": i,
+                "snippet": m.group(),
+                "pattern": mailto_pat,
+            })
+    return findings
+
+def _is_deepseek_peak_hours() -> bool:
+    """Check if current UTC time is within DeepSeek peak billing hours.
+
+    DeepSeek peak billing is 06:00-10:00 UTC daily (LA local 2026-08-24T01:37:14.827675-07:00
+    corresponds to UTC 2026-08-24T08:37:14.827675+00:00, which falls in this window).
+    """
+    now_utc = datetime.now(timezone.utc)
+    hour = now_utc.hour
+    return 6 <= hour < 10
+
+
 def execute_llm(
     provider: str,
     endpoint: str,
@@ -40,6 +85,10 @@ def execute_llm(
 
     `effort` only applies to provider == "cli" (passed as `claude -p --effort
     <level>`); ignored otherwise.
+
+    Note: Tier 3 (tier_3_debugger) uses DeepSeek; during peak billing hours
+    (06:00-10:00 UTC) costs are elevated, so routing decisions may need to
+    account for this window.
 
     Returns:
         (response_text, billing_type, input_tokens, output_tokens)
@@ -135,11 +184,47 @@ def _call_openai_api(
     resp = requests.post(url, headers=headers, json=payload, timeout=300)
     resp.raise_for_status()
     data = resp.json()
-    response_text = data["choices"][0]["message"]["content"]
+    # OpenRouter free models (e.g. `nvidia/nemotron-3-ultra-550b-a55b:free`) can return HTTP 200 with the error embedded in the body instead of a real error status, which previously crashed as a bare `KeyError: 'choices'` (real Tier 2 dispatch crash, 2026-08-24); attaching `.response.status_code` lets `tier2_escalate.py`'s existing `status in (429, 403)` fallback-chain check keep working for this case instead of aborting.
+    choices = data.get("choices")
+    if not choices:
+        err_body = data.get("error")
+        synthetic_resp = requests.Response()
+        if isinstance(err_body, dict) and isinstance(err_body.get("code"), int):
+            synthetic_resp.status_code = err_body["code"]
+        else:
+            synthetic_resp.status_code = resp.status_code
+        synthetic_resp._content = resp.content
+        if err_body is not None:
+            message = f"{provider} API ({model}) returned no choices, embedded error: {err_body}"
+        else:
+            message = f"{provider} API ({model}) returned an unexpected response shape (no 'choices'): {json.dumps(data)[:500]}"
+        raise requests.exceptions.HTTPError(message, response=synthetic_resp)
+    response_text = choices[0]["message"]["content"]
     usage = data.get("usage", {})
     input_tokens = usage.get("prompt_tokens", 0)
     output_tokens = usage.get("completion_tokens", 0)
     return response_text, provider, input_tokens, output_tokens
+
+
+def _probe_with_retry(tier: str, call):
+    """Retry a probe's ping/pong call up to 2 extra times (5s apart) before
+    failing the whole pre-flight gate. Added 2026-08-24: a transient upstream
+    blip (an OpenRouter 429, or a free model's own temporary 502/503) on a
+    tier the current dispatch doesn't even use was aborting every dispatch
+    outright with no tolerance at all -- this smooths over exactly that class
+    of blip without weakening the gate for a genuinely broken/misconfigured
+    tier (still fails hard after 3 total attempts)."""
+    last_exc = None
+    for attempt in range(3):
+        try:
+            call()
+            return
+        except Exception as e:
+            last_exc = e
+            if attempt < 2:
+                log.warning("Probe for %s failed (attempt %d/3), retrying in 5s: %s", tier, attempt + 1, e)
+                time.sleep(5)
+    raise RuntimeError(f"Probe failed for {tier}: {last_exc}")
 
 
 def probe_models():
@@ -151,23 +236,44 @@ def probe_models():
     # only for plan authoring (planner.py). Both must be probed -- validating
     # only tier_1_planner would let a real Claude-CLI outage/misconfig sail
     # through this pre-flight check undetected.
+    # Tier 3 (tier_3_debugger) uses DeepSeek; check peak-hours status for diagnostics.
+    deepseek_peak = _is_deepseek_peak_hours()
+    log.info("Tier 3 DeepSeek peak-hours status (06:00-10:00 UTC): %s", "ACTIVE" if deepseek_peak else "inactive")
+    # Probe tier_5_librarian's primary model (same mechanism as tier_4_worker)
+    tier = 'tier_5_librarian'
+    tier_config = config[tier]
+    provider = tier_config['provider']
+    # tier_5_librarian has no static 'endpoint' key -- its Ollama endpoint
+    # resolves from the ollama_host secret at runtime (2026-08-24 fix:
+    # tier_config.get('endpoint') was always None here, producing
+    # "Invalid URL 'None/v1/chat/completions'" and blocking every dispatch).
+    endpoint = tier_config.get('endpoint') or (secrets.get('ollama_host') if provider == 'ollama' else None)
+    model_name = tier_config['models']['primary']
+    api_key_secret = tier_config.get('api_key_secret')
+    _probe_with_retry(tier, lambda: execute_llm(
+        provider,
+        endpoint,
+        secrets.get(api_key_secret, '') if api_key_secret else '',
+        model_name,
+        'ping',
+        'reply pong',
+        is_tier4=False,
+        effort=tier_config.get('effort'),
+    ))
     for tier in ['tier_4_worker', 'tier_3_debugger', 'tier_2_manager', 'tier_1_planner', 'tier_1_manager']:
-        try:
-            tier_config = config[tier]
-            provider = tier_config['provider']
-            endpoint = tier_config.get('endpoint')
-            default_model = tier_config['default_model']
-            model_name = tier_config['models'][default_model]
-            api_key_secret = tier_config.get('api_key_secret')
-            execute_llm(
-                provider,
-                endpoint,
-                secrets.get(api_key_secret, '') if api_key_secret else '',
-                model_name,
-                'ping',
-                'reply pong',
-                is_tier4=(tier == 'tier_4_worker'),
-                effort=tier_config.get('effort'),
-            )
-        except Exception as e:
-            raise RuntimeError(f"Probe failed for {tier}: {e}")
+        tier_config = config[tier]
+        provider = tier_config['provider']
+        endpoint = tier_config.get('endpoint')
+        default_model = tier_config['default_model']
+        model_name = tier_config['models'][default_model]
+        api_key_secret = tier_config.get('api_key_secret')
+        _probe_with_retry(tier, lambda tier_config=tier_config, provider=provider, endpoint=endpoint, model_name=model_name, api_key_secret=api_key_secret: execute_llm(
+            provider,
+            endpoint,
+            secrets.get(api_key_secret, '') if api_key_secret else '',
+            model_name,
+            'ping',
+            'reply pong',
+            is_tier4=(tier == 'tier_4_worker'),
+            effort=tier_config.get('effort'),
+        ))
