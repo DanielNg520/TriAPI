@@ -64,17 +64,23 @@ read-only, no dispatch calls made:**
   `llm_client.execute_llm()` should closely mirror the existing
   `_call_claude_cli()`.
 - An OAuth token already exists at
-  `~/.gemini/antigravity-cli/antigravity-oauth-token`, so `agy` is likely
-  pre-authenticated and usable non-interactively without a fresh login
-  flow — **not fully confirmed**: a test `agy models` call during the
-  pause hadn't returned after ~20s and was killed rather than let run
-  longer (to avoid burning time/quota mid-pause per the user's own
-  directive). **First real item in the eventual plan should be a short,
-  explicit smoke test** (e.g. `agy -p "reply pong" --model
-  gemini-3.1-pro --effort low --dangerously-skip-permissions
-  --output-format json`, generously timed) to confirm headless mode
-  actually works and to get `agy models`' real output for the exact
-  model id string, before wiring the full provider integration.
+  `~/.gemini/antigravity-cli/antigravity-oauth-token` — confirmed
+  pre-authenticated, no login flow needed.
+- **Smoke test DONE and CONFIRMED WORKING, 2026-08-25 (post-off-peak
+  resume):** `agy -p "reply pong" --model gemini-3.1-pro --effort low
+  --dangerously-skip-permissions --output-format json` returned in 8.66s:
+  ```json
+  {"conversation_id":"fef077ae-c157-4882-8587-791e1e85a073","status":"SUCCESS","response":"pong\n","duration_seconds":8.657321751,"num_turns":1,"usage":{"input_tokens":20775,"output_tokens":274,"thinking_tokens":273,"cache_read_tokens":0,"total_tokens":21049}}
+  ```
+  Confirms: (a) `gemini-3.1-pro` is a valid, accepted model string; (b)
+  `--output-format json` gives a clean, parseable schema — a new
+  `provider: "agy"` branch in `llm_client.execute_llm()` should extract
+  `response` for the completion text and can log `usage.*` the same way
+  other tiers log token counts; (c) the model uses `thinking_tokens` even
+  at `effort low` (Gemini's own reasoning-token behavior, not an `agy`
+  quirk) — worth accounting for in cost/token logging if `agy` calls ever
+  get cost-tracked. No `agy models` output captured yet (not needed now
+  that the exact model string is confirmed directly) — skip that step.
 
 **Required alongside the config change — not optional, per the
 "everything configurable" principle below:** `budget_guard.
@@ -121,16 +127,18 @@ actually be planned/dispatched whenever it's picked up). Don't treat this
 run's PLAN.md item as having addressed the size problem — it only added
 the Phase 30 summary.
 
-**Sequencing once resumed:** (1) `agy` smoke test, (2) new `provider:
-"agy"` branch in `llm_client.py` + its own budget-guard/quota-exhaustion
-handling, (3) `_breakdown_phase_attempt()` provider-branch fix, (4)
-peak-hours-gate generalization to DeepSeek specifically — all using the
-still-functional current Tier 2 config (Nemotron/OpenRouter) to do that
-one planning/breakdown call — only flip `config/tiers.yaml`'s tier
+**Sequencing:** (1) ~~`agy` smoke test~~ **DONE, confirmed working** (see
+above). Still to do: (2) new `provider: "agy"` branch in `llm_client.py`
++ its own budget-guard/quota-exhaustion handling, (3)
+`_breakdown_phase_attempt()` provider-branch fix, (4) peak-hours-gate
+generalization to DeepSeek specifically — all using the still-functional
+current Tier 2 config (Nemotron/OpenRouter) to do that one
+planning/breakdown call — only flip `config/tiers.yaml`'s tier
 assignments to the FINAL (v2) layout above after those land and test
 clean. Bundle with the Groq provider addition if convenient (all touch
 `llm_client.py`/`config/tiers.yaml` in the same area), or run
-separately — user's call.
+separately — user's call. **This whole plan (steps 2-4 + config flip) is
+the next thing to draft/dispatch via `triapi plan`.**
 
 <details>
 <summary>v1 draft, superseded, kept for historical trace only</summary>
