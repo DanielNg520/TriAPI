@@ -1,11 +1,18 @@
 # Carryover — 2026-08-24 (end of session)
 
-## CRITICAL, 2026-08-25: `verify_task()`/`run_build()` can silently report
-"success" on a build_cmd that actually failed, whenever that build_cmd
-pipes its output through a truncating command (`| tail`, `| head`,
-`| grep`). Confirmed live and root-caused. **Must fix before the tier
-config flip** (a false "verified green" is exactly the kind of thing that
-must not exist going into a live tier reassignment).
+## RESOLVED, 2026-08-25: `verify_task()`/`run_build()` could silently
+report "success" on a build_cmd that actually failed, whenever that
+build_cmd piped its output through a truncating command (`| tail`,
+`| head`, `| grep`). Confirmed live, root-caused, **and fixed** via run
+`20260825-000610-4c040a` (`run_build()` now invokes via `["bash", "-o",
+"pipefail", "-c", build_cmd]`; new `tests/test_run_build_pipefail.py`
+covers it). The two regressed tests found alongside it
+(`OrchestratorTier3PeakSkipTests`, stale fixture missing a
+`tier_3_debugger` block) are also fixed, relocated to
+`tests/test_orchestrator_tier3_peak_skip.py`. Full suite re-verified by
+hand independent of the (now-trustworthy) dispatched result: 118/118
+green. Full detail in `PLAN.md`'s Phase 32 entry. **Config flip is
+unblocked — this was the last prerequisite.**
 
 **Mechanism:** `tier4_worker.run_build()` invokes `build_cmd` via
 `subprocess.run(build_cmd, shell=True, ...)` — plain `sh -c`, no
@@ -55,13 +62,11 @@ real code/test changes):**
    in `_run_task_with_guards()` so `resolve_deepseek_tier()` resolves it
    correctly, restoring both failing tests to their original intent.
 
-**Not yet dispatched as of this writing** — draft and dispatch this as
-its own small, fast plan before proceeding to the config flip. Given the
-severity (every `resolved_by=verify` result tonight that used a piped
-build_cmd is now suspect), also worth a quick grep across tonight's
-dispatched plans/breakdown JSONs for other `| tail`/`| head`/`| grep`
-build_cmd patterns and spot-checking them — not exhaustively re-verified
-here due to time, but flagged for awareness.
+**DONE.** Still worth a future spot-check: every `resolved_by=verify`
+result from EARLIER tonight (before this fix landed) that used a piped
+build_cmd is technically unverified by today's standard — not
+exhaustively re-audited here due to time, flagged for awareness only, not
+blocking anything further.
 
 ## PAUSED, 2026-08-25 02:40 UTC — user directive: stop burning time on
 retries, resume when DeepSeek is next off-peak. Currently inside the
