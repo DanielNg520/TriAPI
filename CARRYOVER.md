@@ -64,6 +64,23 @@ be planned. Bundle this into the same plan as the Groq provider addition
 if convenient (both are `llm_client.py`/`config/tiers.yaml` changes in
 the same area), or run separately — user's call.
 
+**Standing principle added, 2026-08-25 (user's own words): "Every single
+feature of TriAPI pipeline has to be highly configurable. If there is
+[a] hardcode[d] path then it needs to be fixed."** See
+[[feedback_everything_configurable_no_hardcoding]] in memory. Did a
+read-only audit of every `provider ==`/hardcoded-tier-name branch across
+`scripts/*.py` while paused (no API calls) to check for other instances
+beyond the already-queued `_breakdown_phase_attempt()` one: `tier1/2/3_
+escalate.py` all already dispatch generically via
+`llm_client.execute_llm(provider=tier.get("provider", ...))` — correctly
+reassignable. `planner.py`'s `provider == "cli"` branch and `triapi.py`'s
+`tier_4_worker...== "ollama"` checks are legitimately provider-specific
+behavior (subprocess invocation; local-Ollama-lifecycle management), not
+reassignment-breaking hardcodes. `librarian_escalate.py`'s
+openrouter/ollama endpoint resolution is inherent to `tier_5_librarian`'s
+fixed two-leg schema, already audited correct by the paused plan's Phase
+3. **No new hardcoded-path bugs found beyond the one already queued.**
+
 **New request queued while paused, 2026-08-25 (do not act on this until
 resume — starting a `triapi plan` now would itself burn OpenRouter's
 shared rate-limit budget, which is exactly what we're waiting out):** add
