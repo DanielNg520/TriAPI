@@ -566,22 +566,7 @@ def _parse_retry_after(body: str) -> float | None:
 def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, secrets: dict) -> dict:
     provider = tier2.get("provider", "google")
     
-    if provider == "openrouter":
-        from scripts.llm_client import execute_llm
-        try:
-            api_key = secrets.get(tier2.get("api_key_secret", "open_router_api_key"))
-            text, _, _, _ = execute_llm(
-                provider="openrouter",
-                endpoint=tier2["endpoint"],
-                api_key=api_key,
-                model=models[0],
-                prompt=phase_text,
-                system_prompt=BREAKDOWN_SYSTEM_INSTRUCTION,
-            )
-        except Exception as e:
-            log.error("Phase breakdown request failed: %s", e)
-            return {"status": "error", "reason": f"OpenRouter request failed: {e}", "retry_after": None}
-    else:
+    if provider == "google":
         body = {
             "systemInstruction": {"parts": [{"text": BREAKDOWN_SYSTEM_INSTRUCTION}]},
             "contents": [{"role": "user", "parts": [{"text": phase_text}]}],
@@ -601,6 +586,21 @@ def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, se
             log.info("Phase breakdown used fallback model %s (default %s exhausted for today)", model_used, models[0])
         data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
+    else:
+        from scripts.llm_client import execute_llm
+        try:
+            api_key = secrets.get(tier2.get("api_key_secret", "open_router_api_key"))
+            text, _, _, _ = execute_llm(
+                provider=provider,
+                endpoint=tier2["endpoint"],
+                api_key=api_key,
+                model=models[0],
+                prompt=phase_text,
+                system_prompt=BREAKDOWN_SYSTEM_INSTRUCTION,
+            )
+        except Exception as e:
+            log.error("Phase breakdown request failed: %s", e)
+            return {"status": "error", "reason": f"OpenRouter request failed: {e}", "retry_after": None}
         
     text = text.strip()
     if text.startswith("```json"):

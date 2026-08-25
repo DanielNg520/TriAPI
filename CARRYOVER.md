@@ -1,5 +1,68 @@
 # Carryover — 2026-08-24 (end of session)
 
+## CRITICAL, 2026-08-25: `verify_task()`/`run_build()` can silently report
+"success" on a build_cmd that actually failed, whenever that build_cmd
+pipes its output through a truncating command (`| tail`, `| head`,
+`| grep`). Confirmed live and root-caused. **Must fix before the tier
+config flip** (a false "verified green" is exactly the kind of thing that
+must not exist going into a live tier reassignment).
+
+**Mechanism:** `tier4_worker.run_build()` invokes `build_cmd` via
+`subprocess.run(build_cmd, shell=True, ...)` — plain `sh -c`, no
+`pipefail`. In bash/sh without `pipefail`, a pipeline's exit code is the
+LAST command's exit code only, not any earlier stage's. So a build_cmd
+like `python3 -m unittest ... -v 2>&1 | tail -15` (a real pattern used in
+this very session's own dispatched plans) reports the exit code of
+`tail`, which almost always succeeds, regardless of whether `unittest`
+itself failed. Confirmed directly: `bash -c 'false | tail -1; echo $?'`
+prints `0`.
+
+**Caught in the act, this session:** run `20260824-221726-3df72d`'s own
+final-verification item (7.1, `build_cmd` ending in `... -v 2>&1 |
+tail -15`) reported `success (resolved_by=verify)` — but re-running the
+exact same unittest command **without** the trailing pipe, by hand,
+immediately afterward showed **2 real FAILUREs**:
+`OrchestratorTier3PeakSkipTests.test_run_task_skips_tier3_escalate_when_peak_hours_not_ok`
+and `...test_run_task_falls_through_to_tier1_when_tier3_skipped_and_tier2_fails`,
+both in `tests/test_branch_features.py`. These are genuine regressions
+from this same run's own Phase 4 item 4.2 (`orchestrator.py`'s new
+position-independent DeepSeek peak-hours gate) — root cause: both tests'
+`config` fixture has no `tier_3_debugger` block at all (a minimal fixture
+written when the gate was unconditionally tier-3-hardcoded), so the new
+`budget_guard.resolve_deepseek_tier(config)` call finds no tier matching
+`provider == "deepseek"` and returns `None` — meaning the new
+conditional gate never identifies "tier 3" as the DeepSeek slot in this
+test's fixture, so `check_tier3_peak_hours_ok()` never fires, and
+`tier3_escalate` gets called even when the test mocks peak-hours as
+active. **Not a flaw in the new design itself** (real `config/tiers.yaml`
+has a fully-specified `tier_3_debugger` block with the real provider/
+endpoint, so production behavior is correct) — the two tests' fixtures
+are simply stale, written for the old unconditional-gate design, and need
+a `tier_3_debugger: {"provider": "deepseek", "endpoint": "https://api.deepseek.com"}`
+block added so `resolve_deepseek_tier()` can find it, restoring each
+test's original intent under the new, more correct design.
+
+**Two fixes needed, both through the pipeline (not hand-patched, both are
+real code/test changes):**
+1. `tier4_worker.run_build()`: invoke `build_cmd` with pipefail semantics
+   (e.g. `subprocess.run(["bash", "-o", "pipefail", "-c", build_cmd], ...)`
+   instead of plain `shell=True`) so a failing stage earlier in a pipe
+   can never be masked by a later stage's own success. This is the
+   trustworthiness fix — every future `verify_only` item and every
+   tier's rebuild check depends on this being correct.
+2. `tests/test_branch_features.py`'s `OrchestratorTier3PeakSkipTests`:
+   add a realistic `tier_3_debugger` block to the shared `config` fixture
+   in `_run_task_with_guards()` so `resolve_deepseek_tier()` resolves it
+   correctly, restoring both failing tests to their original intent.
+
+**Not yet dispatched as of this writing** — draft and dispatch this as
+its own small, fast plan before proceeding to the config flip. Given the
+severity (every `resolved_by=verify` result tonight that used a piped
+build_cmd is now suspect), also worth a quick grep across tonight's
+dispatched plans/breakdown JSONs for other `| tail`/`| head`/`| grep`
+build_cmd patterns and spot-checking them — not exhaustively re-verified
+here due to time, but flagged for awareness.
+
 ## PAUSED, 2026-08-25 02:40 UTC — user directive: stop burning time on
 retries, resume when DeepSeek is next off-peak. Currently inside the
 01:00-04:00 UTC peak window (confirmed live via

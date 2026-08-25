@@ -373,3 +373,33 @@ FAILED tests/test_orchestrator.py::test_chat_kind_triggers_searchrouter_read
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_tier5_librarian.py | HASH: 8c5c973bb9fba924ab3fa09b8bb25b58de58cf202f012fbc710c23e9359f6f46 | REASON: Could not apply proposed edit: Block 9: SEARCH text matches 12 locations in the file -- ambiguous, needs more surrounding context to be unique.
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_llm_client_sanitize.py | HASH: b5500a9d2ac3532869f9a6bfe469821ffa284434bb6b6bf98094f2213001b231 | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/scripts/dispatcher.py | HASH: ec0caac07da2a2f89abace914035acc7fd10c0c79774291b9c4a58316c5d2a2a | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/scripts/budget_guard.py | HASH: a5fc7a08e9f2833f2721ee207f7a5db7f70d551649d4af255fef795d5f155641 | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_tier_reassignment_prep.py | HASH: 0c73fea6965e5d99ef3543371e89bd6c963da48de4348ef5e42f1254d82fa9fe | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_tier_reassignment_prep.py | HASH: 19116bdbfc611c5090ce5eb7180fe08fe0dc0f75da9659e0f3fe3817bfb4cb2d | REASON: Rebuild failed after Tier 3 rewrite: test_non_string_response_raises_calledprocesserror (tests.test_tier_reassignment_prep.TestAgyProviderGracefulFailure.test_non_string_response_raises_calledprocesserror) ... [32mok[0m
+test_non_success_status_raises_calledprocesserror (tests.test_tier_reassignment_prep.TestAgyProviderGracefulFailure.test_non_success_status_raises_calledprocesserror) ... [32mok[0m
+test_nonzero_returncode_raises_calledprocesserror (tests.test_tier_reassignment_prep.TestAgyProviderGracefulFailure.test_nonzero_returncode_raises_calledprocesserror) ... [32mok[0m
+test_undecodable_stdout_raises_calledprocesserror (tests.test_tier_reassignment_prep.TestAgyProviderGracefulFailure.test_undecodable_stdout_raises_calledprocesserror) ... [32mok[0m
+test_execute_llm_agy_success (tests.test_tier_reassignment_prep.TestAgyProviderSuccess.test_execute_llm_agy_success) ... [32mok[0m
+test_routing_for_google_provider (tests.test_tier_reassignment_prep.TestBreakdownPhaseAttemptRouting.test_routing_for_google_provider) ... [32mok[0m
+test_routing_for_non_google_providers (tests.test_tier_reassignment_prep.TestBreakdownPhaseAttemptRouting.test_routing_for_non_google_providers) ... [32mok[0m
+test_is_deepseek_peak_hours_true_despite_check_tier3_false (tests.test_tier_reassignment_prep.TestDispatcherAdvisoryDelegation.test_is_deepseek_peak_hours_true_despite_check_tier3_false) ... [32mok[0m
+test_no_deepseek_returns_none_and_default_peak_hours (tests.test_tier_reassignment_prep.TestPeakHoursPositionIndependence.test_no_deepseek_returns_none_and_default_peak_hours) ... [32mok[0m
+test_peak_hours_boundary_inclusive_start_exclusive_end (tests.test_tier_reassignment_prep.TestPeakHoursPositionIndependence.test_peak_hours_boundary_inclusive_start_exclusive_end) ... [31mFAIL[0m
+test_peak_hours_gating_position_independent (tests.test_tier_reassignment_prep.TestPeakHoursPositionIndependence.test_peak_hours_gating_position_independent) ... [32mok[0m
+test_resolve_deepseek_tier_position_independent (tests.test_tier_reassignment_prep.TestPeakHoursPositionIndependence.test_resolve_deepseek_tier_position_independent) ... [32mok[0m
+
+======================================================================
+[31mFAIL[0m[1;31m: test_peak_hours_boundary_inclusive_start_exclusive_end (tests.test_tier_reassignment_prep.TestPeakHoursPositionIndependence.test_peak_hours_boundary_inclusive_start_exclusive_end)[0m
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File [35m"/home/dyne/Documents/Coding/TriAPI/tests/test_tier_reassignment_prep.py"[0m, line [35m258[0m, in [35mtest_peak_hours_boundary_inclusive_start_exclusive_end[0m
+    [31mself.assertTrue[0m[1;31m(result_end["ok"], "10:00 UTC should no longer be in peak hours")[0m
+    [31m~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1;35mAssertionError[0m: [35mFalse is not true : 10:00 UTC should no longer be in peak hours[0m
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.003s
+
+[1;31mFAILED[0m ([1;31mfailures=1[0m)
+
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/AGENTS.md | HASH: 28d92a67536f7d269095093ebecff99c79c59a58abdd789eac4a8f02b8c2f191 | REASON: Could not apply proposed edit: Block 3: SEARCH text matches 6 locations in the file -- ambiguous, needs more surrounding context to be unique.

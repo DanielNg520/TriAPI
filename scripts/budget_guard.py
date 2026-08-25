@@ -34,6 +34,9 @@ DEFAULT_TIER3_PEAK_HOURS_UTC = [
     ["06:00", "10:00"],
 ]
 
+DEEPSEEK_ENDPOINT = "https://api.deepseek.com"
+TIER_SCAN_ORDER = ["tier_1_planner", "tier_1_manager", "tier_2_manager", "tier_3_debugger", "tier_4_worker"]
+
 LA_TZ = ZoneInfo("America/Los_Angeles")
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -120,6 +123,19 @@ def check_tier2_ok() -> dict:
     log.debug("Tier 2 budget check passed (%d/%d rpm, %d/%d rpd)", calls_last_minute, rpm_limit, calls_last_day, rpd_limit)
     return {"ok": True, "reason": f"within free tier ({calls_last_minute}/{rpm_limit} rpm, {calls_last_day}/{rpd_limit} rpd)"}
 
+
+def resolve_deepseek_tier(config: dict) -> str | None:
+    """Return the first tier key in TIER_SCAN_ORDER whose block has
+    provider == "deepseek" and endpoint matching DEEPSEEK_ENDPOINT, else None."""
+    for tier_key in TIER_SCAN_ORDER:
+        block = config.get(tier_key)
+        if not block:
+            continue
+        if block.get("provider") == "deepseek" and block.get("endpoint") and str(block["endpoint"]).rstrip("/") == DEEPSEEK_ENDPOINT:
+            return tier_key
+    return None
+
+
 def check_tier3_peak_hours_ok() -> dict:
     """Refuses if the current UTC time falls inside a DeepSeek peak-hour
     window (2x pricing). Peak windows are read from config/tiers.yaml and
@@ -130,9 +146,10 @@ def check_tier3_peak_hours_ok() -> dict:
         log.debug("Tier 3 bypass: weekend off-peak rate in effect")
         return {"ok": True, "reason": "weekend off-peak rate in effect"}
     config = load_tiers()
-    peak_windows = config.get("tier_3_debugger", {}).get("peak_hours_utc")
-    if peak_windows is None:
-        peak_windows = DEFAULT_TIER3_PEAK_HOURS_UTC
+    resolved = resolve_deepseek_tier(config)
+    peak_windows = config[resolved].get("peak_hours_utc") if resolved else None
+    if not peak_windows:
+        peak_windows = list(DEFAULT_TIER3_PEAK_HOURS_UTC)
 
     now_la = now_utc.astimezone(LA_TZ)
     now_minutes = now_utc.hour * 60 + now_utc.minute

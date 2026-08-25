@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.budget_guard import check_tier1_ok, check_tier1_manager_ok, check_tier2_ok, check_tier3_peak_hours_ok
+from scripts.budget_guard import check_tier1_ok, check_tier1_manager_ok, check_tier2_ok, check_tier3_peak_hours_ok, resolve_deepseek_tier
 from scripts.config_loader import load_tiers
 from scripts.cost_report import format_report, report
 from scripts.state import clear_state, read_state, record_failure
@@ -293,15 +293,33 @@ def _is_doc_target(target: str, target_globs: list[str]) -> bool:
     return any(fnmatch.fnmatch(target, pat) for pat in target_globs)
 
 
+def _peak_hour_guard(task_id: str, tier_key: str, deepseek_tier: str | None) -> dict | None:
+    """Slot-conditional DeepSeek peak-hour gate.
+
+    Fires check_tier3_peak_hours_ok() only when ``tier_key`` matches the
+    resolved DeepSeek tier, so the gate follows DeepSeek wherever it sits in
+    tiers.yaml (today: tier_3_debugger; after a manual reassignment it tracks
+    the new slot automatically). On refusal returns the guard dict (ok=False);
+    callers take today's Tier-3 refusal path -- log a skip and fall through
+    to the next escalation tier. Returns None when this site isn't
+    DeepSeek-gated, meaning no check is needed and the escalation attempt
+    proceeds directly.
+    """
+    if tier_key != deepseek_tier:
+        return None
+    return check_tier3_peak_hours_ok()
+
+
 def run_task(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, tier4_model: str | None = None, context_files: list[str] | None = None, skip_tier4: bool = False) -> dict:
-    config = load_tiers()
-    build_cmd = build_cmd or " && ".join(config["tier_4_worker"]["build_commands"])
+    tiers_config = load_tiers()
+    deepseek_tier = resolve_deepseek_tier(tiers_config)
+    build_cmd = build_cmd or " && ".join(tiers_config["tier_4_worker"]["build_commands"])
 
     # Tier 5 (librarian): for standalone single-target runs whose target is a
     # doc file matched by tier_5_librarian.target_globs, delegate entirely to
     # librarian_escalate.run() -- which handles the full doc-fix pipeline --
     # and return its result through the normal cost-report path below.
-    librarian_cfg = config.get("tier_5_librarian")
+    librarian_cfg = tiers_config.get("tier_5_librarian")
     if librarian_cfg and librarian_cfg.get("enabled", True) and _is_doc_target(target, librarian_cfg.get("target_globs", [])):
         log.info("[%s] Tier 5 (librarian) routing for doc target %s", task_id, target)
         result = librarian_escalate.run(
@@ -365,11 +383,11 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # Tier 3: DeepSeek (peak billing hours 06:00-10:00 UTC — skipped during
         # that window since DeepSeek is billed at a premium then; see
         # scripts/budget_guard.py for the exact window definition)
-        before_content = _read_target_text(resolved_target)
-        guard3 = check_tier3_peak_hours_ok()
-        if not guard3["ok"]:
+        guard3 = _peak_hour_guard(task_id, "tier_3_debugger", deepseek_tier)
+        if guard3 and not guard3["ok"]:
             log.info("[%s] Tier 3 skipped: %s", task_id, guard3["reason"])
         else:
+            before_content = _read_target_text(resolved_target)
             result3 = tier3_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
             )
@@ -380,7 +398,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_3"
                 _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
-                                            tier3_escalate, build_cmd, workdir, context_blob, config, before_content)
+                                            tier3_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
 
     if resolved_by is None:
         # Tier 2: Gemini API (budget-guarded). Tried before Tier 1 so that
@@ -388,7 +406,10 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         # tier) stays reserved as the last automated attempt before human
         # handoff, not spent on problems Gemini might still resolve.
         guard2 = check_tier2_ok()
-        if guard2["ok"]:
+        peak2 = _peak_hour_guard(task_id, "tier_2_manager", deepseek_tier)
+        if peak2 and not peak2["ok"]:
+            log.info("[%s] Tier 2 skipped: %s", task_id, peak2["reason"])
+        elif guard2["ok"]:
             before_content = _read_target_text(resolved_target)
             result2 = tier2_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
@@ -400,15 +421,18 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             if result2.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_2"
                 _critique_and_maybe_revise(task_id, resolved_target, description, "tier_2",
-                                            tier2_escalate, build_cmd, workdir, context_blob, config, before_content)
+                                            tier2_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
         else:
             print(f"[BUDGET GUARD] Tier 2 skipped: {guard2['reason']}")
 
     if resolved_by is None:
         # Tier 1: Claude Code CLI (budget-guarded), last automated tier.
         guard1 = check_tier1_ok()
-        guard1m = check_tier1_manager_ok(config)
-        if guard1["ok"] and guard1m["ok"]:
+        guard1m = check_tier1_manager_ok(tiers_config)
+        peak1 = _peak_hour_guard(task_id, "tier_1_manager", deepseek_tier)
+        if peak1 and not peak1["ok"]:
+            log.info("[%s] Tier 1 skipped: %s", task_id, peak1["reason"])
+        elif guard1["ok"] and guard1m["ok"]:
             before_content = _read_target_text(resolved_target)
             result1 = tier1_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
@@ -420,7 +444,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             if result1.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
                 resolved_by = "tier_1"
                 _critique_and_maybe_revise(task_id, resolved_target, description, "tier_1",
-                                            tier1_escalate, build_cmd, workdir, context_blob, config, before_content)
+                                            tier1_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
         elif not guard1["ok"]:
             print(f"[BUDGET GUARD] Tier 1 skipped: {guard1['reason']}")
         else:

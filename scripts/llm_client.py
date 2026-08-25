@@ -40,6 +40,9 @@ _IP_LIKE_RE = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b"
 )
 
+# Timeout for CLI subprocesses (claude, agy) in seconds.
+_CLI_TIMEOUT = 300
+
 
 def _redact_phone_like(match: re.Match) -> str:
     """Replace separator characters in a phone-like match with a redaction marker."""
@@ -139,6 +142,8 @@ def _primary_request(
     """Dispatch to the appropriate primary backend."""
     if provider == "cli":
         return _call_claude_cli(prompt, system_prompt, model, effort)
+    if provider == "agy":
+        return _call_agy_cli(prompt, model, effort)
     if provider == "google":
         return _call_gemini_api(endpoint, api_key, model, prompt, system_prompt)
     # openrouter, deepseek, and any other OpenAI-compatible endpoint
@@ -164,6 +169,57 @@ def _call_claude_cli(
     response_text = result.stdout.strip()
     # CLI does not reliably report token counts; zero them out.
     return response_text, "cli", 0, 0
+
+
+def _call_agy_cli(
+    prompt: str, model: str | None, effort: str | None
+) -> Tuple[str, str, int, int]:
+    """Run the local `agy` CLI with JSON output format.
+
+    `model` is passed as `--model`; `effort` as `--effort`. Both are omitted
+    when falsy. The `--dangerously-skip-permissions` and
+    `--output-format json` flags are always set.
+
+    Success requires returncode 0, valid JSON stdout with
+    `"status" == "SUCCESS"` and a string `"response"`; the response is
+    returned verbatim (trailing newline preserved). Any other outcome
+    raises subprocess.CalledProcessError (the same family
+    `_call_claude_cli` raises) with a message embedding the status and
+    stderr tail, so the existing per-tier fallthrough skips to the next
+    tier gracefully.
+    """
+    cmd = ["agy", "-p", prompt]
+    if model:
+        cmd.extend(["--model", model])
+    if effort:
+        cmd.extend(["--effort", effort])
+    cmd.extend(["--dangerously-skip-permissions", "--output-format", "json"])
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=_CLI_TIMEOUT
+    )
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd, result.stdout, result.stderr
+        )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise subprocess.CalledProcessError(
+            0, cmd, result.stdout, result.stderr
+        ) from e
+    if data.get("status") != "SUCCESS" or not isinstance(
+        data.get("response"), str
+    ):
+        # Embed the status and stderr tail in the exception message so
+        # the fallthrough handler can log them without crashing.
+        detail = (
+            f"agy status={data.get('status')!r} "
+            f"stderr_tail={result.stderr[-200:]!r}"
+        )
+        raise subprocess.CalledProcessError(
+            0, cmd, result.stdout, detail
+        )
+    return data["response"], "agy", 0, 0
 
 
 def _call_gemini_api(

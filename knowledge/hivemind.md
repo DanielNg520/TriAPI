@@ -577,3 +577,62 @@ When a language model API can return either a plain string or a structured objec
 4. **Propagate structured metadata** (e.g., `finish_reason`) into logs and return values so that repeated empty responses can be diagnosed (e.g., token limits, refusal, reasoning-only responses) without needing to replicate the API call.
 
 This pattern is especially important in resilient multi-tier systems where the caller must not only handle expected failures but also degrade gracefully when the LLM returns surprising shapes.
+
+### Normalize External CLI/API Failures into a Single Exception Family
+
+When integrating multiple backend providers (local CLIs, REST APIs, SaaS services) behind a unified facade, normalize all failure modes into the **same exception type** your existing fallback/retry logic already handles.
+
+**Pattern:**
+- For subprocess-based providers, raise `subprocess.CalledProcessError` for **every** failure class — non-zero exit code, invalid JSON stdout, or unexpected status/response shape.
+- Embed diagnostic details (status, stderr tail, raw stdout snippet) in the exception message or args so downstream handlers can log context without re-parsing or crashing.
+- Add a shared `_CLI_TIMEOUT` constant to prevent hangs from becoming indefinite blocking calls, and pass it consistently to all subprocess invocations.
+
+**Why:**
+- Callers (e.g., per-tier fallback chains) already catch a known exception family. Introducing new exception types per backend forces callers to be updated — a fragile and easy-to-miss requirement.
+- Embedding context in the exception preserves debuggability without requiring the fallback handler to know provider-specific internals.
+
+**Example:**
+```python
+if result.returncode != 0:
+    raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
+try:
+    data = json.loads(result.stdout)
+except json.JSONDecodeError as e:
+    raise subprocess.CalledProcessError(0, cmd, result.stdout, result.stderr) from e
+
+if data.get("status") != "SUCCESS":
+    raise subprocess.CalledProcessError(0, cmd, result.stdout, f"status={data.get('status')!r} stderr_tail={result.stderr[-200:]!r}")
+```
+
+**Lesson:** A facade's contract should be defined by its **exception types**, not just return values. When adding a new backend, map its failure modes onto the existing exception taxonomy so upstream reliability logic (retries, fallbacks, circuit breakers) works unchanged.
+
+### Generalize Provider Dispatch Instead of Hardcoding Provider Names
+
+When code branches on a provider identifier (e.g., `provider == "openrouter"`), treat the provider as a **configurable value** and build the dispatch logic around the provider's **capabilities**, not its literal name. If you hardcode a specific provider in an `if/else`, you silently exclude any other provider that shares the same interface contract — and you make future provider additions require editing the conditional instead of just the config.
+
+In this diff, the original code had:
+```python
+if provider == "openrouter":
+    # use execute_llm
+else:
+    # assume google
+```
+
+The problem: any provider other than `"openrouter"` fell through to the Google branch — even if it was another non-Google provider (e.g., Anthropic, a local proxy) that should have used the `execute_llm` path. The fix inverts the check:
+```python
+if provider == "google":
+    # google-specific call
+else:
+    # generic execute_llm path for ANY non-google provider
+```
+
+This is more than a cosmetic reordering. It changes the **default behavior** from "assume Google unless I say openrouter" to "use the generic LLM client for any unknown provider, and treat Google as the special case."
+
+**General rules to extract:**
+1. **Prefer negative/positive capability checks over provider-name checks.** Ask "does this provider need the special path?" rather than "is this provider X?"
+2. **When you do branch on a provider name, make the *more common* / *more generic* path the `else`.** The fallback should be the path that works for the broadest set of inputs, not the narrowest.
+3. **Never silently default to a specific vendor's behavior for an unrecognized value.** An unknown provider should either error loudly or go to a generic implementation — never to a path that assumes a different vendor's API contract.
+4. **Reuse the config value in the dispatch.** The diff not only reorders the branch; it also passes `provider=provider` into `execute_llm()` instead of hardcoding `"openrouter"`, so the same generic path correctly forwards whatever provider was configured.
+
+This is a small, surgical fix, but the pattern is universal: **when you find yourself special-casing a vendor, invert the logic so the special case is explicit and everything else gets the generic, provider-agnostic treatment.**
