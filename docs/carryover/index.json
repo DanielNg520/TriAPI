@@ -1,0 +1,43 @@
+{
+  "$schema": "carryover-index-v1",
+  "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
+  "active": "20260825-092344-active-tier-flip-plan-and-queue.md",
+  "history": [
+    {
+      "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
+      "date": "2026-08-23",
+      "status": "RESOLVED",
+      "topic": "OpenRouter branch merge into main; Tier 3/4 provider swap; 4 early bug fixes; backend-registry and complexity-router architecture items first queued"
+    },
+    {
+      "file": "20260824-030000-librarian-tier5-redesign-debugging.md",
+      "date": "2026-08-24",
+      "status": "RESOLVED",
+      "topic": "Tier 5 librarian build: 5 debugging addenda (epoch-collision staleness bug, stale test mocks, human_handoff bookkeeping bug, PLAN.md-too-large stall, OpenRouter phone-filter fix drafted)"
+    },
+    {
+      "file": "20260824-190000-queue-snapshot-openrouter-obstacles.md",
+      "date": "2026-08-24",
+      "status": "SUPERSEDED",
+      "topic": "Old queue snapshot mid-fix -- OpenRouter dispatch obstacles (403s, 429s, probe_models() over-gating found)"
+    },
+    {
+      "file": "20260824-235900-misc-resolved-fixes.md",
+      "date": "2026-08-24",
+      "status": "RESOLVED",
+      "topic": "KeyError: 'choices' fix; probe_models() retry tolerance; Ollama lifecycle test hang (found, not fixed)"
+    },
+    {
+      "file": "20260825-000000-openrouter-fixes-tier-prep-pipefail-complete.md",
+      "date": "2026-08-25",
+      "status": "RESOLVED",
+      "topic": "OpenRouter phone/IP sanitizer + peak-hours dedup (Phase 30); agy provider + generic routing + position-independent peak gate (Phase 31); run_build() pipefail fix (Phase 32); git_ops auto-branch removed"
+    },
+    {
+      "file": "20260825-092344-active-tier-flip-plan-and-queue.md",
+      "date": "2026-08-25",
+      "status": "ACTIVE",
+      "topic": "Tier reassignment plan drafted+approved, not dispatched; standing rules; full queue (agy librarian fallback, fallback configurability, Groq provider, architecture items)"
+    }
+  ]
+}

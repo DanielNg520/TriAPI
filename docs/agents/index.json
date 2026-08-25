@@ -1,0 +1,12 @@
+{
+  "$schema": "agents-index-v1",
+  "instructions": "Machine-readable index of docs/agents/ -- file/dir documentation overflow from AGENTS.md, moved out once AGENTS.md's own inline index would exceed the 73728-char ceiling. AGENTS.md's 'This file's own index' table has one row per entry here. Read an entry only when your task needs that specific file/dir's documentation -- AGENTS.md's inline sections cover everything else.",
+  "entries": [
+    {
+      "file": "20260825-100000-scripts-directory-reference.md",
+      "date": "2026-08-25",
+      "topic": "Full scripts/ directory reference -- every pipeline module (llm_client, dispatcher, orchestrator, tierN_escalate, budget_guard, librarian_escalate, etc.)",
+      "moved_from": "AGENTS.md's inline ## scripts/ section"
+    }
+  ]
+}
