@@ -10,6 +10,37 @@ fixes run, Phase 1 done, Phase 2 item 0 done, Phase 2 item 1 stuck on
 repeated transient Nemotron/OpenRouter errors — see the incident entry
 below for full detail) once off-peak, not before.
 
+**New request queued while paused, 2026-08-25 (do not act on this until
+resume — starting a `triapi plan` now would itself burn OpenRouter's
+shared rate-limit budget, which is exactly what we're waiting out):** add
+Groq as a new TriAPI provider, model `qwen/qwen3.6-27b`, with these limits
+(feed into `config/tiers.yaml`'s pricing/rate-limit block the same way
+`tier_2_manager`/`tier_3_debugger` record theirs, and wire a
+`budget_guard` check for it the same way `check_tier3_peak_hours_ok()`/
+`check_tier2_ok()` gate their tiers):
+- RPM: 30
+- RPD: 1,000
+- TPM (tokens/min): 8,000
+- TPS: 200,000 (as given by the user — confirm which unit this actually
+  is against Groq's real docs before wiring a hard gate on it; 200K
+  tokens/sec is implausibly high next to an 8K TPM cap, so this is more
+  likely tokens/day or a context-window figure — don't guess, verify
+  against Groq's console/docs for this exact model first.)
+
+This is real new-provider code (a new `provider: "groq"` branch in
+`llm_client.execute_llm()`, likely alongside `_call_openai_api()` since
+Groq's API is OpenAI-compatible, plus config wiring and a budget-guard
+check) — per the standing "never do TriAPI's job" rule this goes through
+`triapi plan`/`dispatch` against TriAPI's own repo once we resume, not
+hand-coded. Worth noting: Groq's rate limits are its own separate pool,
+not shared with OpenRouter's 20 RPM/1000 RPD — this may be exactly why the
+user wants it added (a way to route some tier work off the OpenRouter
+shared-budget bottleneck found earlier tonight, see
+[[project_openrouter_shared_rate_limit]] in memory). Where this model
+should actually slot into the tier ladder (new tier? alternate for an
+existing one?) wasn't specified — ask before assuming a slot when this is
+picked up, rather than guessing.
+
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
 and "what happened" writeups belong in `PLAN.md` (this repo's permanent
