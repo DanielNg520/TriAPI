@@ -1,5 +1,15 @@
 # Carryover — 2026-08-24 (end of session)
 
+## PAUSED, 2026-08-25 02:40 UTC — user directive: stop burning time on
+retries, resume when DeepSeek is next off-peak. Currently inside the
+01:00-04:00 UTC peak window (confirmed live via
+`budget_guard.check_tier3_peak_hours_ok()`); off-peak resumes at **04:00
+UTC**. All work up to this point is committed. Nothing is running.
+**Resume by retrying `triapi dispatch 20260824-164451-2b7635`** (OpenRouter
+fixes run, Phase 1 done, Phase 2 item 0 done, Phase 2 item 1 stuck on
+repeated transient Nemotron/OpenRouter errors — see the incident entry
+below for full detail) once off-peak, not before.
+
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
 and "what happened" writeups belong in `PLAN.md` (this repo's permanent
@@ -93,6 +103,123 @@ should never come back into this tier. Also worth an explicit regression
 test asserting no tier's configured chain can send a non-allowlisted model
 through `provider: openrouter` without the
 user's sign-off, so a future config edit can't silently reintroduce this.
+
+## Incident evidence, 2026-08-25: OpenRouter's own "Blocked Requests"
+dashboard (user-provided screenshot) — 36 total blocked today, broken down
+by category: **PHONE 18, EMAIL 12, IP ADDRESS 6.** Two scope corrections
+for the already-queued Phase 1 item (`_PHONE_LIKE_RE` in
+`llm_client._sanitize_for_openrouter_content_filter()`, run
+`20260824-164451-2b7635`, currently paused) before it's dispatched again:
+1. **IP-address case is entirely unhandled** — needs its own regex/redact
+   case alongside the phone one (IPv4-shaped, careful not to mangle
+   version strings, hex hashes, or other dotted-number content).
+2. **Email blocks (12) are non-trivial despite `_EMAIL_LIKE_RE` already
+   existing** (Phase 26) and every known OpenRouter call site routing
+   through `execute_llm()`'s sanitizer (`probe_models()`,
+   `tier2_escalate.py`, `dispatcher.breakdown_phase()`'s openrouter
+   branch, `librarian_escalate.py`'s fallback leg all confirmed to call
+   `execute_llm`, which applies it) — plausible this is just historical
+   (pre-Phase-26) volume in the same dashboard window, but worth an
+   explicit audit before assuming the existing email case is complete:
+   confirm no OpenRouter request body is ever built without going through
+   `_sanitize_for_openrouter_content_filter()` first.
+   Amend Phase 1's item description to cover both before dispatching.
+   **DONE 2026-08-25: both items amended directly in the run's persisted
+   breakdown JSON (item descriptions, not code) and dispatched — both
+   landed clean via Tier 4** (`_IP_LIKE_RE` + audit added to
+   `llm_client.py`, tests added). Phase 2 item 0 (dispatcher peak-hours
+   dedup) also landed clean via Tier 4. Phase 2 item 1 then crashed the
+   whole run on a genuine transient Nvidia 502 on Tier 2's free Nemotron
+   model (`Upstream error from Nvidia: Service temporarily overloaded`) —
+   **new finding: Tier 2 has no retry tolerance for a single transient
+   upstream blip**, unlike `probe_models()`'s `_probe_with_retry()` (added
+   2026-08-24 for exactly this class of issue). TriAPI's self-fix system
+   auto-captured this crash and drafted a fix, queued as self-fix run
+   `20260824-190921-1fc713` — let it sit for review, don't hand-patch
+   `tier2_escalate.py`, don't auto-approve without reading it first.
+   **Second, same-class crash on retry:** resumed dispatch, Phase 2 item 1
+   crashed again — this time Tier 4 (`dots-studio/dots-3-note-preview:free`)
+   hit a transient `{"message": "Provider returned error", "code": 400}`
+   and orchestrator logged "crashing pipeline" instead of falling through
+   to Tier 3. **Third crash on the next retry: Tier 2/Nemotron hit the
+   identical 502 upstream-overload error again** — three occurrences of
+   the same Nemotron 502 across three resumes in ~20 minutes now looks
+   like sustained upstream instability on that free backend tonight, not
+   a one-off blip; self-fix auto-drafted a SECOND duplicate fix for the
+   same crash, `20260824-192405-f29d2c` (skip/dedupe against
+   `1fc713` when reviewing, same as the existing 429-probe duplicates
+   below). **Broader finding worth its own queued item**: a single
+   transient upstream 4xx/5xx from a free model crashing the whole
+   dispatch instead of retrying in-place or falling through the tier
+   ladder has now hit both Tier 2 and Tier 4 independently this session —
+   likely a systemic gap in `orchestrator.run_task()`'s error handling
+   around `execute_llm()` calls generally (missing the same
+   `_probe_with_retry()`-style tolerance `probe_models()` got
+   2026-08-24), not several unrelated bugs. Worth folding into whichever
+   self-fix run above actually gets approved, scoped broadly rather than
+   just the one call site it was captured from.
+   **Given three Nemotron 502s in ~20 minutes, back off longer (15-20 min)
+   before the next `triapi dispatch 20260824-164451-2b7635` retry** rather
+   than resuming immediately again — let the upstream backend recover.
+   **Correction from the user, 2026-08-25: all OpenRouter models (free and
+   paid) share ONE account-wide rate-limit pool — 20 RPM / 1000 RPD, not a
+   per-model allowance.** This reframes tonight's cascade: `probe_models()`
+   alone fires 4+ OpenRouter calls per dispatch resume (tier_5, tier_4,
+   tier_2, tier_1_planner), so a handful of resumes in quick succession,
+   plus real tier work, can burn through the shared 20 RPM ceiling on its
+   own — the repeated `tier_1_planner` 429s and the Nemotron "502
+   Upstream overloaded" messages may both really be the *same* shared-pool
+   exhaustion wearing different error faces, not two unrelated upstream
+   issues. Strengthens the case for the already-queued
+   `probe_models()`-scoping fix (folded into the router/backend-registry
+   architecture item) — it isn't just faster, it directly reduces pressure
+   on a budget every tier draws from. A 60s-ish gap should be enough for
+   the RPM side to clear on its own; if failures persist past that, it's
+   more likely the 1000 RPD daily cap (account-wide, cumulative across the
+   whole day/session, not per-tier) — which only clears at day rollover,
+   so further short retries would be pointless in that case. Worth adding
+   an account-wide (not per-tier) RPM/RPD budget tracker alongside
+   `budget_guard.py`'s existing per-tier checks, queued as part of the
+   same architecture-item scope, not hand-built.
+
+## Standing rule (2026-08-25): explicit tier defaults, user-specified
+after the billing incident, to be enforced going forward — **Tier 1 =
+`stealth/ox-alpha` (OpenRouter free), Tier 2 = Nemotron (OpenRouter free)
+— both already correct in `config/tiers.yaml`, no change needed.** For
+Tier 3/4, the user wants a **peak-hours-conditional swap**, confirmed by
+the user to be built via `triapi plan`/`dispatch` against TriAPI's own
+repo, NOT hand-coded (their explicit choice when asked). Design, refined
+by the user 2026-08-25 (startup-probe form, not a per-call gate):
+
+- **At TriAPI process startup**, probe the current Beijing time
+  (`Asia/Shanghai`) once, compute how long remains until the next off-peak
+  window per `budget_guard`'s existing peak-window logic (weekday check +
+  the two configured UTC windows in `tier_3_debugger.peak_hours_utc`), and
+  set an **in-memory countdown/lockout** for that duration. This is
+  explicitly startup-scoped, not persisted: "the count down dies when
+  triapi shutdown" — a fresh process re-probes from scratch, it does not
+  resume a saved countdown.
+- **While the lockout is active, DeepSeek is blocked from entering the
+  pipeline entirely** — not just skipped-with-a-warning like the current
+  `check_tier3_peak_hours_ok()` gate, but structurally prevented from
+  being selected as Tier 3 for the run's duration.
+- **While locked out, Tier 3 and Tier 4 both promote/reassign
+  automatically:** Tier 3 = notes3 (`dots-studio/dots-3-note-preview:free`,
+  today's static Tier 4 default), Tier 4 = local Ollama qwen
+  (`qwen2.5-coder`, already configured as `ollama_fallback`'s default).
+- **Off-peak (no lockout active):** Tier 3 = DeepSeek, Tier 4 = notes3 —
+  today's current static config, unchanged.
+
+This needs a startup hook (compute the lockout once when `triapi` starts,
+not per-call), an in-memory timer/flag threaded through to wherever
+Tier 3/4 are selected (`tier3_escalate.py`, `tier4_worker.py`,
+`probe_models()`), and default_model swapping at that selection point —
+none of which exists today (`tier3_escalate.py`/`tier4_worker.py` currently
+have no such branching, and `check_tier3_peak_hours_ok()` is a per-call
+advisory/skip gate, not a startup lockout). Draft this as its own
+`triapi plan` once the current OpenRouter-fixes run
+(`20260824-164451-2b7635`) finishes — don't bundle it into that run, it's
+unrelated in scope.
 
 ## Current state
 

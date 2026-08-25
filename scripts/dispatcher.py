@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scripts import gemini_fallback, git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
-from scripts.budget_guard import check_tier2_ok
+from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok
 from scripts.config_loader import load_tiers
 from scripts.orchestrator import human_handoff, run_task, verify_task
 from scripts.secrets_loader import load_secrets
@@ -44,10 +44,7 @@ log = get_logger("dispatcher")
 
 RUNS_DIR = Path(__file__).resolve().parent.parent / "logs" / "runs"
 
-# Tier 3 (tier3_escalate) uses DeepSeek, which is more expensive to call
-# during peak billing hours 06:00-10:00 UTC. This window is used to warn
-# (and potentially gate) expensive fix-forward escalations.
-DEEPSEEK_PEAK_HOURS_UTC = (6, 10)
+
 
 BREAKDOWN_SYSTEM_INSTRUCTION = (
     "You manage a team of coding workers. Given ONE PHASE of an execution plan "
@@ -1066,9 +1063,12 @@ def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> di
 def _is_deepseek_peak_hours(now_utc: time.struct_time | None = None) -> bool:
     """True when the given UTC time (default: now) is inside DeepSeek's peak
     billing window (06:00-10:00 UTC). Used by handle_fix_forward to warn about
-    expensive Tier 3 escalations."""
-    now_utc = now_utc or time.gmtime()
-    return DEEPSEEK_PEAK_HOURS_UTC[0] <= now_utc.tm_hour < DEEPSEEK_PEAK_HOURS_UTC[1]
+    expensive Tier 3 escalations. Delegates to
+    budget_guard.check_tier3_peak_hours_ok(), which reads peak windows from
+    config/tiers.yaml and applies weekend (Sat/Sun) exceptions in the
+    America/Los_Angeles timezone -- on weekends the off-peak rate is in
+    effect and this returns False."""
+    return not check_tier3_peak_hours_ok()["ok"]
 
 
 def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> None:
