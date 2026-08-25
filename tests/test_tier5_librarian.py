@@ -139,12 +139,11 @@ class TestTier5Librarian(unittest.TestCase):
             cost_log = Path(tmp) / "cost_log.jsonl"
 
             response = (
-                "```json\n"
-                "{\n"
-                '  "stale": true,\n'
-                '  "updated_content": "<<<<<<< SEARCH\\nOld sentence here.\\n'
-                '=======\\nNew sentence here.\\n>>>>>>> REPLACE"\n'
-                "}\n```"
+                "<<<<<<< SEARCH\n"
+                "Old sentence here.\n"
+                "=======\n"
+                "New sentence here.\n"
+                ">>>>>>> REPLACE\n"
             )
 
             with (
@@ -292,7 +291,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
                     librarian_escalate.llm_client, "execute_llm",
-                    return_value=('{"stale": false}', "ollama", 4, 2),
+                    return_value=('FRESH\n', "ollama", 4, 2),
                 ) as execute_llm,
                 mock.patch.object(librarian_escalate.content_guard, "check_write") as check_write,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
@@ -309,5 +308,374 @@ class TestTier5Librarian(unittest.TestCase):
             self.assertFalse(result["changed"])
 
 
-if __name__ == "__main__":
-    unittest.main()
+    # -- (9) single-call-flow: FRESH verdict --------------------------------
+
+    def test_fresh_verdict_single_call_keeps_target_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "FRESH2.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            original = "# Fresh\n\nAlready up to date.\n"
+            target.write_text(original, encoding="utf-8")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state") as clear_state,
+            ):
+                result = librarian_escalate.run(
+                    "t-fresh-single", "check if guide is stale", str(target), workdir=tmp,
+                )
+
+            execute_llm.assert_called_once()
+            clear_state.assert_called_once_with("t-fresh-single")
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+            self.assertEqual(result["status"], "success")
+            self.assertFalse(result["changed"])
+
+    # -- (10) single-call-flow: SEARCH/REPLACE block ------------------------
+
+    def test_search_replace_block_single_call_updates_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "EDIT.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Edit\n\nOld sentence here.\n", encoding="utf-8")
+
+            response = (
+                "<<<<<<< SEARCH\n"
+                "Old sentence here.\n"
+                "=======\n"
+                "New sentence here.\n"
+                ">>>>>>> REPLACE\n"
+            )
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=(response, "ollama", 12, 7),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state") as clear_state,
+            ):
+                result = librarian_escalate.run(
+                    "t-edit-single", "keep guide fresh", str(target), workdir=tmp,
+                )
+
+            execute_llm.assert_called_once()
+            clear_state.assert_called_once_with("t-edit-single")
+            self.assertEqual(target.read_text(encoding="utf-8"), "# Edit\n\nNew sentence here.\n")
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(result["changed"])
+
+    # -- (11) single-call-flow: new file created from fenced block ----------
+
+    def test_new_file_created_from_fenced_block_single_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "NEW.md"
+            self.assertFalse(target.exists())
+
+            response = "```markdown\n# New Doc\n\nBrand new content.\n```"
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=(response, "ollama", 6, 4),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state") as clear_state,
+            ):
+                result = librarian_escalate.run(
+                    "t-newfile-single", "create new doc", str(target), workdir=tmp,
+                )
+
+            execute_llm.assert_called_once()
+            clear_state.assert_called_once_with("t-newfile-single")
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "# New Doc\n\nBrand new content.\n")
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(result["changed"])
+
+    # -- (12) single-call-flow: unparseable response escalates chain --------
+
+    def test_unparseable_response_escalates_to_next_chain_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "GARBLED.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("stale doc\n", encoding="utf-8")
+            logs_dir = Path(tmp) / "logs"
+
+            responses = [
+                ("not FRESH and not a SEARCH/REPLACE block either", "ollama", 4, 2)
+                for _ in range(3)
+            ]
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm", side_effect=responses,
+                ) as execute_llm,
+                mock.patch.object(orchestrator, "ESCALATIONS_DIR", logs_dir),
+                mock.patch.object(orchestrator, "ESCALATIONS_LOG", logs_dir / "escalations.jsonl"),
+                mock.patch.object(lessons, "LESSONS_PATH", Path(tmp) / "lessons.jsonl"),
+                mock.patch.object(lessons, "HANDOFF_LESSONS_PATH", Path(tmp) / "handoffs.jsonl"),
+            ):
+                result = librarian_escalate.run(
+                    "t-unparseable", "update stale doc", str(target), workdir=tmp,
+                )
+
+            self.assertEqual(execute_llm.call_count, 3)
+            call_models = [c.kwargs["model"] for c in execute_llm.call_args_list]
+            self.assertNotEqual(call_models[0], call_models[1])
+            self.assertEqual(
+                call_models,
+                ["mistral-small:latest", "qwen2.5-coder:14b-instruct-q6_K", "stealth/ox-alpha"],
+            )
+            self.assertEqual(result["status"], "human_handoff")
+            self.assertIsNone(result["resolved_by"])
+
+    # -- (13) staleness pre-check ------------------------------------------
+
+    def _init_git_repo(self, workdir: Path) -> None:
+        """Create a real throwaway git repo with a scripted history."""
+        import subprocess
+
+        def git(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", "-C", str(workdir), *args],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+        git("init")
+        git("config", "user.email", "test@example.com")
+        git("config", "user.name", "Test Runner")
+        git("commit", "--allow-empty", "-m", "initial")
+
+    def _commit_file(self, workdir: Path, relpath: str, content: str, message: str) -> None:
+        import subprocess
+
+        target = workdir / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(workdir), "add", relpath],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(workdir), "commit", "-m", message],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_staleness_precheck_skips_when_doc_newer_than_code(self) -> None:
+        """doc newer than code + clean tree + unnamed -> execute_llm NOT called."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            # Code committed first
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+            # Doc committed after code
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh content.\n", "add doc")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(librarian_escalate.llm_client, "execute_llm") as execute_llm,
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-skip", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_not_called()
+            self.assertEqual(result.get("via"), "staleness_precheck")
+
+    def test_staleness_precheck_calls_model_when_dirty_tree(self) -> None:
+        """Dirty working tree -> execute_llm called exactly once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh.\n", "add doc")
+            # Dirty the tree
+            (workdir / "src" / "main.py").write_text("print('dirty')\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-dirty", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_calls_model_when_code_committed_after_doc(self) -> None:
+        """Code committed after the doc -> execute_llm called exactly once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            # Doc committed first
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh.\n", "add doc")
+            # Code committed after doc
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code after doc")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-code-after", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_calls_model_when_doc_untracked(self) -> None:
+        """Untracked doc (no commits for it) -> execute_llm called exactly once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+            # Doc untracked
+            target = workdir / "docs" / "UNTRA.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Untracked\n\nNew doc.\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-untracked", "review documentation", str(target),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_explicit_mention_force_calls_by_relpath(self) -> None:
+        """Description naming the file by relpath -> execute_llm called once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            self._commit_file(workdir, "doc-other.md", "# Old\n", "add doc")
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh.\n", "add doc fresh")
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-relpath", "update docs/GUIDE.md", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_explicit_mention_force_calls_by_basename(self) -> None:
+        """Description naming the file by basename -> execute_llm called once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh.\n", "add doc")
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-basename", "update GUIDE.md", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_explicit_mention_force_calls_by_stem(self) -> None:
+        """Description naming the file by bare stem -> execute_llm called once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh.\n", "add doc")
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-stem", "update GUIDE to be current", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_fail_open_when_subprocess_raises(self) -> None:
+        """Monkeypatched subprocess raising -> model still called (fail-open)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh.\n", "add doc")
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state"),
+                mock.patch(
+                    "scripts.doc_staleness.subprocess.run",
+                    side_effect=RuntimeError("git exploded"),
+                ),
+            ):
+                result = librarian_escalate.run(
+                    "t-stale-failopen", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()

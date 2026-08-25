@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks
+from scripts import content_guard, edit_blocks, doc_staleness
 from scripts import llm_client
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
@@ -70,6 +70,15 @@ def build_prompt(
     current_contents: str | None = None,
     last_stderr: str = "",
 ) -> str:
+    # No JSON envelope: the model replies either with the single-line FRESH
+    # escape hatch (document already accurate) or with the raw edit blocks /
+    # complete file contents directly. Asking for a JSON wrapper around
+    # SEARCH/REPLACE blocks forced models to double-escape newlines and
+    # routinely lost the "not stale" signal when the JSON failed to parse.
+    fresh_prefix = (
+        "If the document is already accurate for the described change, "
+        "reply with exactly `FRESH` on a single line and nothing else; "
+    )
     parts = []
     parts.append(
         "You are a librarian. Determine if the library file is stale based on the task description. "
@@ -78,36 +87,27 @@ def build_prompt(
         f"File: {target_path.name}\n\n"
     )
     if current_contents is not None:
-        parts.append(f"Current contents of {target_path.name}:\n```\n{current_contents}\n```\n\n")
+        # Existing file: a targeted SEARCH/REPLACE patch, never the whole file.
         parts.append(
-            "Respond with a JSON object in a code fence, like:\n"
-            "```json\n"
-            "{\n"
-            '  "stale": true,\n'
-            '  "updated_content": "<<<<<<< SEARCH\\n(exact existing lines, verbatim, unique in the file)\\n=======\\n(replacement lines)\\n>>>>>>> REPLACE"\n'
-            "}\n```\n"
-            "The file already exists -- `updated_content` must contain ONLY the specific "
-            "change(s) needed, as one or more SEARCH/REPLACE blocks in EXACTLY the format "
-            "above (properly JSON-escaped, e.g. `\\n` for newlines), never the whole file. "
-            "Each SEARCH block's text must match the current file exactly (same whitespace, "
-            "same characters) and must be unique in the file. Do NOT reproduce the whole "
-            "file as `updated_content`. If the file is not stale, set \"stale\": false and "
-            "omit \"updated_content\".\n"
+            fresh_prefix
+            + "otherwise reply with the SEARCH/REPLACE block(s) below.\n\n"
+            + edit_blocks.build_edit_prompt_header(target_path.name)
         )
+        parts.append(f"Current contents of {target_path.name}:\n```\n{current_contents}\n```")
     else:
-        parts.append(f"The file {target_path.name} does not exist yet. If the task requires it, create it with the appropriate contents.\n\n")
+        # Brand-new file: one fenced code block with the complete contents.
         parts.append(
-            "Respond with a JSON object in a code fence, like:\n"
-            "```json\n"
-            "{\n"
-            '  "stale": true,\n'
-            '  "updated_content": "... full new file contents ..."\n'
-            "}\n```\n"
-            "The file is brand new, so `updated_content` is the complete file contents. "
-            "If the file is not stale, set \"stale\": false and omit \"updated_content\".\n"
+            f"The file {target_path.name} does not exist yet. If the task requires it, "
+            "create it with the appropriate contents.\n\n"
+            + fresh_prefix
+            + "otherwise reply with the complete new file contents in a single fenced code "
+            "block (the format `tier4_worker.extract_code()` parses), with no other text."
         )
     if last_stderr:
-        parts.append(f"Previous verification failed:\n```\n{last_stderr}\n```\nPlease fix the file and provide updated contents.\n")
+        parts.append(
+            f"Previous verification failed:\n```\n{last_stderr}\n```\n"
+            "Please fix the file and provide updated contents."
+        )
     return "\n\n".join(parts)
 
 
@@ -161,6 +161,24 @@ def run(
     except ValueError:
         log.error("Target %s is outside workdir %s", target_path, workdir_path)
         return {"status": "error", "resolved_by": None, "reason": f"Target {target_path} is outside workdir {workdir_path}"}
+
+    # Staleness pre-check: skip the model chain entirely when the doc is
+    # already up-to-date for the described change. Zero LLM calls, zero
+    # cost-log entries -- the caller (orchestrator/dispatcher) sees the
+    # ordinary "success" shape and needs no changes.
+    skip, reason = doc_staleness.should_skip_model_call(target_path, workdir, description)
+    if skip:
+        log.info("[%s] Staleness pre-check skipped model call: %s", task_id, reason)
+        clear_state(task_id)
+        return {
+            "status": "success",
+            "resolved_by": "tier_5",
+            "consecutive_failures": 0,
+            "stderr": "",
+            "changed": False,
+            "via": "staleness_precheck",
+            "reason": reason,
+        }
 
     editing = target_path.exists()
     current_contents = target_path.read_text() if editing else None
@@ -234,37 +252,36 @@ def run(
             }
         )
 
-        verdict = defensive_json_parse(response_text)
-        if verdict is None:
-            log.warning("[%s] Failed to parse JSON from %s response", task_id, provider)
-            last_stderr = "Failed to parse JSON verdict from model response"
+        # Strip the response and guard against None/empty.
+        if not isinstance(response_text, str) or not response_text.strip():
+            log.warning("[%s] Model returned no usable text (None or empty)", task_id)
+            last_stderr = "Model returned no usable text (None or empty)"
             continue
+        stripped_response = response_text.strip()
 
-        stale = verdict.get("stale", False)
-        if not stale:
-            log.info("[%s] Library is not stale, nothing to do", task_id)
+        # FRESH escape hatch: the model reports the document is already
+        # accurate for the described change, so there is nothing to write.
+        if stripped_response == "FRESH":
+            log.info("[%s] Library is not stale (FRESH)", task_id)
             clear_state(task_id)
             return {
                 "status": "success", "resolved_by": "tier_5", "consecutive_failures": 0,
-                "stderr": "", "changed": False,
+                "stderr": "", "changed": False, "via": "model_fresh",
             }
 
-        updated_content = verdict.get("updated_content")
-        if not updated_content:
-            log.warning("[%s] Model indicated stale but provided no updated_content", task_id)
-            last_stderr = "Model indicated stale but provided no updated_content"
-            continue
-
-        # Write path handling: edit_blocks for existing files, extract_code for new files
+        # Write path handling: edit_blocks for existing files, extract_code for new files.
+        # The response is the raw edit blocks / complete file contents directly --
+        # there is no JSON envelope to parse; the FRESH line above is the "not
+        # stale" signal.
         if editing:
-            new_content, err = edit_blocks.apply_edit_blocks(current_contents, updated_content)
+            new_content, err = edit_blocks.apply_edit_blocks(current_contents, stripped_response)
             if new_content is None:
                 log.warning("[%s] Edit-block apply failed: %s", task_id, err)
                 last_stderr = f"Could not apply proposed edit: {err}"
                 continue
             code = new_content
         else:
-            code = extract_code(updated_content)
+            code = extract_code(stripped_response)
             if code is None:
                 log.warning("[%s] Response truncated mid-generation", task_id)
                 last_stderr = "Response truncated mid-generation (unterminated code fence); refusing to write incomplete file."

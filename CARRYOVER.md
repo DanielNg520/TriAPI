@@ -150,6 +150,148 @@ see `feedback_target_repo_docs_stay_in_target_repo` memory.
   are internal operational logs, not source/docs, and stuffing them
   unsanitized into a prompt is the root cause both here and in Phase 26.
 
+## Current state (addendum, 2026-08-24 continued)
+
+- **Librarian improvements run `20260824-132910-a7b69b` is `stopped_on_failure`
+  after Phase 1 (both items landed clean, Tier 4) and Phase 2's single item
+  (`scripts/doc_staleness.py`) hit `human_handoff` after exhausting Tier 4 →
+  3 → 2 → 1 — all four independently produced the same bug.** Root cause
+  (confirmed by reading the generated file, not hand-fixed): the epoch-
+  collision handling in `should_skip_model_call()`'s scan loop treats "a
+  commit landed at the same UNIX-epoch second as the doc's last commit" as
+  "this commit touched the doc" and discards it (`if current_epoch ==
+  doc_commit_epoch: continue`). Git's commit timestamp has 1-second
+  granularity, so two *different* commits made in quick succession — the
+  test harness's own `git commit` calls, and realistically TriAPI's own
+  automated commits too — can share an epoch even though only one touched
+  the doc. That silently drops a genuine non-doc commit from the scan,
+  leaving `found_non_doc_commit = False` and forcing permanent fail-open
+  (never skips the model call) in exactly the fast-commit scenario the
+  pre-check exists to handle. Fail-open itself is safe (matches spec:
+  "ANY ... unexpected ... -> fail open"), so this isn't unsafe, just makes
+  the whole feature inert whenever commits are fast/batched. Fix should
+  distinguish "commit touched the doc" (check the file list, not the
+  epoch) from "commit epoch ties the doc's epoch" — the same-epoch guard
+  needs to check membership of `relpath_str` in that commit's file list,
+  not epoch equality. Route via `triapi plan`/self-fix against
+  `scripts/doc_staleness.py`, don't hand-patch. Once fixed, resume/retry
+  run `20260824-132910-a7b69b`'s Phase 2 item (still awaiting Phases 3-9:
+  wiring, tests, PLAN.md/AGENTS.md updates).
+
+## Current state (addendum 2, 2026-08-24 continued)
+
+- **Run `20260824-132910-a7b69b` resumed past the Phase 2 `doc_staleness.py`
+  bug on retry (a fresh Tier 1/Claude attempt got it right this time,
+  6/9 steps done) and hit a NEW `human_handoff` at Phase 4** (regression
+  tests in `tests/test_tier5_librarian.py`). Root cause here is a plan-
+  breakdown gap, not a code bug: **two pre-existing tests —
+  `test_advisory_no_change_verdict_returns_changed_false_without_writing`
+  and `test_success_path_lands_via_edit_block_with_local_billing` — still
+  mock the OLD JSON-envelope response format (`'{"stale": false}'`) that
+  Phase 1 deliberately eliminated.** Against the new single-call plain-
+  text `run()`, that mocked JSON string correctly fails to parse as either
+  `FRESH` or a SEARCH/REPLACE block, so `run()` (correctly, per the new
+  design) escalates through the full chain and the test's
+  `execute_llm.assert_called_once()` fails (actually called 3x). Phase
+  4's item description only said to *add* new single-call-flow tests, not
+  to update/remove these two now-incompatible old ones — that's the gap.
+  4 escalation attempts (Tier 4→3→2→1) apparently thrashed on this,
+  producing one genuinely broken syntax (`SyntaxError: unterminated
+  string literal` at old line 358) that a later attempt already
+  overwrote — current file parses clean (`ast.parse` succeeds), so no
+  cleanup needed there. Resumed dispatch again after documenting this;
+  if it's still stuck next session, the fix is either (a) let a tier
+  finally rewrite those two tests for the new format on its own, or (b)
+  if it keeps thrashing, a small follow-up `triapi plan` item explicitly
+  naming those two tests for update would remove the ambiguity — draft
+  via the pipeline, don't hand-edit the test file directly.
+
+## Current state (addendum 3, 2026-08-24 continued)
+
+- **New systemic bug found 2026-08-24, NOT fixed (queue it, don't hand-
+  patch): `orchestrator.run_task()`'s Tier 4→3→2→1 escalation can declare
+  `human_handoff` even when the FINAL tier attempt's write genuinely
+  satisfies the item's own `build_cmd`.** Confirmed live on run
+  `20260824-132910-a7b69b`'s Phase 4 item (`tests/test_tier5_librarian.py`
+  regression tests): after sharpening the item's description (see prior
+  addendum) and resuming, the run again reported `human_handoff` with a
+  "Tier 4 -> Tier 3 -> Tier 2 -> Tier 1" exhaustion reason — but the file
+  actually left on disk was completely correct: re-running the exact
+  recorded `build_cmd` (`PYTHONPATH=. python3 -m unittest
+  tests.test_tier5_librarian -v`) by hand passed clean, 14/14 tests green,
+  including both previously-stale tests now correctly updated. So the
+  last tier's write did succeed against its own acceptance check, but
+  `run_task`'s own bookkeeping still escalated to human_handoff instead of
+  returning success — most likely a consecutive-failure-threshold check
+  firing on a stale counter without re-validating the final attempt's
+  actual build result, similar in spirit to the epoch-collision bug found
+  earlier this session but in a different module (root cause not yet
+  isolated to a specific line — needs a read through `tier1_escalate.py`'s
+  retry loop, or wherever the final tier's success/failure gets folded
+  into the human_handoff decision). **Workaround applied this session
+  (with explicit user sign-off, since it required overriding the run's
+  own recorded verdict): manually corrected `logs/runs/
+  20260824-132910-a7b69b.json`'s last result entry from `human_handoff` to
+  `success` (resolved_by: tier_1, content_hash recomputed via
+  `regression_guard.hash_file()`), since the target file was independently
+  re-verified against its own build_cmd first.** Route the actual fix
+  through `triapi plan`/self-fix against `scripts/orchestrator.py` (and
+  whichever `tierN_escalate.py` turns out to hold the stale-counter logic)
+  once this run completes — don't hand-patch.
+
+## Current state (addendum 4, 2026-08-24 continued)
+
+- **Run `20260824-132910-a7b69b` reached 8/9 (Phases 1-4 fully done and
+  verified — full regression gate green) and stalled on Phase 5's PLAN.md
+  update.** All three of `tier_5_librarian`'s escalation legs failed:
+  local legs (`mistral-small`/Ollama fallback) can't fit `PLAN.md` at
+  188,334 chars (well over Tier 4's 73,728-char ceiling — same standing
+  ceiling problem as [[feedback_no_files_at_tier4_ceiling]]), and the
+  OpenRouter fallback leg hit the already-queued `403 Forbidden` content-
+  filter false-positive (see priority #2 in "Next up" below) — this is a
+  second, independent live confirmation of that bug against a different
+  digit-heavy file (`PLAN.md`'s many `run_id`/timestamp strings), not a
+  new bug. This item is genuinely blocked on two already-queued fixes
+  (the OpenRouter phone-regex sanitizer, and PLAN.md's own oversize —
+  which is also the subject of the already-queued "consolidate historical
+  PLAN.md content out to target-repo docs" follow-on). Not resolved this
+  session; run left at `stopped_on_failure` on this item pending user
+  direction on how to proceed (skip Phase 5 for now vs. wait for the
+  OpenRouter/PLAN.md-size fixes to land first).
+
+## Current state (addendum 5, 2026-08-24 continued)
+
+- **Priority #2 (OpenRouter fixes), first attempt (`20260824-162206-4ae0a0`)
+  hit a genuine chicken-and-egg failure: its own breakdown call (Tier 2/
+  Gemini, routed through OpenRouter) got `403 Forbidden` because the
+  approved plan text itself contained literal phone-number-shaped example
+  strings (e.g. a fake pager number as a test fixture) — a fourth live
+  confirmation of the exact bug being fixed, this time tripped by the fix's
+  own plan. That run is abandoned/stuck (`stopped_on_failure`, 0 phases,
+  still sitting in `AGENTS.md`'s plan-gate block — harmless to leave, next
+  plan used `--refactor` to supersede it). Redrafted as
+  `20260824-164451-2b7635`** with an explicit constraint in the prompt
+  telling the planner not to emit literal phone-shaped digit strings
+  anywhere in the plan/test text (describe the format structurally
+  instead) — this one's breakdown succeeded and it's now dispatching.
+- **Priority #2 now dispatching: run `20260824-164451-2b7635`**, plan
+  approved and running in background.
+  Bundles all three queued OpenRouter/dispatch bugs into one 4-phase plan:
+  (1) phone-number content-filter false-positive fix in
+  `llm_client._sanitize_for_openrouter_content_filter()` (new
+  `_PHONE_LIKE_RE`/`_redact_phone_like()`, scoped to not mangle
+  run_id/task_id-shaped strings, hex hashes, or line numbers); (2)
+  `dispatcher._is_deepseek_peak_hours()` now delegates to
+  `budget_guard.check_tier3_peak_hours_ok()` instead of its stale
+  hardcoded 06:00-10:00-UTC-only duplicate; (3) audit of
+  `librarian_escalate.py`'s `fallback_openrouter` endpoint resolution
+  (plan's own read concluded it's already correct via
+  `tier_1_planner`'s config block, not the buggy pattern
+  `probe_models()` had — a regression test asserting the resolved URL
+  either way is still item 3's deliverable). Phase 4 does the full
+  regression gate + PLAN.md/AGENTS.md doc updates. Check
+  `triapi status 20260824-162206-4ae0a0` for progress if resuming.
+
 ## Next up
 
 **Priority order, per user directive 2026-08-24: finish the librarian
@@ -157,43 +299,52 @@ improvements first, then the OpenRouter fixes, then the architecture
 items.** The Virtual Codebase Plan is separate — it's on hold for the user
 specifically, not part of this sequence.
 
-1. **Librarian improvements — plan drafted 2026-08-24, run
-   `20260824-125438-2f1aeb`, awaiting approval/dispatch.** Two changes to
-   `scripts/librarian_escalate.py`, motivated by real live-run pain landing
-   Tier 5: (a) drop the JSON-envelope-around-a-SEARCH/REPLACE-diff prompt
-   format — every other tier gets the edit-block format directly via
-   `edit_blocks.build_edit_prompt_header()`, but the librarian nests a diff
-   inside a JSON string, which real runs against `mistral-small:latest`
-   struggled to produce reliably; redesign as two plain-text steps (a
-   minimal staleness check, then a plain edit-block prompt only if stale —
-   no JSON anywhere) instead. (b) add a cheap, non-LLM staleness pre-check
-   (git-based heuristic) ahead of Tier 5 so a real model call isn't spent
-   on every doc-shaped target by default — advisory/no-op-safe, never
-   overrides an explicit instruction to check a specific file. Draft via
-   `triapi plan --project-dir`, don't hand-build.
-2. **OpenRouter fixes — three items, bucketed together:**
-   - `librarian_escalate.py`'s own OpenRouter-fallback-leg endpoint
-     resolution wasn't directly audited for the same `tier_config.get
-     ('endpoint')`-is-always-`None` risk pattern the `probe_models()` fix
-     addressed elsewhere (2026-08-24) — inspect by reading, not by
-     assuming it's fine.
-   - Stale duplicate DeepSeek peak-hours check: `budget_guard.
-     check_tier3_peak_hours_ok()` is the real gate and is correct (Beijing
-     weekend off-peak included); `dispatcher._is_deepseek_peak_hours()` is
-     a separate, older, advisory-only duplicate that only checks a single
-     hardcoded `06:00-10:00 UTC` window with no weekend exception. Fix:
-     `dispatcher.py` should call the real gate instead of maintaining its
-     own copy.
-   - OpenRouter's content filter false-positives on `[PHONE]` for TriAPI's
-     own digit-heavy log/doc content (run_ids, timestamps) — confirmed
-     live, can wedge an item's *entire* escalation ladder (Tier 4 AND
-     Tier 2, since both are OpenRouter-routed and share the same
-     unsanitized `context_blob`), not just Tier 4. `llm_client.
-     _sanitize_for_openrouter_content_filter()` only strips email-shaped
-     tokens. Fix: add a phone-number-shaped regex case (careful not to
-     mangle legitimate digit-heavy content like hex hashes/line numbers),
-     and reconsider whether `logs/*.log`/`logs/*.jsonl` should be eligible
-     as raw LLM context at all.
+1. **Librarian improvements: DONE.** Run `20260824-132910-a7b69b`
+   completed Phases 1-4 (single-call redesign, `doc_staleness.py`, wiring,
+   full regression coverage — all verified green). Only Phase 5 (append a
+   dated phase block to `PLAN.md`) is still stuck, blocked on the same
+   OpenRouter content-filter bug item 2 below is fixing, applied to
+   `PLAN.md` itself (188K chars, also over the Tier 4 context ceiling) —
+   retry `triapi dispatch 20260824-132910-a7b69b` once item 2 ships.
+   `AGENTS.md` bullet updates for this work are not yet done either
+   (bundled with the same stuck Phase 5).
+2. **OpenRouter fixes: IN PROGRESS, immediate next action for the new
+   session.** Run `20260824-164451-2b7635` (plan approved, 4 phases, 9
+   items) is dispatching the same 3 bugs listed below. Status as of
+   end of last session: **Phase 1's first item just got unblocked and is
+   ready to redispatch** — `triapi dispatch 20260824-164451-2b7635`. Two
+   real obstacles hit and resolved so far, both live confirmations of bug
+   (c) below:
+   - The plan's *own* breakdown call 403'd because an earlier draft's
+     generated text contained a literal phone-shaped test-fixture string
+     — redrafted with an explicit "no literal phone-shaped strings in
+     plan/test text" constraint (worked; this is run `2b7635`, superseding
+     abandoned/stuck run `20260824-162206-4ae0a0` which can be ignored).
+   - Phase 1's first item then crashed Tier 4 with the *same* 403, this
+     time because Tier 2's breakdown mis-extracted `context_files` from
+     the item's own prose (pulled `logs/cost_log.jsonl`, `PLAN.md`, and a
+     bogus `file.py` that were only mentioned as *examples* in the
+     description, not real context needed). Fixed by editing
+     `logs/runs/20260824-164451-2b7635.json`'s Phase 1 item to
+     `context_files: []` directly (established workaround pattern from
+     earlier this session) — not yet redispatched after this edit.
+   - The three bugs being fixed: (a) `librarian_escalate.py`'s
+     `fallback_openrouter` endpoint resolution — plan's own read concluded
+     it's already correct via `tier_1_planner`'s config block, a
+     regression test is the only deliverable; (b) `dispatcher.py`'s stale
+     duplicate DeepSeek peak-hours check — should delegate to
+     `budget_guard.check_tier3_peak_hours_ok()` instead of its own
+     hardcoded `06:00-10:00 UTC`-only copy; (c) OpenRouter's content
+     filter false-positives on phone-shaped digit sequences — add
+     `_PHONE_LIKE_RE`/redaction to `llm_client.
+     _sanitize_for_openrouter_content_filter()`, careful not to mangle
+     TriAPI's own run_id/task_id format or hex hashes.
+   - **Also check the self-fix queue**: `20260824-165500-90f029` was
+     auto-captured from an earlier transient `429` rate-limit crash on
+     this same run (before the redispatch that hit the 403 above) — very
+     likely the same "transient OpenRouter flakiness, don't approve" noise
+     pattern as two already-flagged stale drafts elsewhere in this file;
+     worth a quick confirm-and-skip rather than approving it.
 3. **Architecture items** (both already flagged as TriAPI self-feature
    work — plan/dispatch through the pipeline, don't hand-build):
    - A named backend registry (`backends:` section in `tiers.yaml`

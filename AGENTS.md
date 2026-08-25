@@ -155,3 +155,206 @@ there.
 
 No changes to `config/tiers.yaml` (the model chain and thresholds stay exactly as configured), no secrets/sops involvement, and no git push/commit steps — the goal didn't ask for any.
 <!-- triapi:plan run_id=20260824-132910-a7b69b end -->
+
+<!-- triapi:plan run_id=20260824-162206-4ae0a0 start -->
+## TriAPI Plan (run 20260824-162206-4ae0a0, appended 2026-08-24)
+
+## Execution Plan — Fix 3 OpenRouter/dispatch bugs (content-filter phone false-positive, stale peak-hours duplicate, endpoint-audit)
+
+### 1. Bug 1 — OpenRouter phone-number content-filter false positive
+
+- [ ] **`scripts/llm_client.py`**: after the existing `_EMAIL_LIKE_RE = re.compile(...)` (line 25) and its `_sanitize_for_openrouter_content_filter()` (lines 28-29), add a new module-level regex and helper:
+  ```python
+  # OpenRouter's content filter also 403s on phone-number-shaped digit
+  # sequences (confirmed live 2026-08-24 on both a Tier 4 log-file-context
+  # call and a Tier 5 PLAN.md fallback call, tripping a TriAPI run_id/
+  # timestamp like "20260810-092820-8cbeaf" as [PHONE]). Scoped to genuine
+  # NANP-style phone shapes only (optional +1/1 prefix, then 3-3-4 digit
+  # groups separated by hyphen/dot/space or parens) via mandatory \b
+  # anchors and a mandatory separator between every group -- this does NOT
+  # match TriAPI's own run_id/task_id format (YYYYMMDD-HHMMSS-hex, e.g.
+  # "20260810-092820-8cbeaf": 8/6/6-char groups, no 3-3-4 grouping, and the
+  # trailing hex group isn't pure digits), bare hex hashes, or line-number
+  # references, since none of those present as bordered 3-3-4 digit groups.
+  _PHONE_LIKE_RE = re.compile(
+      r"\b(?:\+?1[-.\s])?(?:\(\d{3}\)[-.\s]?|\d{3}[-.\s])\d{3}[-.\s]\d{4}\b"
+  )
+
+
+  def _redact_phone_like(match: "re.Match[str]") -> str:
+      """Duplicates the first separator char in a phone-shaped match,
+      breaking the exact digit-grouping the filter keys on while staying
+      human-readable -- mirrors the "@" -> "(at)" email transform above."""
+      s = match.group(0)
+      for i, ch in enumerate(s):
+          if ch in "-. ":
+              return s[:i] + ch + s[i:]
+      return s
+  ```
+  Then change `_sanitize_for_openrouter_content_filter` (lines 28-29) from a single `.sub` return to:
+  ```python
+  def _sanitize_for_openrouter_content_filter(text: str) -> str:
+      text = _EMAIL_LIKE_RE.sub(lambda m: m.group(0).replace("@", "(at)"), text)
+      text = _PHONE_LIKE_RE.sub(_redact_phone_like, text)
+      return text
+  ```
+  Verify: `python3 -m py_compile scripts/llm_client.py`
+
+- [ ] **`tests/test_branch_features.py`**: add a new test class, placed near the existing `LlmClientOpenAIErrorBodyTests` class (around line 670), with zero network calls:
+  ```python
+  class LlmClientPhoneSanitizeTests(unittest.TestCase):
+      def test_phone_number_shaped_string_is_sanitized(self) -> None:
+          original = "Call the on-call line at 555-123-4567 for the pager."
+          sanitized = llm_client._sanitize_for_openrouter_content_filter(original)
+          self.assertNotIn("555-123-4567", sanitized)
+
+      def test_run_id_timestamp_format_is_not_mangled(self) -> None:
+          original = "task_id 20260810-092820-8cbeaf failed on the third attempt"
+          sanitized = llm_client._sanitize_for_openrouter_content_filter(original)
+          self.assertEqual(original, sanitized)
+
+      def test_hex_hash_and_line_number_are_not_mangled(self) -> None:
+          original = "commit a1b2c3d4e5f6 broke line 4567 of parser.cpp"
+          sanitized = llm_client._sanitize_for_openrouter_content_filter(original)
+          self.assertEqual(original, sanitized)
+  ```
+  Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features.LlmClientPhoneSanitizeTests -v`
+
+### 2. Bug 2 — `dispatcher.py`'s stale duplicate peak-hours check
+
+- [ ] **`scripts/dispatcher.py`**: change the import on line 37 from `from scripts.budget_guard import check_tier2_ok` to `from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok`; delete the now-unused `DEEPSEEK_PEAK_HOURS_UTC = (6, 10)` constant on line 50; replace the body of `_is_deepseek_peak_hours()` (lines 1066-1071) with:
+  ```python
+  def _is_deepseek_peak_hours() -> bool:
+      """True when Tier 3 (DeepSeek) is inside a peak billing window right
+      now. Delegates to budget_guard.check_tier3_peak_hours_ok() -- the
+      same gate that actually blocks real Tier 3 dispatch -- instead of
+      maintaining a second, stale copy: the old copy here hardcoded a
+      single 06:00-10:00 UTC window with no weekend exception and never
+      read tiers.yaml's real window list, so it could warn about expensive
+      peak pricing on an actual off-peak weekend and silently missed the
+      other real peak window (01:00-04:00 UTC).
+      """
+      return not check_tier3_peak_hours_ok()["ok"]
+  ```
+  Leave the caller at (former) line 1082 (`if _is_deepseek_peak_hours():` inside `handle_fix_forward`) and the `import time` at line 27 untouched — `time` is still used elsewhere in the file. Verify: `python3 -m py_compile scripts/dispatcher.py`
+
+- [ ] **`tests/test_branch_features.py`**: add a new test class immediately after the existing `Tier3PeakHoursTests` class (ends at line 668, before `OrchestratorTier3PeakSkipTests` at line 730), reusing that class's exact mocking pattern (`mock.patch("scripts.budget_guard.load_tiers", return_value={})` + `mock.patch("scripts.budget_guard.datetime")`, `fake_dt.now.return_value = <utc_dt>`) so the test exercises real `budget_guard` peak-window logic through the delegation, not a mocked return value:
+  ```python
+  class DispatcherPeakHoursDelegationTests(unittest.TestCase):
+      """Regression for removing dispatcher.py's stale, hardcoded
+      06:00-10:00-UTC-only copy of the peak-hours check in favor of
+      delegating to budget_guard.check_tier3_peak_hours_ok()."""
+
+      def _check_at(self, utc_dt: datetime) -> bool:
+          with (
+              mock.patch("scripts.budget_guard.load_tiers", return_value={}),
+              mock.patch("scripts.budget_guard.datetime") as fake_dt,
+          ):
+              fake_dt.now.return_value = utc_dt
+              return dispatcher._is_deepseek_peak_hours()
+
+      def test_weekend_in_old_hardcoded_window_is_not_flagged(self) -> None:
+          # Aug 23, 2026 is a Sunday in Beijing Time, 08:00 UTC -- inside the
+          # OLD hardcoded 06:00-10:00 window, which had no weekend exception
+          # and would have wrongly warned "may be expensive" here.
+          self.assertFalse(self._check_at(datetime(2026, 8, 23, 8, 0, tzinfo=timezone.utc)))
+
+      def test_first_real_peak_window_is_flagged(self) -> None:
+          # 01:00-04:00 UTC is a real peak window the OLD hardcoded copy
+          # never recognized at all (false negative).
+          self.assertTrue(self._check_at(datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)))
+
+      def test_second_real_peak_window_is_flagged(self) -> None:
+          self.assertTrue(self._check_at(datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc)))
+
+      def test_weekday_off_peak_is_not_flagged(self) -> None:
+          self.assertFalse(self._check_at(datetime(2026, 8, 24, 13, 0, tzinfo=timezone.utc)))
+  ```
+  Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features.DispatcherPeakHoursDelegationTests -v`
+
+### 3. Bug 3 — Audit `librarian_escalate.py`'s OpenRouter fallback endpoint resolution
+
+- [ ] **`scripts/librarian_escalate.py`** (read-only audit, no code change expected): confirm lines 212-214 resolve the `fallback_openrouter` leg's endpoint via `endpoint = config.get("tier_1_planner", {}).get("endpoint")` (resolves to the real `"https://openrouter.ai/api/v1"` from `config/tiers.yaml`'s `tier_1_planner` block) — **not** the buggy `tier_config.get("endpoint")` pattern that was always `None` on `tier_5_librarian` itself (the bug `probe_models()` had, fixed 2026-08-24). If this confirms clean, make no code change. If it turns out `tier_config.get("endpoint")` is used instead, fix it the same way `probe_models()` was fixed: `endpoint = config.get("tier_1_planner", {}).get("endpoint")`. Verify: `grep -n 'fallback_openrouter\|endpoint =' scripts/librarian_escalate.py`
+
+- [ ] **`tests/test_tier5_librarian.py`**: add a new test method to `TestTier5Librarian`, placed after `test_escalation_order_is_primary_then_fallback_local_then_openrouter` (ends around line 227) and before the `-- (6) chain exhaustion` section (line 229), asserting the exact resolved URL rather than just a substring:
+  ```python
+      # -- (5b) fallback_openrouter endpoint resolution audit -----------------
+
+      def test_fallback_openrouter_endpoint_resolves_to_real_url_not_none(self) -> None:
+          """Direct regression guard for the endpoint-resolution bug class
+          probe_models() had (tier_config.get('endpoint') always None) --
+          audited 2026-08-25 and confirmed librarian_escalate.py already
+          reads it correctly via tier_1_planner's config block."""
+          with tempfile.TemporaryDirectory() as tmp:
+              target = Path(tmp) / "docs" / "STALE3.md"
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text("stale doc\n", encoding="utf-8")
+              responses = [_fake_response("not JSON, sorry") for _ in range(3)]
+
+              with (
+                  mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                  mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                  mock.patch.object(llm_client.requests, "post", side_effect=responses) as post,
+                  mock.patch.object(orchestrator, "ESCALATIONS_DIR", Path(tmp) / "logs"),
+                  mock.patch.object(orchestrator, "ESCALATIONS_LOG", Path(tmp) / "logs" / "esc.jsonl"),
+                  mock.patch.object(lessons, "LESSONS_PATH", Path(tmp) / "lessons.jsonl"),
+                  mock.patch.object(lessons, "HANDOFF_LESSONS_PATH", Path(tmp) / "handoffs.jsonl"),
+              ):
+                  librarian_escalate.run("t-endpoint-audit", "update stale doc", str(target), workdir=tmp)
+
+              self.assertEqual(post.call_count, 3)
+              openrouter_url = post.call_args_list[2].args[0]
+              self.assertIsNotNone(openrouter_url)
+              self.assertEqual(openrouter_url, "https://openrouter.ai/api/v1/chat/completions")
+  ```
+  Verify: `PYTHONPATH=. python3 -m unittest tests.test_tier5_librarian.TestTier5Librarian.test_fallback_openrouter_endpoint_resolves_to_real_url_not_none -v`
+
+### 4. Full regression gate and doc updates
+
+- [ ] Run the repo's full regression gate covering both suites: `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v` — confirm all tests pass, zero SKIPPED, and the count includes the 3 new phone-sanitize tests, 4 new peak-hours-delegation tests, and 1 new endpoint-audit test.
+
+- [ ] **`PLAN.md`**: append a new phase section at the end of the file (next sequential number is **Phase 30**, one past the last real entry, "Phase 29: Tier 5 — librarian tier"), titled `## Phase 30: Three OpenRouter/dispatch bugs from live sessions (2026-08-25)`, documenting: (1) the phone-number content-filter false positive and the `_PHONE_LIKE_RE`/`_redact_phone_like()` fix in `llm_client.py`; (2) `dispatcher._is_deepseek_peak_hours()` now delegating to `budget_guard.check_tier3_peak_hours_ok()` instead of its stale hardcoded-window duplicate, with the removed `DEEPSEEK_PEAK_HOURS_UTC` constant noted; (3) the `librarian_escalate.py` OpenRouter-endpoint audit result (confirmed already correct, no code change, regression test added) — this also resolves the "Not yet resolved, queued for a future pass" note at the end of Phase 29. Include a `**Verification**:` line with the full-suite command from the step above and the new test count. Verify: `tail -60 PLAN.md`
+
+- [ ] **`AGENTS.md`**: make three small, targeted additions (not rewrites) to keep the file's growth minimal — it is currently ~71,019 chars against the repo's 73,728-char ceiling, so total additions across all three edits must stay well under ~2,000 chars:
+  - Append to the end of the `llm_client.py` bullet (line 63, after the `probe_models()` sentence): a clause noting `_sanitize_for_openrouter_content_filter()` (2026-08-25 fix) now also redacts phone-number-shaped digit sequences via `_PHONE_LIKE_RE`/`_redact_phone_like()`, scoped to leave run_id/task_id format, hex hashes, and line numbers untouched.
+  - Append to the end of the `dispatcher.py` bullet (line 88): a clause noting `_is_deepseek_peak_hours()` (2026-08-25 fix) now delegates to `budget_guard.check_tier3_peak_hours_ok()` instead of a stale hardcoded-window duplicate.
+  - Append to the end of the `librarian_escalate.py` bullet (line 105): a clause noting the `fallback_openrouter` endpoint-resolution audit (2026-08-25) confirmed it already reads `config.get("tier_1_planner", {}).get("endpoint")` correctly — no change needed.
+  Verify: `wc -c AGENTS.md` — must print a value under 73728; if it doesn't, trim the smallest amount of pre-existing lower-value narrative elsewhere in the file (per the file's own standing doc-hygiene rule) rather than shortening these three additions.
+
+No `git` commit/push steps are included — the goal didn't ask for one. No changes to `config/tiers.yaml`'s schema, per the goal's explicit constraint.
+<!-- triapi:plan run_id=20260824-162206-4ae0a0 end -->
+
+<!-- triapi:plan run_id=20260824-164451-2b7635 start -->
+## TriAPI Plan (run 20260824-164451-2b7635, appended 2026-08-24)
+
+# Plan: Fix three OpenRouter/dispatch bugs
+
+## Phase 1 — Bug 1: phone-shaped digit strings trip OpenRouter's content filter
+
+- [ ] `scripts/llm_client.py`: in `_sanitize_for_openrouter_content_filter()` (currently only handles email-like tokens via `_EMAIL_LIKE_RE`, lines ~25-29), add a second module-level compiled regex, e.g. `_PHONE_LIKE_RE`, matching NANP-style phone-shaped sequences structurally: an optional leading `+`/country-code group, then three digits, a separator (space/dot/hyphen, or the three digits wrapped in parentheses), three digits, a separator, four digits — i.e. the general shape "3 digits / sep / 3 digits / sep / 4 digits", optionally preceded by a 1-3 digit country code. Anchor on word boundaries and require the separators to actually be present (a single unbroken 10-digit run with no separators should NOT match, since that's indistinguishable from a generic ID/hash and TriAPI's own `task_id`/`run_id` values are digit-heavy). Explicitly do NOT match: hex hashes (contain a-f letters, already excluded since the regex is digits+separators only), bare line-number references like `file.py:123`, or TriAPI's own run_id format (8-digit-date + 6-digit-time + 6-char-hex, e.g. `20260824-153000-a1b2c3`, which uses `-` as separator between an 8-digit and 6-digit group, not the 3-3-4 grouping — verify your regex's digit-group-length requirements reject this shape). In `_sanitize_for_openrouter_content_filter()`, apply `_PHONE_LIKE_RE.sub(...)` after the existing email substitution, replacing each match with a redaction placeholder (e.g. replacing the separators, mirroring the email fix's `@` → `(at)` style transform — e.g. replace each separator character with `-REDACTED-` or similar, don't just delete it, so length/structure changes enough to defeat the filter but the transform is visible in logs). Add a short comment above the new regex (matching the existing comment style at lines 16-24) explaining why this was added, citing today's date and the three live-blocked cases (Tier 4 context from logs/cost_log.jsonl, tier_5_librarian's OpenRouter fallback leg routing PLAN.md, and this very plan's own breakdown call being blocked by an earlier draft's literal test fixture).
+  - Verify: `python3 -m py_compile scripts/llm_client.py`
+
+- [ ] `tests/test_branch_features.py` (or a new file if it's near/at the char ceiling — check with `wc -c tests/test_branch_features.py` first and use `tests/test_llm_client_sanitize.py` instead if it's already large): add a test class/methods for `_sanitize_for_openrouter_content_filter()`'s new phone-shaped case. Zero-network, no real network calls — this only tests the regex/substitution function directly, no HTTP mocking needed. Build the fake phone-shaped test input at runtime by concatenating separate literal digit-group pieces (e.g. `"555" + "-" + "555" + "-" + "5555"` or repeated same-digit groups like `"000" + "-" + "000" + "-" + "0000"`), never as one literal real-looking string in the source. Assert: (a) the phone-shaped input is changed by `_sanitize_for_openrouter_content_filter()` (result != input, and the original 3-3-4 grouping is no longer intact as a match for the same regex re-applied), (b) a TriAPI run_id/timestamp-shaped input built the same runtime-concatenation way (e.g. `"20260824" + "-" + "153000" + "-" + "a1b2c3"`) is returned unchanged, (c) an ordinary hex hash string (e.g. `"deadbeef1234"`) is returned unchanged.
+  - Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v` (or the new test file's dotted path if split out) — confirm no `SKIPPED`, only real `PASS`/`FAIL`, per this repo's standing rule about fake skip-based tests.
+
+## Phase 2 — Bug 2: dispatcher.py's stale duplicate peak-hours check
+
+- [ ] `scripts/dispatcher.py`: replace `_is_deepseek_peak_hours()`'s body (currently lines 1066-1071, using the hardcoded module-level `DEEPSEEK_PEAK_HOURS_UTC = (6, 10)` constant at line 50 and a naive `time.gmtime()` hour-range check with no weekend exception) so it calls `budget_guard.check_tier3_peak_hours_ok()` and derives its boolean return from that result's `"ok"` key — specifically, `_is_deepseek_peak_hours()` should return `True` (peak, i.e. "warn") when `check_tier3_peak_hours_ok()["ok"]` is `False`, and `False` (off-peak / no warning) when `["ok"]` is `True`, since `check_tier3_peak_hours_ok()`'s "ok" means "safe to call now" while `_is_deepseek_peak_hours()`'s `True` means "in the expensive window." Delete the now-dead `DEEPSEEK_PEAK_HOURS_UTC` module constant (line 50) and its now-unused `time.gmtime()`-based comparison once nothing references it — check with `grep -n "DEEPSEEK_PEAK_HOURS_UTC" scripts/dispatcher.py` after the edit to confirm zero remaining references. Keep the function's existing signature/call site in `handle_fix_forward()` (line ~1082, the `if _is_deepseek_peak_hours():` warning-log branch) untouched — this is an advisory-only warning path, not a gate, and must remain so; do not make `handle_fix_forward()` block on this result. Update the function's docstring (currently says "billing window (06:00-10:00 UTC)") to note it now delegates to `budget_guard.check_tier3_peak_hours_ok()` and reflects both configured windows plus the weekend exception, not a single hardcoded window.
+  - Verify: `python3 -m py_compile scripts/dispatcher.py`
+
+- [ ] `tests/test_branch_features.py`: add a regression test (near the existing `check_tier3_peak_hours_ok` mocking patterns already in this file at lines ~641, ~770, ~857) proving `dispatcher._is_deepseek_peak_hours()` now agrees with `budget_guard.check_tier3_peak_hours_ok()` rather than using its own stale window/weekend logic. Cover at minimum: (a) a weekend case — mock `budget_guard.check_tier3_peak_hours_ok` (patched at `scripts.dispatcher.check_tier3_peak_hours_ok` or however dispatcher imports it — check the actual import line first with `grep -n "check_tier3_peak_hours_ok" scripts/dispatcher.py`) to return `{"ok": True, "reason": "weekend off-peak rate in effect"}`, then assert `dispatcher._is_deepseek_peak_hours()` returns `False` (no false "may be expensive" warning) — this is the case the old hardcoded logic got wrong, since it had no weekend exception at all; (b) a real peak-window case — mock the same function to return `{"ok": False, "reason": ...}` for one of `tiers.yaml`'s two actual configured windows (e.g. the 06:00-10:00 UTC window), assert `dispatcher._is_deepseek_peak_hours()` returns `True`; (c) confirm `dispatcher._is_deepseek_peak_hours()` actually calls the mocked function (assert it was called), proving delegation rather than a parallel independent implementation.
+  - Verify: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v` — no `SKIPPED`.
+
+## Phase 3 — Bug 3: audit librarian_escalate.py's OpenRouter fallback-leg endpoint resolution
+
+- [ ] Read-only audit (no code change expected): confirm `scripts/librarian_escalate.py`'s `provider == "openrouter"` branch (line 213: `endpoint = config.get("tier_1_planner", {}).get("endpoint")`) already resolves the endpoint correctly — `config/tiers.yaml`'s `tier_1_planner` block (line 13) has a real static `endpoint: "https://openrouter.ai/api/v1"` key (unlike the `tier_5_librarian`/`probe_models()` case fixed 2026-08-24, where `tier_config.get("endpoint")` was always `None` because that tier's endpoint isn't a static config key at all — it resolves from the `ollama_host` secret at runtime). Since `tier_1_planner.endpoint` genuinely is a static, present config key, `librarian_escalate.py`'s existing `config.get("tier_1_planner", {}).get("endpoint")` call is the correct pattern here, not the buggy one — confirm this by reading both blocks side by side (`sed -n '1,20p' config/tiers.yaml` for `tier_1_planner`, and `scripts/llm_client.py`'s `probe_models()` lines 244-250 for how the tier_5 case was actually broken/fixed) and record in the PLAN.md update (Phase 4 below) that no code change was needed here, citing why.
+- [ ] `tests/test_tier5_librarian.py`: extend the existing `test_escalation_order_is_primary_then_fallback_local_then_openrouter` test (line 182) and/or `test_unparseable_response_escalates_to_next_chain_model` (line 405-439, which already asserts `call_models` for all three chain attempts including the `"stealth/ox-alpha"` openrouter leg) to additionally assert on `endpoint`: pull `c.kwargs["endpoint"]` for the third (`openrouter`) call out of `execute_llm.call_args_list` the same way `call_models` is already extracted at line 433, and assert it equals `"https://openrouter.ai/api/v1"` (the real OpenRouter URL from this test's own `_tier5_config()`'s `tier_1_planner.endpoint`, line 70) — not `None` and not the ollama endpoint used by the other two legs. This is a pure assertion addition to an already-mocked, zero-network test; no source change is required unless the audit above finds the pattern actually broken, in which case fix `librarian_escalate.py`'s endpoint resolution the same way `probe_models()` was fixed (resolve from the correct config location rather than a `tier_config.get("endpoint")`-style call that's always `None`).
+  - Verify: `PYTHONPATH=. python3 -m unittest tests.test_tier5_librarian -v` — no `SKIPPED`.
+
+## Phase 4 — Full regression run + doc updates
+
+- [ ] Run the full suite named in `AGENTS.md`'s quick-reference test command to confirm nothing else regressed: `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v` — confirm every test is a real `PASS`, zero `SKIPPED`, zero `FAIL`/`ERROR`.
+- [ ] `PLAN.md`: append a new dated phase entry (following this file's existing phase-checklist format, e.g. "Phase 29 — OpenRouter content-filter phone-string fix, dispatcher peak-hours dedup, librarian endpoint audit") summarizing, in a few lines each: (1) the new `_PHONE_LIKE_RE` case in `llm_client._sanitize_for_openrouter_content_filter()` and the three live-blocked incidents that motivated it; (2) `dispatcher._is_deepseek_peak_hours()` now delegating to `budget_guard.check_tier3_peak_hours_ok()` instead of maintaining a stale hardcoded window/no-weekend-exception copy, and that `DEEPSEEK_PEAK_HOURS_UTC` was deleted; (3) the `librarian_escalate.py` OpenRouter-endpoint audit result — confirmed already correct (`tier_1_planner.endpoint` is a real static config key, unlike the `tier_5_librarian`/`probe_models()` case that needed fixing 2026-08-24), no code change, only an added regression assertion. Keep it to a short checklist + one-paragraph note per this repo's doc-hygiene rule — no narrative play-by-play.
+- [ ] `AGENTS.md`: update the `scripts/llm_client.py` bullet under `## scripts/` to mention the new phone-shaped sanitization case alongside the existing email-shaped one; update the `scripts/dispatcher.py` bullet (if one exists — check `grep -n "dispatcher.py" AGENTS.md`) or add one noting `_is_deepseek_peak_hours()` now delegates to `budget_guard.check_tier3_peak_hours_ok()`; no `librarian_escalate.py` bullet change needed since behavior didn't change there. Keep additions terse, matching this file's existing per-file bullet style — do not let the file grow past the 73728-char Tier 4 ceiling (`wc -c AGENTS.md` before and after to confirm).
+  - Verify: `wc -c AGENTS.md` stays under 73728; `git diff --stat PLAN.md AGENTS.md` shows only the expected additions.
+<!-- triapi:plan run_id=20260824-164451-2b7635 end -->
