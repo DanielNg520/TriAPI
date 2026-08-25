@@ -32,7 +32,13 @@ This is real new-provider code (a new `provider: "groq"` branch in
 Groq's API is OpenAI-compatible, plus config wiring and a budget-guard
 check) — per the standing "never do TriAPI's job" rule this goes through
 `triapi plan`/`dispatch` against TriAPI's own repo once we resume, not
-hand-coded. Worth noting: Groq's rate limits are its own separate pool,
+hand-coded. **`groq_api_key` already exists (encrypted) in
+`config/secrets.enc.yaml`** — confirmed by grep, no need for the plan to
+add a new secret, just consume the existing `api_key_secret: groq_api_key`
+reference. It's missing from `secrets.example.yaml`'s template though
+(undocumented gap, unrelated to this feature) — worth a one-line addition
+to that template while this item is in progress anyway. Worth noting:
+Groq's rate limits are its own separate pool,
 not shared with OpenRouter's 20 RPM/1000 RPD — this may be exactly why the
 user wants it added (a way to route some tier work off the OpenRouter
 shared-budget bottleneck found earlier tonight, see
