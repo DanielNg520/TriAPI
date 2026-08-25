@@ -26,9 +26,14 @@ OpenRouter model the user has explicitly indicated is free/approved
 model to any tier without asking first, even a `:free`-suffixed one), (2)
 DeepSeek (`api.deepseek.com` direct), or (3) Claude Code CLI. **No Gemini
 calls in any form** — not via OpenRouter, not via the direct Google AI
-Studio path, not via Jules (which runs on Gemini 3 Pro under the hood) —
-until the user explicitly re-enables it. `jules_tester.enabled` set to
-`false` in `config/tiers.yaml` 2026-08-25 for exactly this reason.
+Studio path — until the user explicitly re-enables it. **Exception,
+confirmed by the user 2026-08-25: Jules (`jules_tester`) stays enabled.**
+It runs on Gemini 3 Pro under the hood too, but its usage is metered
+against its own separate daily task cap (`daily_task_limit`), not the
+billing-enabled Google Cloud project that caused the incident below — a
+different exposure, so the blanket "no Gemini" rule doesn't reach it.
+(Briefly set to `enabled: false` in this same session before the user
+clarified this — now back to `true`.)
 
 **Situational exception, 2026-08-25 (user's own words):** until Tier 5 (or
 a dedicated filter) reliably sanitizes what goes out in OpenRouter calls,
@@ -66,13 +71,16 @@ through `tier_2_manager`'s own `provider: openrouter`**:
 
 **Fix applied directly (config-only, permitted without dispatch per the
 docs/config carve-out, and urgent given ongoing financial exposure):**
-`tier_2_manager.fallback_chain` set to `[]` and `jules_tester.enabled` set
-to `false` in `config/tiers.yaml`. Verified live:
-`load_tiers()["tier_2_manager"]["fallback_chain"] == []`, both Tier 2 call
-sites now correctly fall through to Nemotron
+`tier_2_manager.fallback_chain` set to `[]` in `config/tiers.yaml`.
+Verified live: `load_tiers()["tier_2_manager"]["fallback_chain"] == []`,
+both Tier 2 call sites now correctly fall through to Nemotron
 (`nvidia/nemotron-3-ultra-550b-a55b:free`) only, and the full regression
 suite (95 + 22 tests) still passes. No dispatch process was running at the
 time this was found — nothing further was charged after the fix landed.
+(`jules_tester.enabled` was also briefly set to `false` in this same
+session, then reverted to `true` per the user's clarification above —
+Jules is a separate, differently-metered exposure, not part of this
+incident.)
 
 **Not yet done — needs a real `triapi plan`/dispatch pass once Gemini use
 is re-authorized (don't dispatch anything Gemini-touching before then, per
@@ -80,10 +88,10 @@ the STOP rule above):** decide the actual intended design (should Tier 2
 ever fall back to Gemini at all, and if so, through which path/provider?)
 and either restore a corrected `fallback_chain` wired through
 `gemini_fallback.py`'s direct endpoint, or remove the dead
-`gemini_fallback.py`/`gemini_fallback:` config block and `jules_tester`
-block entirely if Gemini should never come back into this pipeline. Also
-worth an explicit regression test asserting no tier's configured chain can
-send a non-allowlisted model through `provider: openrouter` without the
+`gemini_fallback.py`/`gemini_fallback:` config block entirely if Gemini
+should never come back into this tier. Also worth an explicit regression
+test asserting no tier's configured chain can send a non-allowlisted model
+through `provider: openrouter` without the
 user's sign-off, so a future config edit can't silently reintroduce this.
 
 ## Current state

@@ -218,11 +218,13 @@ jules_tester:
   # Google Jules REST API, confirmed live 2026-08-16/17 against the real
   # API (public docs were wrong on one field, see below). Advisory-only
   # post-dispatch verification -- never a repair tier, never blocks.
-  # DISABLED 2026-08-25: runs on Gemini 3 Pro under the hood (same
-  # billing-enabled Google Cloud project as tier_2_manager's old Gemini
-  # fallback) -- covered by the standing "no Gemini calls, in any form"
-  # rule in CARRYOVER.md. Re-enable only on explicit user request.
-  enabled: false
+  # Runs on Gemini 3 Pro under the hood, but user confirmed 2026-08-25
+  # this is fine to leave on: Jules usage is metered against its own
+  # separate daily task cap (see daily_task_limit below), not the
+  # billing-enabled Google Cloud project that caused the tier_2_manager
+  # fallback_chain incident (see CARRYOVER.md) -- different exposure, so
+  # the standing "no Gemini calls" rule doesn't reach this one.
+  enabled: true
   source: "sources/github/DanielNg520/TriAPI"  # confirmed-live REST source name (GET /sources), NOT "owner/repo" form
   daily_task_limit: 100  # Google AI Pro tier (confirmed by user 2026-08-19: this account has AI Pro,
   # billing-enabled Cloud project with a $10/mo recurring credit + $300 intro credit): Jules in Pro is
