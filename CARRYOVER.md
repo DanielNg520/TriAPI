@@ -18,6 +18,74 @@ target-repo run still gets documented here (generically), but the
 target-repo's own status/context goes into that repo's own docs instead —
 see `feedback_target_repo_docs_stay_in_target_repo` memory.
 
+## STOP — standing rule (2026-08-25): allowed models list, narrowed after
+a real billing incident. Every tier's model MUST be one of: (1) an
+OpenRouter model the user has explicitly indicated is free/approved
+(currently: `stealth/ox-alpha`, `nvidia/nemotron-3-ultra-550b-a55b:free`,
+`dots-studio/dots-3-note-preview:free` — do not add another OpenRouter
+model to any tier without asking first, even a `:free`-suffixed one), (2)
+DeepSeek (`api.deepseek.com` direct), or (3) Claude Code CLI. **No Gemini
+calls in any form** — not via OpenRouter, not via the direct Google AI
+Studio path, not via Jules (which runs on Gemini 3 Pro under the hood) —
+until the user explicitly re-enables it. `jules_tester.enabled` set to
+`false` in `config/tiers.yaml` 2026-08-25 for exactly this reason.
+
+**Situational exception, 2026-08-25 (user's own words):** until Tier 5 (or
+a dedicated filter) reliably sanitizes what goes out in OpenRouter calls,
+the user has authorized doing the librarian/sanitizer's job by hand as a
+one-off carve-out — i.e. when preparing content that will flow through an
+OpenRouter-routed tier, reviewing/redacting it manually first is fine, not
+a violation of the standing "never do TriAPI's job" rule. This is scoped
+narrowly to that one task (pre-filtering OpenRouter-bound content), not a
+general license to hand-write TriAPI features.
+
+## Incident, 2026-08-25: unauthorized OpenRouter billing from a Gemini
+fallback-chain bug — root cause found and disabled (config only, not yet
+dispatched as a proper fix)
+
+User reported real financial harm: 36 OpenRouter content-filter blocks
+today (the already-queued phone-number-false-positive bug, unrelated) PLUS
+**unauthorized OpenRouter billing from Gemini calls**, on top of an
+already-exhausted Google AI Studio monthly budget. Root cause confirmed by
+reading the code (not guessed): `config/tiers.yaml`'s
+`tier_2_manager.fallback_chain` held 4 Gemini model names
+(`gemini-3.5-flash` etc.), intended for the separate Google-AI-Studio-direct
+`gemini_fallback.py` path, but **two call sites instead sent those names
+through `tier_2_manager`'s own `provider: openrouter`**:
+- `tier2_escalate.py` (real repair fallback) tries Nemotron first, then
+  walks the Gemini-named chain through OpenRouter on 429/403 — every one of
+  those was actually an OpenRouter-billed call to a paid model, not the
+  free/direct Google path the names implied.
+- `dispatcher.breakdown_phase()` (plan breakdown, called every dispatch)
+  is worse: `models = [model] if model else (tier2.get("fallback_chain") or
+  [default_model])` — with a non-empty `fallback_chain`, this **skipped the
+  free Nemotron default entirely** and used the Gemini chain as its primary
+  model list, unconditionally, on every single phase breakdown. This has
+  likely been the actual behavior since Tier 2 was last reconfigured, not
+  just today.
+
+**Fix applied directly (config-only, permitted without dispatch per the
+docs/config carve-out, and urgent given ongoing financial exposure):**
+`tier_2_manager.fallback_chain` set to `[]` and `jules_tester.enabled` set
+to `false` in `config/tiers.yaml`. Verified live:
+`load_tiers()["tier_2_manager"]["fallback_chain"] == []`, both Tier 2 call
+sites now correctly fall through to Nemotron
+(`nvidia/nemotron-3-ultra-550b-a55b:free`) only, and the full regression
+suite (95 + 22 tests) still passes. No dispatch process was running at the
+time this was found — nothing further was charged after the fix landed.
+
+**Not yet done — needs a real `triapi plan`/dispatch pass once Gemini use
+is re-authorized (don't dispatch anything Gemini-touching before then, per
+the STOP rule above):** decide the actual intended design (should Tier 2
+ever fall back to Gemini at all, and if so, through which path/provider?)
+and either restore a corrected `fallback_chain` wired through
+`gemini_fallback.py`'s direct endpoint, or remove the dead
+`gemini_fallback.py`/`gemini_fallback:` config block and `jules_tester`
+block entirely if Gemini should never come back into this pipeline. Also
+worth an explicit regression test asserting no tier's configured chain can
+send a non-allowlisted model through `provider: openrouter` without the
+user's sign-off, so a future config edit can't silently reintroduce this.
+
 ## Current state
 
 - **`openrouter` branch merged into `main` (2026-08-23), commit `47cddb4`,
@@ -339,12 +407,51 @@ specifically, not part of this sequence.
      `_PHONE_LIKE_RE`/redaction to `llm_client.
      _sanitize_for_openrouter_content_filter()`, careful not to mangle
      TriAPI's own run_id/task_id format or hex hashes.
-   - **Also check the self-fix queue**: `20260824-165500-90f029` was
-     auto-captured from an earlier transient `429` rate-limit crash on
-     this same run (before the redispatch that hit the 403 above) — very
-     likely the same "transient OpenRouter flakiness, don't approve" noise
-     pattern as two already-flagged stale drafts elsewhere in this file;
-     worth a quick confirm-and-skip rather than approving it.
+   - **Also check the self-fix queue**: `20260824-165500-90f029` and
+     `20260824-173338-8bf5ad` were both auto-captured from transient `429`
+     rate-limit crashes on this same run (`cmd_dispatch:foreground` —
+     `Probe failed for tier_1_planner: 429`) — same "transient OpenRouter
+     flakiness, don't approve" noise pattern as the other stale drafts
+     already flagged in this file; skip both rather than approving.
+   - **2026-08-24/25 update: the `context_files: []` workaround (edited
+     directly into `logs/runs/20260824-164451-2b7635.json`'s Phase 1 item
+     0) DID hold on retry** — confirmed live: `run_task starting: ...
+     context_files=[] skip_tier4=False` and Tier 4 began drafting with no
+     403. The run is NOT yet resolved though: two back-to-back resumes
+     since then both crashed mid-flight on `probe_models()`'s pre-flight
+     gate hitting a genuine `429` (not the phone-content-filter bug) —
+     each dispatch resume calls `probe_models()` fresh across ALL tiers
+     before running anything, so repeated resumes in a short window
+     compound OpenRouter rate-limit pressure even for tiers this run's
+     Phase 1 item doesn't need. This is the same "Pacing lesson" already
+     recorded above, now reconfirmed twice more. **Next session: wait
+     several minutes since the last resume attempt before running `triapi
+     dispatch 20260824-164451-2b7635` again** — don't retry immediately.
+   - **Refined root cause, 2026-08-25: this isn't just "OpenRouter is
+     rate-limited," it's `probe_models()` (`scripts/llm_client.py`)
+     unconditionally hard-gating on ALL SIX tiers — including
+     `tier_1_planner`, which `triapi dispatch` never actually calls (only
+     `triapi plan` uses it) — before running a single item.** 20 separate
+     `Probe failed for tier_1_planner: 429` captures across
+     2026-08-23→08-25 in `logs/triapi.log`, spanning ~22h, but
+     interspersed with successful planning calls in between (e.g. one
+     succeeded at 17:33:38 the same evening) — so this is a bursty
+     per-minute rate limit on the free `stealth/ox-alpha` model, not a
+     hard daily quota. Every `triapi dispatch <run_id>` resume re-probes
+     `tier_1_planner` regardless of whether the run's own breakdown
+     touches it, so a repair-only run with zero planning calls left in it
+     (like this one, already fully broken down) can still be blocked
+     indefinitely by an unrelated tier's transient rate limit. **Not
+     hand-patched** (per standing rule) — candidate fix for the queue:
+     `probe_models()` should only probe tiers the run's breakdown actually
+     references (or at minimum not hard-fail the whole gate on
+     `tier_1_planner`/`tier_1_manager` specifically when dispatching an
+     already-broken-down run, since planning is already done by that
+     point). This is closely related to, and probably subsumed by, the
+     already-queued "complexity-aware router" architecture item below —
+     folding this into that item's scope (or the backend-registry item) is
+     probably more efficient than a standalone fix. Third self-fix
+     duplicate of the same 429 noise pattern: `20260824-173338-8bf5ad`.
 3. **Architecture items** (both already flagged as TriAPI self-feature
    work — plan/dispatch through the pipeline, don't hand-build):
    - A named backend registry (`backends:` section in `tiers.yaml`

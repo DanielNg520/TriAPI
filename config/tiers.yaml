@@ -42,6 +42,19 @@ tier_2_manager:
     flash: "gemini-3.5-flash"
     pro: "gemini-2.5-pro"
   default_model: default
+  # DISABLED 2026-08-25 (user directive: no Gemini calls, in any form,
+  # until told otherwise -- unauthorized OpenRouter billing incident, see
+  # CARRYOVER.md). fallback_chain WAS a list of Gemini model names, but
+  # both dispatcher.breakdown_phase() and tier2_escalate.py send it
+  # through tier_2_manager's own `provider: openrouter` -- not the
+  # Google-direct `gemini_fallback` path those names were written for.
+  # Worse, breakdown_phase() used fallback_chain (when non-empty) as its
+  # PRIMARY model list whenever no explicit model was requested, skipping
+  # the free Nemotron default entirely -- so every plan breakdown was
+  # paying OpenRouter for a Gemini model instead of using the intended
+  # free tier. Emptying this list restores Nemotron as the only model
+  # actually used, in both call sites, and removes Gemini from Tier 2
+  # entirely until re-enabled by explicit request.
   # Tried in order whenever the current model's free-tier quota is
   # exhausted for the day -- confirmed live 2026-08-10 that Google buckets
   # this per model (error body: quotaId
@@ -55,11 +68,7 @@ tier_2_manager:
   # /v1beta/models) on 2026-08-10, flash-tier only (no -preview/-image/-tts
   # variants, no "-latest" aliases since their underlying quota bucket is
   # ambiguous).
-  fallback_chain:
-    - "gemini-3.5-flash"
-    - "gemini-3.1-flash-lite"
-    - "gemini-2.5-flash"
-    - "gemini-2.5-flash-lite"
+  fallback_chain: []  # was the 4 gemini-*-flash names -- see DISABLED comment above
   role: "task orchestration, context isolation, high-level architectural correction"
   automatable: true
   pricing:
@@ -209,7 +218,11 @@ jules_tester:
   # Google Jules REST API, confirmed live 2026-08-16/17 against the real
   # API (public docs were wrong on one field, see below). Advisory-only
   # post-dispatch verification -- never a repair tier, never blocks.
-  enabled: true
+  # DISABLED 2026-08-25: runs on Gemini 3 Pro under the hood (same
+  # billing-enabled Google Cloud project as tier_2_manager's old Gemini
+  # fallback) -- covered by the standing "no Gemini calls, in any form"
+  # rule in CARRYOVER.md. Re-enable only on explicit user request.
+  enabled: false
   source: "sources/github/DanielNg520/TriAPI"  # confirmed-live REST source name (GET /sources), NOT "owner/repo" form
   daily_task_limit: 100  # Google AI Pro tier (confirmed by user 2026-08-19: this account has AI Pro,
   # billing-enabled Cloud project with a $10/mo recurring credit + $300 intro credit): Jules in Pro is
