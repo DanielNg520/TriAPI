@@ -140,6 +140,35 @@ clean. Bundle with the Groq provider addition if convenient (all touch
 separately — user's call. **This whole plan (steps 2-4 + config flip) is
 the next thing to draft/dispatch via `triapi plan`.**
 
+**Two more items queued, 2026-08-25 (after the above lands — don't bundle
+into it, run as a follow-on plan):**
+1. **Add `agy` as a `tier_5_librarian` fallback leg, specifically motivated
+   by its ~1M-token context window.** Directly solves the recurring
+   PLAN.md-doc-update problem hit twice tonight (local Ollama legs time
+   out on ~189-192KB files; the OpenRouter fallback leg 403s on
+   PLAN.md-scale content even with the phone/IP sanitizer fix). `agy`
+   goes through neither path — no OpenRouter content filter, no local
+   context-window ceiling — so it should be able to handle large docs
+   directly. Exact placement in the escalation order (alongside
+   `fallback_openrouter`, or reserved specifically for oversized docs) is
+   an implementation-design question. Depends on the `provider: "agy"`
+   branch from the in-flight plan landing first.
+2. **Every tier's fallback mechanism should be as configurable
+   (individually on/off) as the tiers themselves.** Currently fallback
+   configurability is inconsistent: `tier_2_manager.fallback_chain` is a
+   plain list (no per-entry enable/disable), `tier_5_librarian`'s
+   `fallback_local`/`fallback_openrouter`/(new `fallback_agy`) legs have
+   no toggle at all, `tier_1_planner`'s fallback to `tier_1_manager` is
+   hardcoded in `planner.py` with no config gate. User wants every
+   fallback leg, for every tier, individually configurable (turn on/off)
+   the same way `tier_1_manager.enabled`/`jules_tester.enabled` already
+   work for whole tiers. This is the natural extension of the
+   already-queued "named backend registry" architecture item (see the
+   "Architecture items" list further down this file) — worth designing
+   together rather than as two separate passes, since both are about
+   making the tier/fallback graph fully config-driven instead of
+   partially hardcoded per call site.
+
 <details>
 <summary>v1 draft, superseded, kept for historical trace only</summary>
 
