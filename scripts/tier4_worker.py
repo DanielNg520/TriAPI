@@ -118,7 +118,7 @@ def build_prompt(description: str, target_path: Path, last_stderr: str, context_
 def run_build(build_cmd: str, workdir: str, timeout: int = 300) -> tuple[bool, str]:
     try:
         result = subprocess.run(
-            build_cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
+            ["bash", "-o", "pipefail", "-c", build_cmd], cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL
         )
     except subprocess.TimeoutExpired as e:
         # A slow build_cmd (e.g. a test suite that cold-loads a large local

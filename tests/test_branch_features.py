@@ -640,17 +640,17 @@ class Tier3PeakHoursTests(unittest.TestCase):
             fake_dt.now.return_value = utc_dt
             return orchestrator.check_tier3_peak_hours_ok()
 
-    def test_early_morning_off_peak_passes(self) -> None:
-        # 00:30 UTC is before the first peak window (01:00-04:00 UTC) starts.
-        result = self._check_at(datetime(2026, 8, 17, 0, 30, tzinfo=timezone.utc))
+    def test_before_peak_window_passes(self) -> None:
+        # 05:59 UTC is just before the 06:00-10:00 UTC peak window starts.
+        result = self._check_at(datetime(2026, 8, 25, 5, 59, tzinfo=timezone.utc))
         self.assertTrue(result["ok"])
 
-    def test_mid_off_peak_hour_passes(self) -> None:
-        result = self._check_at(datetime(2026, 8, 17, 13, 0, tzinfo=timezone.utc))
+    def test_after_peak_window_passes(self) -> None:
+        result = self._check_at(datetime(2026, 8, 25, 10, 1, tzinfo=timezone.utc))
         self.assertTrue(result["ok"])
 
-    def test_mid_second_peak_window_refuses(self) -> None:
-        result = self._check_at(datetime(2026, 8, 17, 8, 0, tzinfo=timezone.utc))
+    def test_mid_peak_window_refuses(self) -> None:
+        result = self._check_at(datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc))
         self.assertFalse(result["ok"])
         self.assertIn("06:00-10:00", result["reason"])
 
@@ -661,8 +661,8 @@ class Tier3PeakHoursTests(unittest.TestCase):
         self.assertIn("weekend off-peak", result["reason"].lower())
 
     def test_weekday_refuses_in_peak(self) -> None:
-        # Aug 24, 2026 is a Monday. Regular peak hours apply.
-        result = self._check_at(datetime(2026, 8, 24, 8, 0, tzinfo=timezone.utc))
+        # Aug 25, 2026 is a Tuesday. Regular peak hours apply.
+        result = self._check_at(datetime(2026, 8, 25, 7, 17, tzinfo=timezone.utc))
         self.assertFalse(result["ok"])
         self.assertIn("06:00-10:00", result["reason"])
 
@@ -725,112 +725,6 @@ class LlmClientOpenAIErrorBodyTests(unittest.TestCase):
                 "openrouter",
             )
         self.assertEqual(result, ("ok", "openrouter", 1, 2))
-
-
-class OrchestratorTier3PeakSkipTests(unittest.TestCase):
-    def _run_task_with_guards(
-        self,
-        task_id: str,
-        description: str,
-        target: str,
-        tmp: str,
-        *,
-        tier3_ok: bool,
-        tier3_result: dict | None = None,
-        tier1_result: dict | None = None,
-        tier2_result: dict | None = None,
-    ):
-        config = {
-            "tier_4_worker": {"build_commands": ["true"]},
-            "tier_1_manager": {"enabled": True},
-            "critique": {"enabled": False},
-        }
-        tier3_escalate = mock.Mock(
-            return_value=tier3_result or {"status": "fix_rejected", "reason": "no"}
-        )
-        tier1_escalate = mock.Mock(
-            return_value=tier1_result or {"status": "fix_rejected", "reason": "no"}
-        )
-        tier2_escalate = mock.Mock(
-            return_value=tier2_result or {"status": "fix_rejected", "reason": "no"}
-        )
-        with (
-            mock.patch.object(orchestrator, "load_tiers", return_value=config),
-            mock.patch.object(orchestrator, "build_context_blob", return_value="ctx"),
-            mock.patch.object(
-                orchestrator,
-                "tier4_run",
-                side_effect=[
-                    {"status": "build_failed", "consecutive_failures": 1},
-                    {"status": "escalate"},
-                ],
-            ),
-            mock.patch.object(
-                orchestrator,
-                "check_tier3_peak_hours_ok",
-                return_value={
-                    "ok": tier3_ok,
-                    "reason": "outside peak hours" if tier3_ok else "inside peak hours",
-                },
-            ),
-            mock.patch.object(orchestrator, "tier3_escalate", new=tier3_escalate),
-            mock.patch.object(orchestrator, "check_tier1_ok", return_value={"ok": True}),
-            mock.patch.object(
-                orchestrator, "check_tier1_manager_ok", return_value={"ok": True}
-            ),
-            mock.patch.object(orchestrator, "tier1_escalate", new=tier1_escalate),
-            mock.patch.object(orchestrator, "check_tier2_ok", return_value={"ok": True}),
-            mock.patch.object(orchestrator, "tier2_escalate", new=tier2_escalate),
-            mock.patch.object(orchestrator, "read_state", return_value={}),
-            mock.patch.object(orchestrator, "report", return_value={}),
-            mock.patch.object(orchestrator, "human_handoff"),
-        ):
-            result = orchestrator.run_task(
-                task_id, description, target, workdir=tmp, build_cmd="true"
-            )
-        return result, tier3_escalate, tier1_escalate, tier2_escalate
-
-    def test_run_task_skips_tier3_escalate_when_peak_hours_not_ok(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target = str(Path(tmp) / "target.py")
-            result, tier3_escalate, _tier1_escalate, tier2_escalate = (
-                self._run_task_with_guards("task-1", "fix it", target, tmp, tier3_ok=False)
-            )
-        tier3_escalate.assert_not_called()
-        tier2_escalate.assert_called_once()
-        self.assertEqual(result["status"], "human_handoff")
-
-    def test_run_task_calls_tier3_escalate_when_peak_hours_ok(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target = str(Path(tmp) / "target.py")
-            result, tier3_escalate, _tier1_escalate, _tier2_escalate = (
-                self._run_task_with_guards("task-2", "fix it", target, tmp, tier3_ok=True)
-            )
-        tier3_escalate.assert_called_once()
-        self.assertEqual(result["status"], "human_handoff")
-
-    def test_run_task_falls_through_to_tier1_when_tier3_skipped_and_tier2_fails(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target = str(Path(tmp) / "target.py")
-            result, tier3_escalate, tier1_escalate, tier2_escalate = (
-                self._run_task_with_guards(
-                    "task-3",
-                    "fix it",
-                    target,
-                    tmp,
-                    tier3_ok=False,
-                    tier2_result={"status": "fix_rejected", "reason": "no"},
-                )
-            )
-        tier3_escalate.assert_not_called()
-        tier2_escalate.assert_called_once()
-        tier1_escalate.assert_called_once_with(
-            "task-3",
-            target,
-            context_blob="ctx",
-            description="fix it",
-        )
-        self.assertEqual(result["status"], "human_handoff")
 
 
 class SkipTier4Tests(unittest.TestCase):

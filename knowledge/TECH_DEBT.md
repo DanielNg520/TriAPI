@@ -403,3 +403,5 @@ Ran 12 tests in 0.003s
 [1;31mFAILED[0m ([1;31mfailures=1[0m)
 
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/AGENTS.md | HASH: 28d92a67536f7d269095093ebecff99c79c59a58abdd789eac4a8f02b8c2f191 | REASON: Could not apply proposed edit: Block 3: SEARCH text matches 6 locations in the file -- ambiguous, needs more surrounding context to be unique.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/scripts/tier4_worker.py | HASH: 93d98e4095469bb38ce26cf67d0b7357bcbc14a15a2d87401e8bd8b74a860206 | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_run_build_pipefail.py | HASH: 4f5e3fba9b580482393ec0a4c8f530a5839d912f18badecf1f168d75d5c57b2a | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
