@@ -10,6 +10,27 @@ fixes run, Phase 1 done, Phase 2 item 0 done, Phase 2 item 1 stuck on
 repeated transient Nemotron/OpenRouter errors — see the incident entry
 below for full detail) once off-peak, not before.
 
+**Decision, 2026-08-25 (user confirmed): simplified 3-tier setup for the
+rest of the month — Tier 1 = `stealth/ox-alpha`, Tier 3 = DeepSeek,
+Tier 4 = local qwen (`qwen2.5-coder` via Ollama). Tier 2 (Nemotron)
+dropped from the repair-escalation ladder.** Rationale: Tier 2's role
+(architectural correction, larger context) doesn't fit a low-TPM budget
+model well, and fewer OpenRouter-dependent tiers means less exposure to
+tonight's shared-rate-limit cascade. **Unresolved before touching
+config/code — ASK THE USER, don't assume:** `dispatcher.breakdown_phase()`
+also uses Tier 2/Nemotron, for plan breakdown (not just repair) — every
+`triapi plan` run depends on it. Disabling Tier 2 in config (e.g. zeroing
+its `pricing.free_tier_rpm`/`free_tier_rpd`, which would cleanly make
+`budget_guard.check_tier2_ok()` always refuse) would silently break the
+ability to break down ANY new plan, including the plan needed to
+implement this very change. Two options, needs the user's call: (a) leave
+Tier 2 wired for breakdown only, exclude it from `orchestrator.run_task()`'s
+repair chain specifically (`config`-only if there's a way to gate just
+that call site, otherwise a small code change); or (b) move breakdown
+onto Tier 1 too (real code change in `dispatcher.breakdown_phase()`,
+goes through the pipeline once resumed, not hand-coded). **Do not
+disable Tier 2 in config until this is resolved.**
+
 **New request queued while paused, 2026-08-25 (do not act on this until
 resume — starting a `triapi plan` now would itself burn OpenRouter's
 shared rate-limit budget, which is exactly what we're waiting out):** add
