@@ -33,8 +33,6 @@ from scripts.tri_logging import get_logger
 
 log = get_logger("git_ops")
 
-DEFAULT_BRANCHES = {"main", "master"}
-
 _GITHUB_HTTPS_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(\.git)?/?$")
 _GITHUB_SSH_RE = re.compile(r"^git@github\.com:([^/]+)/([^/]+?)(\.git)?/?$")
 
@@ -137,17 +135,6 @@ def push(repo_dir: str, message: str, branch: str | None = None) -> dict:
             ok, out = _run(["git", "checkout", "-B", branch], cwd=repo_dir)
             if not ok:
                 return {"ok": False, "output": out}
-    elif current_branch in DEFAULT_BRANCHES:
-        # Refuse to push straight to main/master unless a plan step
-        # explicitly named it -- protects the primary branch from an
-        # unattended dispatch run.
-        target_branch = f"triapi/{Path(repo_dir).name}-{int(time.time())}"
-        log.warning(
-            "Refusing to push directly to %s; creating branch %s instead", current_branch, target_branch
-        )
-        ok, out = _run(["git", "checkout", "-b", target_branch], cwd=repo_dir)
-        if not ok:
-            return {"ok": False, "output": out}
     else:
         target_branch = current_branch
 

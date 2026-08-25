@@ -1,516 +1,122 @@
-# Carryover — 2026-08-24 (end of session)
-
-## RESOLVED, 2026-08-25: `verify_task()`/`run_build()` could silently
-report "success" on a build_cmd that actually failed, whenever that
-build_cmd piped its output through a truncating command (`| tail`,
-`| head`, `| grep`). Confirmed live, root-caused, **and fixed** via run
-`20260825-000610-4c040a` (`run_build()` now invokes via `["bash", "-o",
-"pipefail", "-c", build_cmd]`; new `tests/test_run_build_pipefail.py`
-covers it). The two regressed tests found alongside it
-(`OrchestratorTier3PeakSkipTests`, stale fixture missing a
-`tier_3_debugger` block) are also fixed, relocated to
-`tests/test_orchestrator_tier3_peak_skip.py`. Full suite re-verified by
-hand independent of the (now-trustworthy) dispatched result: 118/118
-green. Full detail in `PLAN.md`'s Phase 32 entry. **Config flip is
-unblocked — this was the last prerequisite.**
-
-**Mechanism:** `tier4_worker.run_build()` invokes `build_cmd` via
-`subprocess.run(build_cmd, shell=True, ...)` — plain `sh -c`, no
-`pipefail`. In bash/sh without `pipefail`, a pipeline's exit code is the
-LAST command's exit code only, not any earlier stage's. So a build_cmd
-like `python3 -m unittest ... -v 2>&1 | tail -15` (a real pattern used in
-this very session's own dispatched plans) reports the exit code of
-`tail`, which almost always succeeds, regardless of whether `unittest`
-itself failed. Confirmed directly: `bash -c 'false | tail -1; echo $?'`
-prints `0`.
-
-**Caught in the act, this session:** run `20260824-221726-3df72d`'s own
-final-verification item (7.1, `build_cmd` ending in `... -v 2>&1 |
-tail -15`) reported `success (resolved_by=verify)` — but re-running the
-exact same unittest command **without** the trailing pipe, by hand,
-immediately afterward showed **2 real FAILUREs**:
-`OrchestratorTier3PeakSkipTests.test_run_task_skips_tier3_escalate_when_peak_hours_not_ok`
-and `...test_run_task_falls_through_to_tier1_when_tier3_skipped_and_tier2_fails`,
-both in `tests/test_branch_features.py`. These are genuine regressions
-from this same run's own Phase 4 item 4.2 (`orchestrator.py`'s new
-position-independent DeepSeek peak-hours gate) — root cause: both tests'
-`config` fixture has no `tier_3_debugger` block at all (a minimal fixture
-written when the gate was unconditionally tier-3-hardcoded), so the new
-`budget_guard.resolve_deepseek_tier(config)` call finds no tier matching
-`provider == "deepseek"` and returns `None` — meaning the new
-conditional gate never identifies "tier 3" as the DeepSeek slot in this
-test's fixture, so `check_tier3_peak_hours_ok()` never fires, and
-`tier3_escalate` gets called even when the test mocks peak-hours as
-active. **Not a flaw in the new design itself** (real `config/tiers.yaml`
-has a fully-specified `tier_3_debugger` block with the real provider/
-endpoint, so production behavior is correct) — the two tests' fixtures
-are simply stale, written for the old unconditional-gate design, and need
-a `tier_3_debugger: {"provider": "deepseek", "endpoint": "https://api.deepseek.com"}`
-block added so `resolve_deepseek_tier()` can find it, restoring each
-test's original intent under the new, more correct design.
-
-**Two fixes needed, both through the pipeline (not hand-patched, both are
-real code/test changes):**
-1. `tier4_worker.run_build()`: invoke `build_cmd` with pipefail semantics
-   (e.g. `subprocess.run(["bash", "-o", "pipefail", "-c", build_cmd], ...)`
-   instead of plain `shell=True`) so a failing stage earlier in a pipe
-   can never be masked by a later stage's own success. This is the
-   trustworthiness fix — every future `verify_only` item and every
-   tier's rebuild check depends on this being correct.
-2. `tests/test_branch_features.py`'s `OrchestratorTier3PeakSkipTests`:
-   add a realistic `tier_3_debugger` block to the shared `config` fixture
-   in `_run_task_with_guards()` so `resolve_deepseek_tier()` resolves it
-   correctly, restoring both failing tests to their original intent.
-
-**DONE.** Still worth a future spot-check: every `resolved_by=verify`
-result from EARLIER tonight (before this fix landed) that used a piped
-build_cmd is technically unverified by today's standard — not
-exhaustively re-audited here due to time, flagged for awareness only, not
-blocking anything further.
-
-## PAUSED, 2026-08-25 02:40 UTC — user directive: stop burning time on
-retries, resume when DeepSeek is next off-peak. Currently inside the
-01:00-04:00 UTC peak window (confirmed live via
-`budget_guard.check_tier3_peak_hours_ok()`); off-peak resumes at **04:00
-UTC**. All work up to this point is committed. Nothing is running.
-**Resume order once off-peak:**
-1. Retry `triapi dispatch 20260824-164451-2b7635` (OpenRouter fixes run,
-   Phase 1 done, Phase 2 item 0 done, Phase 2 item 1 stuck on repeated
-   transient Nemotron/OpenRouter errors — see the incident entry below)
-   through to completion. Uses the still-working Nemotron/OpenRouter Tier
-   2 for its own breakdown — unaffected by the tier changes below since
-   those haven't landed yet.
-2. THEN draft/dispatch the new-tier-layout plan (see the "FINAL,
-   2026-08-25 (v2)" decision below): smoke-test `agy` headless mode +
-   new `provider: "agy"` branch in `llm_client.py` +
-   `_breakdown_phase_attempt()` provider-branch fix + peak-hours-gate
-   generalization to DeepSeek specifically, THEN the actual
-   `config/tiers.yaml` reassignment. Also queued and can bundle in: the
-   Groq provider addition.
-
-**FINAL, 2026-08-25 (v2) — supersedes the v1 draft immediately below
-(kept only for historical trace, DO NOT implement v1): new tier layout
-for the rest of the month —**
-- **Tier 1** = `stealth/ox-alpha` (OpenRouter), Claude CLI fallback
-  (unchanged).
-- **Tier 2** = DeepSeek **v4 pro** (real hosted API, `api.deepseek.com`)
-  — exact model string not yet verified against DeepSeek's real API
-  (current config only has a `flash` model key resolving to
-  `deepseek-v4-flash`; confirm the real "pro" model id before wiring,
-  don't guess).
-- **Tier 3** = `agy` (Antigravity CLI) running **Gemini 3.1 pro, effort
-  high**, with `--dangerously-skip-permissions` where needed for
-  non-interactive dispatch use. **This is Gemini use, explicitly
-  re-authorized by the user for this specific path only** — see the
-  scoped-exception note below, [[feedback_no_gemini_allowed_models]] in
-  memory needs updating to reflect this once implemented.
-- **Tier 4** = qwen, local via Ollama (`qwen2.5-coder:14b-instruct-q6_K`,
-  unchanged, kept per the user's own condition "if triapi can run cli
-  command" — already true, Tier 1's Claude CLI proves TriAPI can invoke
-  CLI tools).
-- v1 draft (Tier 3 = local DeepSeek-family model) is fully superseded —
-  do not implement it.
-
-**Scoped exception to the standing "no Gemini" rule (2026-08-25):**
-Gemini is re-authorized specifically via `agy`'s own OAuth/subscription
-auth, confirmed by the user to be a **separate pool from the exhausted
-Google AI Studio monthly budget** (`google_ai_studio_api_key`) — but the
-user also confirmed **`agy` has its own usage cap and calls will fail
-once THAT is exhausted** ("we won't be able to call it if we exhaust the
-usage"). This means Tier 3/`agy` needs its own budget-guard-style
-protection (detect a quota/limit response and fall through to Tier 2,
-the same way `check_tier1_manager_ok()` gates Tier 1 — not a hard crash).
-Gemini via the raw API/OpenRouter/`google_ai_studio_api_key` path remains
-OFF — this exception covers `agy` only, nothing else.
-
-**Findings from a live (partial) investigation done during the pause —
-read-only, no dispatch calls made:**
-- `agy` is installed (`/home/dyne/.local/bin/agy`) with a CLI surface
-  nearly identical in shape to Claude CLI (`--print`, `--model`,
-  `--effort low|medium|high`, `--dangerously-skip-permissions`,
-  `--output-format json`, etc.) — a new `provider: "agy"` branch in
-  `llm_client.execute_llm()` should closely mirror the existing
-  `_call_claude_cli()`.
-- An OAuth token already exists at
-  `~/.gemini/antigravity-cli/antigravity-oauth-token` — confirmed
-  pre-authenticated, no login flow needed.
-- **Smoke test DONE and CONFIRMED WORKING, 2026-08-25 (post-off-peak
-  resume):** `agy -p "reply pong" --model gemini-3.1-pro --effort low
-  --dangerously-skip-permissions --output-format json` returned in 8.66s:
-  ```json
-  {"conversation_id":"fef077ae-c157-4882-8587-791e1e85a073","status":"SUCCESS","response":"pong\n","duration_seconds":8.657321751,"num_turns":1,"usage":{"input_tokens":20775,"output_tokens":274,"thinking_tokens":273,"cache_read_tokens":0,"total_tokens":21049}}
-  ```
-  Confirms: (a) `gemini-3.1-pro` is a valid, accepted model string; (b)
-  `--output-format json` gives a clean, parseable schema — a new
-  `provider: "agy"` branch in `llm_client.execute_llm()` should extract
-  `response` for the completion text and can log `usage.*` the same way
-  other tiers log token counts; (c) the model uses `thinking_tokens` even
-  at `effort low` (Gemini's own reasoning-token behavior, not an `agy`
-  quirk) — worth accounting for in cost/token logging if `agy` calls ever
-  get cost-tracked. No `agy models` output captured yet (not needed now
-  that the exact model string is confirmed directly) — skip that step.
-
-**Required alongside the config change — not optional, per the
-"everything configurable" principle below:** `budget_guard.
-check_tier3_peak_hours_ok()` is currently named/wired for "Tier 3"
-specifically. It must be generalized to key off **the real DeepSeek
-hosted API specifically** (`provider == "deepseek"` AND the paid
-`api.deepseek.com` endpoint), not a tier-number position — DeepSeek now
-sits in the Tier 2 slot, and Tier 3 (Gemini via `agy`) has no DeepSeek
-pricing concept at all and must never be gated by this check. Whichever
-tier's config resolves to the real DeepSeek API should be the one this
-gate protects, found by provider+endpoint match, not by tier name — same
-class of fix as `dispatcher._breakdown_phase_attempt()`'s hardcoded
-provider branch (see the standing principle below); do both in the same
-plan.
-
-Also still needed regardless of which provider ends up in Tier 2:
-`dispatcher._breakdown_phase_attempt()` hardcodes `if provider ==
-"openrouter": ... else: <google/gemini_fallback path>` — DeepSeek (or
-any non-openrouter/non-google provider) as Tier 2 would fall into the
-wrong branch. Fix: make the `else` branch only handle `provider ==
-"google"` specifically, and route everything else through
-`llm_client.execute_llm()` generically (matching `tier2_escalate.py`'s
-and `tier3_escalate.py`'s existing pattern — both already dispatch
-DeepSeek generically with zero code changes needed on their end).
-
-**Progress update, 2026-08-25: run `20260824-164451-2b7635` (the
-OpenRouter-fixes run referenced throughout this file) completed all 4
-phases.** All 3 bugs fixed and verified (full suite green, 101 tests).
-One item needed a manual doc write instead of automated dispatch: the
-Phase 4 PLAN.md-append step exhausted all three `tier_5_librarian`
-escalation legs against `PLAN.md` itself — **even with this run's own
-phone/IP sanitizer fix already live, the OpenRouter fallback leg still
-403'd**, meaning something else in `PLAN.md`'s ~189KB of content trips
-the content filter, not yet isolated (worth a closer look — possibly
-another digit-shaped pattern not yet covered, or filter behavior keyed
-on sheer volume/repetition rather than a specific pattern). Written by
-hand instead (PLAN.md's own Phase 30 entry) per the standing docs
-exception — **but the item's description also asked to shrink PLAN.md
-back under the 73,728-char ceiling, which was NOT done** (it's now
-192,722 chars, even larger) — that's a much bigger job, already covered
-by the separately-queued "consolidate historical PLAN.md content out of
-target-repo docs" follow-on (Tier 5 exists now, so that follow-on can
-actually be planned/dispatched whenever it's picked up). Don't treat this
-run's PLAN.md item as having addressed the size problem — it only added
-the Phase 30 summary.
-
-**Sequencing:** (1) ~~`agy` smoke test~~ **DONE, confirmed working** (see
-above). Still to do: (2) new `provider: "agy"` branch in `llm_client.py`
-+ its own budget-guard/quota-exhaustion handling, (3)
-`_breakdown_phase_attempt()` provider-branch fix, (4) peak-hours-gate
-generalization to DeepSeek specifically — all using the still-functional
-current Tier 2 config (Nemotron/OpenRouter) to do that one
-planning/breakdown call — only flip `config/tiers.yaml`'s tier
-assignments to the FINAL (v2) layout above after those land and test
-clean. Bundle with the Groq provider addition if convenient (all touch
-`llm_client.py`/`config/tiers.yaml` in the same area), or run
-separately — user's call. **This whole plan (steps 2-4 + config flip) is
-the next thing to draft/dispatch via `triapi plan`.**
-
-**Two more items queued, 2026-08-25 (after the above lands — don't bundle
-into it, run as a follow-on plan):**
-1. **Add `agy` as a `tier_5_librarian` fallback leg, specifically motivated
-   by its ~1M-token context window.** Directly solves the recurring
-   PLAN.md-doc-update problem hit twice tonight (local Ollama legs time
-   out on ~189-192KB files; the OpenRouter fallback leg 403s on
-   PLAN.md-scale content even with the phone/IP sanitizer fix). `agy`
-   goes through neither path — no OpenRouter content filter, no local
-   context-window ceiling — so it should be able to handle large docs
-   directly. Exact placement in the escalation order (alongside
-   `fallback_openrouter`, or reserved specifically for oversized docs) is
-   an implementation-design question. Depends on the `provider: "agy"`
-   branch from the in-flight plan landing first.
-2. **Every tier's fallback mechanism should be as configurable
-   (individually on/off) as the tiers themselves.** Currently fallback
-   configurability is inconsistent: `tier_2_manager.fallback_chain` is a
-   plain list (no per-entry enable/disable), `tier_5_librarian`'s
-   `fallback_local`/`fallback_openrouter`/(new `fallback_agy`) legs have
-   no toggle at all, `tier_1_planner`'s fallback to `tier_1_manager` is
-   hardcoded in `planner.py` with no config gate. User wants every
-   fallback leg, for every tier, individually configurable (turn on/off)
-   the same way `tier_1_manager.enabled`/`jules_tester.enabled` already
-   work for whole tiers. This is the natural extension of the
-   already-queued "named backend registry" architecture item (see the
-   "Architecture items" list further down this file) — worth designing
-   together rather than as two separate passes, since both are about
-   making the tier/fallback graph fully config-driven instead of
-   partially hardcoded per call site.
-
-<details>
-<summary>v1 draft, superseded, kept for historical trace only</summary>
-
-Tier 2 = DeepSeek (real API), Tier 3 = local DeepSeek-family model
-(`deepseek-coder-v2:16b` or `deepseek-r1:14b`, avoiding `:32b` variants
-per this box's documented iGPU OOM history), Tier 4 = local qwen
-(unchanged). Fully replaced by the `agy`/Gemini-3.1-pro-for-Tier-3
-version above — do not implement this v1 shape.
-</details>
-
-**Standing principle added, 2026-08-25 (user's own words): "Every single
-feature of TriAPI pipeline has to be highly configurable. If there is
-[a] hardcode[d] path then it needs to be fixed."** See
-[[feedback_everything_configurable_no_hardcoding]] in memory. Did a
-read-only audit of every `provider ==`/hardcoded-tier-name branch across
-`scripts/*.py` while paused (no API calls) to check for other instances
-beyond the already-queued `_breakdown_phase_attempt()` one: `tier1/2/3_
-escalate.py` all already dispatch generically via
-`llm_client.execute_llm(provider=tier.get("provider", ...))` — correctly
-reassignable. `planner.py`'s `provider == "cli"` branch and `triapi.py`'s
-`tier_4_worker...== "ollama"` checks are legitimately provider-specific
-behavior (subprocess invocation; local-Ollama-lifecycle management), not
-reassignment-breaking hardcodes. `librarian_escalate.py`'s
-openrouter/ollama endpoint resolution is inherent to `tier_5_librarian`'s
-fixed two-leg schema, already audited correct by the paused plan's Phase
-3. **No new hardcoded-path bugs found beyond the one already queued.**
-
-**New request queued while paused, 2026-08-25 (do not act on this until
-resume — starting a `triapi plan` now would itself burn OpenRouter's
-shared rate-limit budget, which is exactly what we're waiting out):** add
-Groq as a new TriAPI provider, model `qwen/qwen3.6-27b`, with these limits
-(feed into `config/tiers.yaml`'s pricing/rate-limit block the same way
-`tier_2_manager`/`tier_3_debugger` record theirs, and wire a
-`budget_guard` check for it the same way `check_tier3_peak_hours_ok()`/
-`check_tier2_ok()` gate their tiers):
-- RPM: 30
-- RPD: 1,000
-- TPM (tokens/min): 8,000
-- TPS: 200,000 (as given by the user — confirm which unit this actually
-  is against Groq's real docs before wiring a hard gate on it; 200K
-  tokens/sec is implausibly high next to an 8K TPM cap, so this is more
-  likely tokens/day or a context-window figure — don't guess, verify
-  against Groq's console/docs for this exact model first.)
-
-This is real new-provider code (a new `provider: "groq"` branch in
-`llm_client.execute_llm()`, likely alongside `_call_openai_api()` since
-Groq's API is OpenAI-compatible, plus config wiring and a budget-guard
-check) — per the standing "never do TriAPI's job" rule this goes through
-`triapi plan`/`dispatch` against TriAPI's own repo once we resume, not
-hand-coded. **`groq_api_key` already exists (encrypted) in
-`config/secrets.enc.yaml`** — confirmed by grep, no need for the plan to
-add a new secret, just consume the existing `api_key_secret: groq_api_key`
-reference. It's missing from `secrets.example.yaml`'s template though
-(undocumented gap, unrelated to this feature) — worth a one-line addition
-to that template while this item is in progress anyway. Worth noting:
-Groq's rate limits are its own separate pool,
-not shared with OpenRouter's 20 RPM/1000 RPD — this may be exactly why the
-user wants it added (a way to route some tier work off the OpenRouter
-shared-budget bottleneck found earlier tonight, see
-[[project_openrouter_shared_rate_limit]] in memory). Where this model
-should actually slot into the tier ladder (new tier? alternate for an
-existing one?) wasn't specified — ask before assuming a slot when this is
-picked up, rather than guessing.
+# Carryover — 2026-08-25 (session end)
 
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
 and "what happened" writeups belong in `PLAN.md` (this repo's permanent
 build-history/decisions record), never here. Fold an item out of this file
 into `PLAN.md` the moment it's resolved, in the same edit — don't leave it
-lingering here in past tense. Full history through 2026-08-19 lives in
-`PLAN.md`'s "Session Carryover Log" section.
+lingering here in past tense. Full history lives in `PLAN.md`'s phase
+entries (through **Phase 32** as of this writing) and the "Historical
+notes"/addenda sections further down this file.
 
 **Read this first in a new session.** Then `AGENTS.md` for the file/dir
 index, `AGENT_GUIDE.md` for the operating manual (what's safe to hand-edit
 vs. must route through `triapi plan`/`dispatch`).
 
-**Standing rule (2026-08-24): TriAPI's own docs never mention a specific
-target repo by name**, whichever repo it dispatches against. A TriAPI-internal bug found via a
-target-repo run still gets documented here (generically), but the
-target-repo's own status/context goes into that repo's own docs instead —
-see `feedback_target_repo_docs_stay_in_target_repo` memory.
+## Current state, 2026-08-25 (session end) — everything queued tonight is
+DONE and on `main`. Working tree clean, full suite green (118 tests:
+`PYTHONPATH=. python3 -m unittest tests.test_branch_features
+tests.test_tier5_librarian tests.test_llm_client_sanitize
+tests.test_dispatcher_peak_hours tests.test_tier_reassignment_prep
+tests.test_run_build_pipefail tests.test_orchestrator_tier3_peak_skip -v`).
+Three stale `triapi/TriAPI-*` review branches from earlier sessions (all
+already fully merged into `main`) were cleaned up and deleted this
+session — `main` is now the single source of truth, nothing stranded on
+an unmerged branch.
 
-## STOP — standing rule (2026-08-25): allowed models list, narrowed after
-a real billing incident. Every tier's model MUST be one of: (1) an
-OpenRouter model the user has explicitly indicated is free/approved
-(currently: `stealth/ox-alpha`, `nvidia/nemotron-3-ultra-550b-a55b:free`,
-`dots-studio/dots-3-note-preview:free` — do not add another OpenRouter
-model to any tier without asking first, even a `:free`-suffixed one), (2)
-DeepSeek (`api.deepseek.com` direct), or (3) Claude Code CLI. **No Gemini
-calls in any form** — not via OpenRouter, not via the direct Google AI
-Studio path — until the user explicitly re-enables it. **Exception,
-confirmed by the user 2026-08-25: Jules (`jules_tester`) stays enabled.**
-It runs on Gemini 3 Pro under the hood too, but its usage is metered
-against its own separate daily task cap (`daily_task_limit`), not the
-billing-enabled Google Cloud project that caused the incident below — a
-different exposure, so the blanket "no Gemini" rule doesn't reach it.
-(Briefly set to `enabled: false` in this same session before the user
-clarified this — now back to `true`.)
+**Completed this session** (full detail in `PLAN.md` Phases 30-32):
+- OpenRouter fixes (phone/IP content-filter sanitizer, dispatcher
+  peak-hours dedup, librarian endpoint audit) — run `20260824-164451-2b7635`.
+- Tier-reassignment prep: new `agy` (Antigravity CLI) provider in
+  `llm_client.py`, generic (non-hardcoded) provider routing in
+  `dispatcher._breakdown_phase_attempt()`, position-independent DeepSeek
+  peak-hours gate (`budget_guard.resolve_deepseek_tier()`) — run
+  `20260824-221726-3df72d`.
+- Critical fix: `run_build()` no longer silently masks a failing
+  `build_cmd` behind a truncating pipe (`| tail`, etc.) — was giving false
+  "verified green" results. Plus a stale test fixture regression found
+  alongside it. — run `20260825-000610-4c040a`.
+- `git_ops.push()`'s auto-branch-creation safety rail **removed at the
+  user's explicit request** — it now always pushes to whatever branch is
+  checked out (including `main`/`master` directly), no more auto-created
+  `triapi/<dirname>-<timestamp>` review branches. See `AGENTS.md`'s
+  `git_ops.py` bullet.
 
-**Situational exception, 2026-08-25 (user's own words):** until Tier 5 (or
-a dedicated filter) reliably sanitizes what goes out in OpenRouter calls,
-the user has authorized doing the librarian/sanitizer's job by hand as a
-one-off carve-out — i.e. when preparing content that will flow through an
-OpenRouter-routed tier, reviewing/redacting it manually first is fine, not
-a violation of the standing "never do TriAPI's job" rule. This is scoped
-narrowly to that one task (pre-filtering OpenRouter-bound content), not a
-general license to hand-write TriAPI features.
+## Standing rules (accumulated this session, still in effect)
 
-## Incident, 2026-08-25: unauthorized OpenRouter billing from a Gemini
-fallback-chain bug — root cause found and disabled (config only, not yet
-dispatched as a proper fix)
+- **Allowed models, no Gemini except `agy`/Jules.** Every tier's model
+  must be an explicitly-approved free OpenRouter model
+  (`stealth/ox-alpha`, `nvidia/nemotron-3-ultra-550b-a55b:free`,
+  `dots-studio/dots-3-note-preview:free`), DeepSeek, or Claude Code CLI.
+  No Gemini via raw API/OpenRouter. Two scoped exceptions: Jules
+  (`jules_tester`, separate daily-capped quota) and `agy`/Antigravity CLI
+  (separate subscription auth from the exhausted Google AI Studio budget,
+  but has its own usage cap — needs graceful quota-exhaustion handling,
+  not assumed unlimited). See `feedback_no_gemini_allowed_models` memory.
+- **Everything configurable, no hardcoded provider/tier paths.** A
+  function that only handles one provider/tier by name instead of
+  reading config and dispatching generically is a bug to fix. See
+  `feedback_everything_configurable_no_hardcoding` memory.
+- **OpenRouter shared rate limit**: all models on this account (free and
+  paid) share ONE pool — 20 RPM / 1000 RPD, not per-model. Explains
+  cascading 429s across unrelated tiers. See
+  `project_openrouter_shared_rate_limit` memory.
+- **DeepSeek peak-hours windows**: 01:00-04:00 and 06:00-10:00 UTC,
+  weekdays only (weekend fully off-peak, Beijing-time weekday check).
 
-User reported real financial harm: 36 OpenRouter content-filter blocks
-today (the already-queued phone-number-false-positive bug, unrelated) PLUS
-**unauthorized OpenRouter billing from Gemini calls**, on top of an
-already-exhausted Google AI Studio monthly budget. Root cause confirmed by
-reading the code (not guessed): `config/tiers.yaml`'s
-`tier_2_manager.fallback_chain` held 4 Gemini model names
-(`gemini-3.5-flash` etc.), intended for the separate Google-AI-Studio-direct
-`gemini_fallback.py` path, but **two call sites instead sent those names
-through `tier_2_manager`'s own `provider: openrouter`**:
-- `tier2_escalate.py` (real repair fallback) tries Nemotron first, then
-  walks the Gemini-named chain through OpenRouter on 429/403 — every one of
-  those was actually an OpenRouter-billed call to a paid model, not the
-  free/direct Google path the names implied.
-- `dispatcher.breakdown_phase()` (plan breakdown, called every dispatch)
-  is worse: `models = [model] if model else (tier2.get("fallback_chain") or
-  [default_model])` — with a non-empty `fallback_chain`, this **skipped the
-  free Nemotron default entirely** and used the Gemini chain as its primary
-  model list, unconditionally, on every single phase breakdown. This has
-  likely been the actual behavior since Tier 2 was last reconfigured, not
-  just today.
+## Next up
 
-**Fix applied directly (config-only, permitted without dispatch per the
-docs/config carve-out, and urgent given ongoing financial exposure):**
-`tier_2_manager.fallback_chain` set to `[]` in `config/tiers.yaml`.
-Verified live: `load_tiers()["tier_2_manager"]["fallback_chain"] == []`,
-both Tier 2 call sites now correctly fall through to Nemotron
-(`nvidia/nemotron-3-ultra-550b-a55b:free`) only, and the full regression
-suite (95 + 22 tests) still passes. No dispatch process was running at the
-time this was found — nothing further was charged after the fix landed.
-(`jules_tester.enabled` was also briefly set to `false` in this same
-session, then reverted to `true` per the user's clarification above —
-Jules is a separate, differently-metered exposure, not part of this
-incident.)
+**1. The actual tier reassignment (config/tiers.yaml) — both prep plans
+are done, this is now unblocked.** Final agreed layout ("FINAL, v2" design
+from earlier tonight — search this file's history if the summary below
+isn't enough):
+- Tier 1 = `stealth/ox-alpha` (unchanged)
+- Tier 2 = DeepSeek **v4 pro** (real API) — **exact model string not yet
+  verified against DeepSeek's real API**, don't guess, check before wiring
+- Tier 3 = Gemini 3.1 pro via `agy` CLI, effort high,
+  `--dangerously-skip-permissions` (now has a real, tested provider branch
+  to use — see Phase 31)
+- Tier 4 = local qwen (`qwen2.5-coder:14b-instruct-q6_K`, unchanged)
+This is a config-only change now that the code prerequisites exist, but
+still real behavior change — go through `triapi plan`/`dispatch` per the
+user's own stated preference for this change, not a silent hand-edit.
 
-**Not yet done — needs a real `triapi plan`/dispatch pass once Gemini use
-is re-authorized (don't dispatch anything Gemini-touching before then, per
-the STOP rule above):** decide the actual intended design (should Tier 2
-ever fall back to Gemini at all, and if so, through which path/provider?)
-and either restore a corrected `fallback_chain` wired through
-`gemini_fallback.py`'s direct endpoint, or remove the dead
-`gemini_fallback.py`/`gemini_fallback:` config block entirely if Gemini
-should never come back into this tier. Also worth an explicit regression
-test asserting no tier's configured chain can send a non-allowlisted model
-through `provider: openrouter` without the
-user's sign-off, so a future config edit can't silently reintroduce this.
+**2. Two follow-ons queued, not yet started:**
+- Add `agy` as a `tier_5_librarian` fallback leg (its ~1M context solves
+  the recurring PLAN.md doc-update failures hit three times tonight —
+  Phases 30, 31, 32 all had to write PLAN.md's own phase entry by hand
+  because the librarian's local+OpenRouter legs couldn't handle it).
+- Make every tier's fallback mechanism individually on/off configurable,
+  matching the "everything configurable" principle — natural extension of
+  the backend-registry architecture item below.
 
-## Incident evidence, 2026-08-25: OpenRouter's own "Blocked Requests"
-dashboard (user-provided screenshot) — 36 total blocked today, broken down
-by category: **PHONE 18, EMAIL 12, IP ADDRESS 6.** Two scope corrections
-for the already-queued Phase 1 item (`_PHONE_LIKE_RE` in
-`llm_client._sanitize_for_openrouter_content_filter()`, run
-`20260824-164451-2b7635`, currently paused) before it's dispatched again:
-1. **IP-address case is entirely unhandled** — needs its own regex/redact
-   case alongside the phone one (IPv4-shaped, careful not to mangle
-   version strings, hex hashes, or other dotted-number content).
-2. **Email blocks (12) are non-trivial despite `_EMAIL_LIKE_RE` already
-   existing** (Phase 26) and every known OpenRouter call site routing
-   through `execute_llm()`'s sanitizer (`probe_models()`,
-   `tier2_escalate.py`, `dispatcher.breakdown_phase()`'s openrouter
-   branch, `librarian_escalate.py`'s fallback leg all confirmed to call
-   `execute_llm`, which applies it) — plausible this is just historical
-   (pre-Phase-26) volume in the same dashboard window, but worth an
-   explicit audit before assuming the existing email case is complete:
-   confirm no OpenRouter request body is ever built without going through
-   `_sanitize_for_openrouter_content_filter()` first.
-   Amend Phase 1's item description to cover both before dispatching.
-   **DONE 2026-08-25: both items amended directly in the run's persisted
-   breakdown JSON (item descriptions, not code) and dispatched — both
-   landed clean via Tier 4** (`_IP_LIKE_RE` + audit added to
-   `llm_client.py`, tests added). Phase 2 item 0 (dispatcher peak-hours
-   dedup) also landed clean via Tier 4. Phase 2 item 1 then crashed the
-   whole run on a genuine transient Nvidia 502 on Tier 2's free Nemotron
-   model (`Upstream error from Nvidia: Service temporarily overloaded`) —
-   **new finding: Tier 2 has no retry tolerance for a single transient
-   upstream blip**, unlike `probe_models()`'s `_probe_with_retry()` (added
-   2026-08-24 for exactly this class of issue). TriAPI's self-fix system
-   auto-captured this crash and drafted a fix, queued as self-fix run
-   `20260824-190921-1fc713` — let it sit for review, don't hand-patch
-   `tier2_escalate.py`, don't auto-approve without reading it first.
-   **Second, same-class crash on retry:** resumed dispatch, Phase 2 item 1
-   crashed again — this time Tier 4 (`dots-studio/dots-3-note-preview:free`)
-   hit a transient `{"message": "Provider returned error", "code": 400}`
-   and orchestrator logged "crashing pipeline" instead of falling through
-   to Tier 3. **Third crash on the next retry: Tier 2/Nemotron hit the
-   identical 502 upstream-overload error again** — three occurrences of
-   the same Nemotron 502 across three resumes in ~20 minutes now looks
-   like sustained upstream instability on that free backend tonight, not
-   a one-off blip; self-fix auto-drafted a SECOND duplicate fix for the
-   same crash, `20260824-192405-f29d2c` (skip/dedupe against
-   `1fc713` when reviewing, same as the existing 429-probe duplicates
-   below). **Broader finding worth its own queued item**: a single
-   transient upstream 4xx/5xx from a free model crashing the whole
-   dispatch instead of retrying in-place or falling through the tier
-   ladder has now hit both Tier 2 and Tier 4 independently this session —
-   likely a systemic gap in `orchestrator.run_task()`'s error handling
-   around `execute_llm()` calls generally (missing the same
-   `_probe_with_retry()`-style tolerance `probe_models()` got
-   2026-08-24), not several unrelated bugs. Worth folding into whichever
-   self-fix run above actually gets approved, scoped broadly rather than
-   just the one call site it was captured from.
-   **Given three Nemotron 502s in ~20 minutes, back off longer (15-20 min)
-   before the next `triapi dispatch 20260824-164451-2b7635` retry** rather
-   than resuming immediately again — let the upstream backend recover.
-   **Correction from the user, 2026-08-25: all OpenRouter models (free and
-   paid) share ONE account-wide rate-limit pool — 20 RPM / 1000 RPD, not a
-   per-model allowance.** This reframes tonight's cascade: `probe_models()`
-   alone fires 4+ OpenRouter calls per dispatch resume (tier_5, tier_4,
-   tier_2, tier_1_planner), so a handful of resumes in quick succession,
-   plus real tier work, can burn through the shared 20 RPM ceiling on its
-   own — the repeated `tier_1_planner` 429s and the Nemotron "502
-   Upstream overloaded" messages may both really be the *same* shared-pool
-   exhaustion wearing different error faces, not two unrelated upstream
-   issues. Strengthens the case for the already-queued
-   `probe_models()`-scoping fix (folded into the router/backend-registry
-   architecture item) — it isn't just faster, it directly reduces pressure
-   on a budget every tier draws from. A 60s-ish gap should be enough for
-   the RPM side to clear on its own; if failures persist past that, it's
-   more likely the 1000 RPD daily cap (account-wide, cumulative across the
-   whole day/session, not per-tier) — which only clears at day rollover,
-   so further short retries would be pointless in that case. Worth adding
-   an account-wide (not per-tier) RPM/RPD budget tracker alongside
-   `budget_guard.py`'s existing per-tier checks, queued as part of the
-   same architecture-item scope, not hand-built.
+**3. Groq provider addition** (`qwen/qwen3.6-27b`, `groq_api_key` already
+in `secrets.enc.yaml`, unwired) — for a lightweight/router role, not a
+tier replacement. Rate limits given: RPM 30, RPD 1,000, TPM 8,000, and a
+"200K" figure whose unit needs verifying against Groq's real docs before
+wiring a hard gate on it.
 
-## Standing rule (2026-08-25): explicit tier defaults, user-specified
-after the billing incident, to be enforced going forward — **Tier 1 =
-`stealth/ox-alpha` (OpenRouter free), Tier 2 = Nemotron (OpenRouter free)
-— both already correct in `config/tiers.yaml`, no change needed.** For
-Tier 3/4, the user wants a **peak-hours-conditional swap**, confirmed by
-the user to be built via `triapi plan`/`dispatch` against TriAPI's own
-repo, NOT hand-coded (their explicit choice when asked). Design, refined
-by the user 2026-08-25 (startup-probe form, not a per-call gate):
+**4. Architecture items** (self-feature work — plan/dispatch, don't
+hand-build):
+- Named backend registry (`backends:` section in `tiers.yaml`) so
+  tier↔model reassignment is a one-line pointer change.
+- Complexity-aware router ahead of the tier ladder (large plan → full
+  ladder, pure doc-reconcile → straight to Tier 5). Also would subsume
+  `probe_models()` unconditionally gating on all 6 tiers even when a
+  run's breakdown doesn't need them all (found earlier tonight, not yet
+  fixed).
 
-- **At TriAPI process startup**, probe the current Beijing time
-  (`Asia/Shanghai`) once, compute how long remains until the next off-peak
-  window per `budget_guard`'s existing peak-window logic (weekday check +
-  the two configured UTC windows in `tier_3_debugger.peak_hours_utc`), and
-  set an **in-memory countdown/lockout** for that duration. This is
-  explicitly startup-scoped, not persisted: "the count down dies when
-  triapi shutdown" — a fresh process re-probes from scratch, it does not
-  resume a saved countdown.
-- **While the lockout is active, DeepSeek is blocked from entering the
-  pipeline entirely** — not just skipped-with-a-warning like the current
-  `check_tier3_peak_hours_ok()` gate, but structurally prevented from
-  being selected as Tier 3 for the run's duration.
-- **While locked out, Tier 3 and Tier 4 both promote/reassign
-  automatically:** Tier 3 = notes3 (`dots-studio/dots-3-note-preview:free`,
-  today's static Tier 4 default), Tier 4 = local Ollama qwen
-  (`qwen2.5-coder`, already configured as `ollama_fallback`'s default).
-- **Off-peak (no lockout active):** Tier 3 = DeepSeek, Tier 4 = notes3 —
-  today's current static config, unchanged.
+**Separately, on hold for the user (not part of the ordering above):**
+- **Virtual Codebase Plan** — `VIRTUAL_CODEBASE_PLAN.md` at repo root.
+  User wants to work on this one together, personally — hold off solo.
+- **Consolidate target-repo-specific content out of TriAPI's own docs**
+  (~700 lines of `PLAN.md` history, plus a few `AGENTS.md`/`README.md`
+  mentions) — both planning and execution go through TriAPI itself
+  (`triapi plan`, Tier 5 doing the rewriting), not a hand-drafted plan or
+  a one-off script.
 
-This needs a startup hook (compute the lockout once when `triapi` starts,
-not per-call), an in-memory timer/flag threaded through to wherever
-Tier 3/4 are selected (`tier3_escalate.py`, `tier4_worker.py`,
-`probe_models()`), and default_model swapping at that selection point —
-none of which exists today (`tier3_escalate.py`/`tier4_worker.py` currently
-have no such branching, and `check_tier3_peak_hours_ok()` is a per-call
-advisory/skip gate, not a startup lockout). Draft this as its own
-`triapi plan` once the current OpenRouter-fixes run
-(`20260824-164451-2b7635`) finishes — don't bundle it into that run, it's
-unrelated in scope.
+
+## Historical archive (2026-08-24 sessions, superseded by the summary above, kept for deep context only)
 
 ## Current state
 
