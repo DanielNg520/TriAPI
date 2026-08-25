@@ -13,63 +13,113 @@ UTC**. All work up to this point is committed. Nothing is running.
    2 for its own breakdown — unaffected by the tier changes below since
    those haven't landed yet.
 2. THEN draft/dispatch the new-tier-layout plan (see the "FINAL,
-   2026-08-25" decision below): `_breakdown_phase_attempt()` provider-
-   branch fix + peak-hours-gate generalization to DeepSeek specifically,
-   THEN the actual `config/tiers.yaml` reassignment (Tier 2 = DeepSeek
-   API, Tier 3 = local DeepSeek-family, Tier 4 = local qwen). Also queued
-   and can bundle in: the Groq provider addition.
+   2026-08-25 (v2)" decision below): smoke-test `agy` headless mode +
+   new `provider: "agy"` branch in `llm_client.py` +
+   `_breakdown_phase_attempt()` provider-branch fix + peak-hours-gate
+   generalization to DeepSeek specifically, THEN the actual
+   `config/tiers.yaml` reassignment. Also queued and can bundle in: the
+   Groq provider addition.
 
-**FINAL, 2026-08-25 (superseding two earlier drafts of this same
-decision below only for historical trace — this is the one to
-implement): new tier layout for the rest of the month —**
+**FINAL, 2026-08-25 (v2) — supersedes the v1 draft immediately below
+(kept only for historical trace, DO NOT implement v1): new tier layout
+for the rest of the month —**
 - **Tier 1** = `stealth/ox-alpha` (OpenRouter), Claude CLI fallback
   (unchanged).
-- **Tier 2** = DeepSeek, real hosted API (`api.deepseek.com`) — promoted
-  from Tier 3.
-- **Tier 3** = DeepSeek, local via Ollama (a local DeepSeek-family model —
-  candidates `deepseek-coder-v2:16b` or `deepseek-r1:14b`, both already
-  pulled on this box; avoid the `:32b` variants, this machine's AMD 780M
-  iGPU has documented OOM/timeout history with 30B+ models per PLAN.md).
+- **Tier 2** = DeepSeek **v4 pro** (real hosted API, `api.deepseek.com`)
+  — exact model string not yet verified against DeepSeek's real API
+  (current config only has a `flash` model key resolving to
+  `deepseek-v4-flash`; confirm the real "pro" model id before wiring,
+  don't guess).
+- **Tier 3** = `agy` (Antigravity CLI) running **Gemini 3.1 pro, effort
+  high**, with `--dangerously-skip-permissions` where needed for
+  non-interactive dispatch use. **This is Gemini use, explicitly
+  re-authorized by the user for this specific path only** — see the
+  scoped-exception note below, [[feedback_no_gemini_allowed_models]] in
+  memory needs updating to reflect this once implemented.
 - **Tier 4** = qwen, local via Ollama (`qwen2.5-coder:14b-instruct-q6_K`,
-  already proven reliable here).
-- Nemotron/OpenRouter dropped from Tier 2 entirely; two prior drafts of
-  this decision (Tier 2 = nothing, then Tier 2 = Claude CLI) are
-  superseded by this one.
+  unchanged, kept per the user's own condition "if triapi can run cli
+  command" — already true, Tier 1's Claude CLI proves TriAPI can invoke
+  CLI tools).
+- v1 draft (Tier 3 = local DeepSeek-family model) is fully superseded —
+  do not implement it.
+
+**Scoped exception to the standing "no Gemini" rule (2026-08-25):**
+Gemini is re-authorized specifically via `agy`'s own OAuth/subscription
+auth, confirmed by the user to be a **separate pool from the exhausted
+Google AI Studio monthly budget** (`google_ai_studio_api_key`) — but the
+user also confirmed **`agy` has its own usage cap and calls will fail
+once THAT is exhausted** ("we won't be able to call it if we exhaust the
+usage"). This means Tier 3/`agy` needs its own budget-guard-style
+protection (detect a quota/limit response and fall through to Tier 2,
+the same way `check_tier1_manager_ok()` gates Tier 1 — not a hard crash).
+Gemini via the raw API/OpenRouter/`google_ai_studio_api_key` path remains
+OFF — this exception covers `agy` only, nothing else.
+
+**Findings from a live (partial) investigation done during the pause —
+read-only, no dispatch calls made:**
+- `agy` is installed (`/home/dyne/.local/bin/agy`) with a CLI surface
+  nearly identical in shape to Claude CLI (`--print`, `--model`,
+  `--effort low|medium|high`, `--dangerously-skip-permissions`,
+  `--output-format json`, etc.) — a new `provider: "agy"` branch in
+  `llm_client.execute_llm()` should closely mirror the existing
+  `_call_claude_cli()`.
+- An OAuth token already exists at
+  `~/.gemini/antigravity-cli/antigravity-oauth-token`, so `agy` is likely
+  pre-authenticated and usable non-interactively without a fresh login
+  flow — **not fully confirmed**: a test `agy models` call during the
+  pause hadn't returned after ~20s and was killed rather than let run
+  longer (to avoid burning time/quota mid-pause per the user's own
+  directive). **First real item in the eventual plan should be a short,
+  explicit smoke test** (e.g. `agy -p "reply pong" --model
+  gemini-3.1-pro --effort low --dangerously-skip-permissions
+  --output-format json`, generously timed) to confirm headless mode
+  actually works and to get `agy models`' real output for the exact
+  model id string, before wiring the full provider integration.
 
 **Required alongside the config change — not optional, per the
 "everything configurable" principle below:** `budget_guard.
 check_tier3_peak_hours_ok()` is currently named/wired for "Tier 3"
 specifically. It must be generalized to key off **the real DeepSeek
 hosted API specifically** (`provider == "deepseek"` AND the paid
-`api.deepseek.com` endpoint), not a tier-number position — since DeepSeek
-now sits in the Tier 2 slot, and a *local* Ollama-hosted DeepSeek-family
-model in Tier 3 has no API pricing/peak-hours concept at all and must
-NOT be gated by this check. Whichever tier's config currently resolves to
-the real DeepSeek API should be the one this gate protects, found by
-provider+endpoint match, not by tier name — this is the same class of
-fix as `dispatcher._breakdown_phase_attempt()`'s hardcoded provider
-branch (see the standing principle below), so consider doing both in the
-same plan.
+`api.deepseek.com` endpoint), not a tier-number position — DeepSeek now
+sits in the Tier 2 slot, and Tier 3 (Gemini via `agy`) has no DeepSeek
+pricing concept at all and must never be gated by this check. Whichever
+tier's config resolves to the real DeepSeek API should be the one this
+gate protects, found by provider+endpoint match, not by tier name — same
+class of fix as `dispatcher._breakdown_phase_attempt()`'s hardcoded
+provider branch (see the standing principle below); do both in the same
+plan.
 
-Also still true from the superseded CLI draft (Tier 2's provider changed
-again, but the underlying `_breakdown_phase_attempt()` bug is unrelated
-to which provider Tier 2 ends up as): `dispatcher._breakdown_phase_attempt()`
-hardcodes `if provider == "openrouter": ... else: <google/gemini_fallback
-path>` — DeepSeek-as-Tier-2 would fall into the same wrong branch CLI
-would have. Fix: make the `else` branch only handle `provider == "google"`
-specifically, and route everything else through `llm_client.execute_llm()`
-generically (matching `tier2_escalate.py`'s and `tier3_escalate.py`'s
-existing pattern — both already dispatch DeepSeek generically with zero
-code changes needed on their end).
+Also still needed regardless of which provider ends up in Tier 2:
+`dispatcher._breakdown_phase_attempt()` hardcodes `if provider ==
+"openrouter": ... else: <google/gemini_fallback path>` — DeepSeek (or
+any non-openrouter/non-google provider) as Tier 2 would fall into the
+wrong branch. Fix: make the `else` branch only handle `provider ==
+"google"` specifically, and route everything else through
+`llm_client.execute_llm()` generically (matching `tier2_escalate.py`'s
+and `tier3_escalate.py`'s existing pattern — both already dispatch
+DeepSeek generically with zero code changes needed on their end).
 
-**Sequencing once resumed:** dispatch the `_breakdown_phase_attempt()`
-fix AND the peak-hours-gate generalization FIRST, using the
+**Sequencing once resumed:** (1) `agy` smoke test, (2) new `provider:
+"agy"` branch in `llm_client.py` + its own budget-guard/quota-exhaustion
+handling, (3) `_breakdown_phase_attempt()` provider-branch fix, (4)
+peak-hours-gate generalization to DeepSeek specifically — all using the
 still-functional current Tier 2 config (Nemotron/OpenRouter) to do that
 one planning/breakdown call — only flip `config/tiers.yaml`'s tier
-assignments to the FINAL layout above after those two fixes are landed
-and tested. Bundle with the Groq provider addition if convenient (all
-touch `llm_client.py`/`config/tiers.yaml` in the same area), or run
+assignments to the FINAL (v2) layout above after those land and test
+clean. Bundle with the Groq provider addition if convenient (all touch
+`llm_client.py`/`config/tiers.yaml` in the same area), or run
 separately — user's call.
+
+<details>
+<summary>v1 draft, superseded, kept for historical trace only</summary>
+
+Tier 2 = DeepSeek (real API), Tier 3 = local DeepSeek-family model
+(`deepseek-coder-v2:16b` or `deepseek-r1:14b`, avoiding `:32b` variants
+per this box's documented iGPU OOM history), Tier 4 = local qwen
+(unchanged). Fully replaced by the `agy`/Gemini-3.1-pro-for-Tier-3
+version above — do not implement this v1 shape.
+</details>
 
 **Standing principle added, 2026-08-25 (user's own words): "Every single
 feature of TriAPI pipeline has to be highly configurable. If there is
