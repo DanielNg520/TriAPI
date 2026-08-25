@@ -29,66 +29,23 @@ tier_1_manager:
   effort: "high"
 
 tier_2_manager:
-  provider: openrouter
-  api_key_secret: open_router_api_key
-  name: "OpenRouter Nemotron"
-  # The Antigravity 2.0 desktop app is a GUI with no headless mode and stays
-  # available as a manual review surface, but automated escalation calls the
-  # underlying Gemini model directly via the Google AI Studio REST API --
-  # not through the desktop app.
-  endpoint: "https://openrouter.ai/api/v1"
+  provider: deepseek
+  api_key_secret: deepseek_api_key
+  name: "DeepSeek API"
+  endpoint: "https://api.deepseek.com"
   models:
-    default: "nvidia/nemotron-3-ultra-550b-a55b:free"
-    flash: "gemini-3.5-flash"
-    pro: "gemini-2.5-pro"
+    default: "deepseek-v4-pro"
   default_model: default
-  # DISABLED 2026-08-25 (user directive: no Gemini calls, in any form,
-  # until told otherwise -- unauthorized OpenRouter billing incident, see
-  # CARRYOVER.md). fallback_chain WAS a list of Gemini model names, but
-  # both dispatcher.breakdown_phase() and tier2_escalate.py send it
-  # through tier_2_manager's own `provider: openrouter` -- not the
-  # Google-direct `gemini_fallback` path those names were written for.
-  # Worse, breakdown_phase() used fallback_chain (when non-empty) as its
-  # PRIMARY model list whenever no explicit model was requested, skipping
-  # the free Nemotron default entirely -- so every plan breakdown was
-  # paying OpenRouter for a Gemini model instead of using the intended
-  # free tier. Emptying this list restores Nemotron as the only model
-  # actually used, in both call sites, and removes Gemini from Tier 2
-  # entirely until re-enabled by explicit request.
-  # Tried in order whenever the current model's free-tier quota is
-  # exhausted for the day -- confirmed live 2026-08-10 that Google buckets
-  # this per model (error body: quotaId
-  # "GenerateRequestsPerDayPerProjectPerModel-FreeTier", quotaValue 20 for
-  # gemini-3.5-flash specifically), so a different model has its own
-  # separate, unexhausted allowance. Per user direction: falls DOWN to
-  # older/lighter models, never up to a newer one -- a newer model (e.g.
-  # gemini-3.6-flash, version-wise above the default) is left for a
-  # deliberate manual choice, not silently substituted by this reactive
-  # chain. List verified against the real available models (GET
-  # /v1beta/models) on 2026-08-10, flash-tier only (no -preview/-image/-tts
-  # variants, no "-latest" aliases since their underlying quota bucket is
-  # ambiguous).
-  fallback_chain: []  # was the 4 gemini-*-flash names -- see DISABLED comment above
   role: "task orchestration, context isolation, high-level architectural correction"
   automatable: true
+  peak_hours_utc:
+    - ["01:00", "04:00"]
+    - ["06:00", "10:00"]
   pricing:
-    # NOT free tier: user confirmed 2026-08-19 the Cloud project behind this
-    # API key is billing-enabled ($10/mo recurring credit + $300 intro
-    # credit), which per Google's rate-limit system means this project
-    # auto-qualifies for at least Tier 1 paid limits, not the Free tier
-    # these values previously assumed. Verified externally: Gemini 2.5 Pro
-    # on Tier 1 paid is 150 RPM with no daily (RPD) cap. Could NOT
-    # independently verify the exact figure for the flash models this repo
-    # actually calls (gemini-3.5-flash / fallback_chain) -- flash limits are
-    # typically equal to or higher than Pro's, so free_tier_rpm/rpd below
-    # are raised to a deliberately conservative floor, not the real ceiling.
-    # budget_guard.py treats these as a hard cap -- re-verify the exact
-    # per-model Tier 1 numbers at https://ai.google.dev/gemini-api/docs/rate-limits
-    # (or Google AI Studio's own per-key display) before loosening further.
-    last_verified: "2026-08-19"
-    free_tier_rpm: 60
-    free_tier_rpd: 1500
-    notes: "billing-enabled Tier 1+ paid project (confirmed 2026-08-19); RPM/RPD below are a conservative floor, not independently verified for the specific flash models used here -- see comment above"
+    last_verified: "2026-08-09"
+    cache_hit_per_mtok_usd: 0.003625
+    cache_miss_per_mtok_usd: null
+    output_per_mtok_usd: null
 
 gemini_fallback:
   endpoint: "https://generativelanguage.googleapis.com"
@@ -96,68 +53,37 @@ gemini_fallback:
     flash: "gemini-3.5-flash"
   api_key_secret: google_ai_studio_api_key
 
+# Fixed reference point for cost_report.deepseek_flash_cost() -- prices
+# Tier 4's actual volume as if it had run on DeepSeek flash instead,
+# regardless of which tier slot (if any) DeepSeek currently occupies.
+# Deliberately NOT nested under any tier_N_* block: those blocks describe
+# the live, hot-swappable pipeline assignment (see tier_2_manager/
+# tier_3_debugger's own swap history above), while this is a stable
+# external benchmark that must survive tier reassignment. Moved out of
+# tier_3_debugger's old pricing.flash sub-block 2026-08-25 when that tier
+# swapped to agy and stopped carrying any DeepSeek pricing at all.
+deepseek_reference_pricing:
+  last_verified: "2026-08-09"
+  cache_miss_per_mtok_usd: 0.14
+  cache_hit_per_mtok_usd: 0.0028
+  output_per_mtok_usd: null
+
 tier_3_debugger:
-  # Swapped 2026-08-24: real DeepSeek API confirmed live (direct
-  # api.deepseek.com, not via OpenRouter) -- user's call, per this repo's
-  # config-driven/hot-swappable tier design (any API/local model/CLI can
-  # sit in any tier slot). "flash" resolves server-side to DeepSeek's
-  # current flagship (confirmed live: "deepseek-v4-flash"), matching the
-  # pricing.flash block below.
-  provider: deepseek
-  api_key_secret: deepseek_api_key
-  name: "DeepSeek API"
-  endpoint: "https://api.deepseek.com"
+  provider: agy
   models:
-    flash: "deepseek-chat"
-  default_model: flash
-  role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
+    default: gemini-3.1-pro
+  default_model: default
+  effort: high
+  role: "complex C++ logic, hard SIMD fixes, algorithmic diffs (Gemini 3.1 Pro via Antigravity CLI)"
   automatable: true
-  peak_hours_utc:
-    # DeepSeek V4 pricing (effective 2026-08-16T16:00 UTC): 2x cost during
-    # these UTC windows (verified live 2026-08-24T07:55:56Z against
-    # America/Los_Angeles PDT wall-clock: UTC 07:55 == LA 00:55, so 06:00-10:00
-    # UTC is "overnight/early-morning" in LA but still a peak window per
-    # DeepSeek's UTC-based schedule). See
-    # budget_guard.check_tier3_peak_hours_ok(), which reads this list
-    # instead of hardcoding the windows.
-    - ["01:00", "04:00"]
-    - ["06:00", "10:00"]
-  pricing:
-    # Verify against DeepSeek's live pricing page periodically -- these
-    # numbers WILL drift. Cost logging stores raw token counts precisely
-    # so historical cost can be recomputed if this block goes stale.
-    last_verified: "2026-08-09"
-    flash:
-      cache_miss_per_mtok_usd: 0.14
-      cache_hit_per_mtok_usd: 0.0028
-      output_per_mtok_usd: null   # not given in source doc -- verify before relying on it
-    pro:
-      cache_miss_per_mtok_usd: null  # not given in source doc -- verify before relying on it
-      cache_hit_per_mtok_usd: 0.003625
-      output_per_mtok_usd: null      # not given in source doc -- verify before relying on it
-    default:
-      cache_miss_per_mtok_usd: 0.0
-      cache_hit_per_mtok_usd: 0.0
-      output_per_mtok_usd: 0.0
 
 tier_4_worker:
-  # Swapped 2026-08-24: moved off local Ollama to notes3 (dots-3-note,
-  # via OpenRouter) -- user's call, same hot-swappable-tier rationale as
-  # tier_3_debugger above. This also sidesteps the Phase 25 issue
-  # (genuine, reproducible local-Ollama Tier 4 timeouts on this box):
-  # dispatch no longer depends on local Ollama being up/responsive at all.
-  # Local Ollama models remain available for oh-my-llama's own services --
-  # this only frees TriAPI's dispatch from contending for them.
-  provider: openrouter
-  api_key_secret: open_router_api_key
-  name: "OpenRouter Dots (notes3)"
-  endpoint: "https://openrouter.ai/api/v1"
+  provider: ollama
+  endpoint: "http://localhost:11434"
   models:
-    default: "dots-studio/dots-3-note-preview:free"
+    default: "qwen2.5-coder:14b-instruct-q6_K"
   default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
-  # Cloud-hosted now (not local Ollama), so no "is it even running" concern --
-  # safe to auto-dispatch to this tier by default.
   automatable: true
   # Project-specific; callers may override per invocation.
   build_commands:

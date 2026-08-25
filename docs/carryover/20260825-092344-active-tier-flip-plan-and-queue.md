@@ -3,6 +3,86 @@
 **This is the primary file to read to resume work — everything else in
 `docs/carryover/` is historical/completed context only.**
 
+## 2026-08-25 ~11:40 session stop (usage-limited, stopped gracefully mid-task)
+
+**Tier-flip dispatch (`20260825-092344-5ff4a7`) is 9/15 items done, NOT
+finished.** Phase 1 (all 4 config-reassignment items) and Phase 2 (live
+pre-flight probe) both completed successfully. Phase 3 item 1 (rename
+`TIER_3_DEBUGGER_CONFIG`→`TIER_2_MANAGER_CONFIG` fixture in
+`tests/test_orchestrator_tier3_peak_skip.py`) landed **incompletely** —
+bigger leftover than first recorded here. Checked the actual file
+2026-08-25 ~12:05: only the fixture's *definition* was renamed/rewritten
+(new `TIER_2_MANAGER_CONFIG` dict at the top, correct new shape). Every
+*usage* site still references the old name, and worse,
+`test_config_matches_tiers_yaml` (lines 31-57) still asserts the entire OLD
+`tier_3_debugger` shape verbatim (nested `flash`/`pro`/`default` pricing
+sub-keys, `models: {"flash": "deepseek-chat"}`, old role text) — none of it
+matches the new `TIER_2_MANAGER_CONFIG` dict sitting right above it.
+`test_peak_hours_skip_tier3`/`test_off_peak_allows_tier3` (lines 65, 73)
+also still pass `{"tier_3_debugger": TIER_3_DEBUGGER_CONFIG}` to the mocked
+loader instead of `{"tier_2_manager": TIER_2_MANAGER_CONFIG}`. Full suite
+run (Phase 3 item 3) failed hard on this:
+`NameError: name 'TIER_3_DEBUGGER_CONFIG' is not defined`. See
+`logs/escalation_20260825-092344-5ff4a7-p2-i2.md`. Run status:
+`stopped_on_failure`, human_handoff logged. **Next session: rewrite
+`test_config_matches_tiers_yaml`'s body (lines 32-57) to assert
+`TIER_2_MANAGER_CONFIG`'s actual flat-pricing shape instead of the old
+nested one, and fix the two mock `load_tiers` calls (lines 65, 73) to key
+on `tier_2_manager` — the exact target shape is already fully specified in
+AGENTS.md's own embedded Phase 3 checklist item (see the
+`<!-- triapi:plan run_id=20260825-092344-5ff4a7 -->` block, Phase 3 first
+bullet) — then rerun the suite, then
+`triapi dispatch 20260825-092344-5ff4a7` to resume through Phase 3 item
+3's rerun + all of Phase 4 (AGENTS.md/PLAN.md updates) if nothing else
+surfaces.**
+
+Three real root-cause bugs were found and fixed this session while
+supervising this run (all committed to the working tree, uncommitted at
+session end — verify `git status` before assuming these landed):
+`scripts/judge.py` and `scripts/tier3_escalate.py` both hardcoded Tier 3 to
+a raw DeepSeek-shaped HTTP call and `tier3["pricing"][model_key]` direct
+indexing instead of the generic `llm_client.execute_llm()` dispatcher —
+broke the instant Tier 3 became `agy` (a CLI provider with no
+endpoint/pricing block). Fixed both call sites to route generically and use
+`.get()` fallbacks; updated `tests/test_judge.py`'s mocks to match (16/16
+pass). Also found the dispatch's own regression-check catch a real bug:
+applying the Tier 3 edit had silently stripped `peak_hours_utc`/`pricing`
+that a prior item had just added to `tier_2_manager` — restored by hand.
+And `scripts/cost_report.py`'s `deepseek_flash_cost()` had the same
+hardcoded-pricing-under-tier_3_debugger pattern (third occurrence) — fixed
+by moving that reference pricing into a new standalone
+`deepseek_reference_pricing` top-level block in `config/tiers.yaml`,
+decoupled from any tier slot. Full 191-test suite was green after all
+three fixes, before this last Phase-3-fixture issue surfaced.
+
+**Also found, not yet fixed:** `scripts/librarian_escalate.py` silently
+no-op'd (`"changed": false`) on a legitimate, straightforward append to a
+small (7.8KB) file — not the known large-doc gap. Worked around by hand
+once; still needs investigation as its own bug.
+
+**New feature queued, NOT yet planned/dispatched (do not hand-build —
+route through `triapi plan`/`triapi dispatch` once the tier-flip run above
+is fully drained; blocked right now by the one-plan-per-repo gate anyway):**
+add a `triapi tui` subcommand. Spec, confirmed with the user 2026-08-25:
+- New CLI flag/subcommand `triapi tui` (not a change to bare `triapi`'s
+  existing behavior) launches an interactive terminal UI.
+- Each prompt typed into the TUI triggers a **fresh, independent**
+  `claude -p "<prompt>"` call — explicitly NOT session-continued
+  (`--continue`/`--resume`) — no conversation memory is carried
+  CLI-side between turns.
+- Instead, continuity comes from logging: each call's progress/state/
+  activity, plus TriAPI's own errors and responses, gets a **meaningful,
+  brief** entry logged and indexed into `CARRYOVER.md` (presumably a new
+  dated `docs/carryover/` file per session, per the existing index
+  convention) so the *next* session/TUI launch has context of what came
+  before — this is the mechanism that replaces conversational memory here.
+- Output streams live into the TUI as `claude -p` generates it (not
+  buffered until completion).
+- The example prompt shape the user gave: a prompt like "Read carryover.md
+  and carryon with the queue." is exactly the kind of thing this TUI is
+  for — i.e. the TUI is meant to be the normal day-to-day driver of
+  TriAPI-adjacent work going forward, not a one-off tool.
+
 ## Current state
 
 System was rebooted after the 2026-08-24/25 overnight session, then a
@@ -106,6 +186,31 @@ again. Worth resolving before assuming the sanitizer is complete, though
 the queued `agy`-as-librarian-fallback item above sidesteps the whole
 question for the specific PLAN.md case (agy doesn't go through
 OpenRouter's filter at all).
+
+**Standing interim rule, user directive 2026-08-25 (during the tier-flip
+dispatch):** until the queued `agy`-as-`tier_5_librarian`-fallback-leg
+feature above is fully built, deployed, and confirmed working, manually
+invoke the `agy` CLI (Antigravity/Gemini 3.1 Pro, separate auth from
+OpenRouter, does not go through OpenRouter's content filter at all) to
+check/process any content suspected of tripping the OpenRouter `[PHONE]`
+false-positive filter (e.g. `PLAN.md`'s dense digit runs), instead of
+relying on the automated OpenRouter path or waiting on the unresolved
+shape-vs-digit-run root-cause test above. This is a manual workflow
+stopgap, not a code change — mark it superseded once the librarian
+fallback leg ships and is verified working.
+
+**Bug found while recording the note above:** `scripts/librarian_escalate.py`
+silently no-op'd on this exact file (`{"status": "success", "resolved_by":
+"tier_5", "changed": false, "via": "model_fresh"}`) when asked to append
+this same paragraph — a straightforward append to a 7,836-char file, well
+under the 73,728-char ceiling and not the known large-doc (`PLAN.md`) gap
+already tracked in `project_triapi_librarian` memory. The model apparently
+judged the file "fresh" (no change needed) despite the requested content
+genuinely being absent. Worked around by hand-editing this file directly
+this one time. Queued as a new, distinct librarian bug to investigate: why
+does Tier 5's model_fresh path decide "no change needed" for a real,
+missing addition on a small file? Reproduce with a similarly-sized
+target/description pair before assuming it's a fluke.
 
 **3. Groq provider addition** (`qwen/qwen3.6-27b`, `groq_api_key` already
 in `secrets.enc.yaml`, unwired) — for a lightweight/router role, not a

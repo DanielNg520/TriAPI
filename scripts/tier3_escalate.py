@@ -164,7 +164,11 @@ def escalate(
 
     model_key = model or tier3["default_model"]
     model_name = tier3["models"][model_key]
-    model_pricing = tier3["pricing"][model_key]
+    # .get(...) with an empty-dict fallback, not tier3["pricing"][model_key]:
+    # a CLI-based provider in this slot (agy, cli) has no token pricing block
+    # at all -- compute_cost() already treats missing price entries as
+    # partial/$0. See the matching fix in judge.py._call_tier3_with_retries.
+    model_pricing = tier3.get("pricing", {}).get(model_key, {})
 
     target_path = Path(target)
     state = read_state(task_id)
@@ -186,14 +190,21 @@ def escalate(
     user_message = build_user_message(stderr, revision_note)
 
     try:
+        # .get(...) throughout, not direct indexing: tier_3_debugger is a
+        # hot-swappable slot (per config/tiers.yaml's own design) and a
+        # CLI-based provider here (agy, cli) has neither an `endpoint` nor
+        # an `api_key_secret` field, and needs `effort` passed through where
+        # a DeepSeek-shaped provider does not. Found 2026-08-25 alongside
+        # the matching judge.py fix when this slot moved to agy.
         response_data, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
             provider=tier3.get("provider", "deepseek"),
-            endpoint=tier3["endpoint"],
-            api_key=secrets.get(tier3.get("api_key_secret", "deepseek_api_key")),
+            endpoint=tier3.get("endpoint"),
+            api_key=secrets.get(tier3.get("api_key_secret")),
             model=model_name,
             prompt=user_message,
             system_prompt=stable_context,
             is_tier4=False,
+            effort=tier3.get("effort"),
         )
     except Exception as e:
         log.error("[%s] Tier 3 request failed: %s", task_id, e)

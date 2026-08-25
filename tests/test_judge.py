@@ -9,8 +9,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import requests
-
 from scripts import judge
 
 
@@ -72,18 +70,14 @@ class JudgeTests(unittest.TestCase):
             '{"approved": true}',
         )
 
-    def _mock_response(self, content: str, usage: dict | None = None) -> mock.Mock:
-        resp = mock.Mock()
-        resp.raise_for_status = mock.Mock()
-        resp.json.return_value = {
-            "choices": [{"message": {"content": content}}],
-            "usage": usage or {
-                "prompt_cache_hit_tokens": 1,
-                "prompt_cache_miss_tokens": 1,
-                "completion_tokens": 1,
-            },
-        }
-        return resp
+    def _execute_llm_result(self, content: str, input_tokens: int = 1, output_tokens: int = 1):
+        # judge._call_tier3_with_retries now routes through
+        # llm_client.execute_llm() (generic provider dispatch) instead of a
+        # hardcoded DeepSeek-shaped requests.post -- these tests mock that
+        # call site instead, matching execute_llm's
+        # (response_text, billing_type, input_tokens, output_tokens) return
+        # shape. See the judge.py/tier3_escalate.py fix, 2026-08-25.
+        return (content, "deepseek", input_tokens, output_tokens)
 
     def test_evaluate_design_approved(self) -> None:
         content = json.dumps({"approved": True, "reason": "looks good"})
@@ -92,8 +86,8 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                return_value=self._mock_response(content),
+                "scripts.judge.llm_client.execute_llm",
+                return_value=self._execute_llm_result(content),
             ),
         ):
             result = judge.evaluate_design("diff", "goal")
@@ -108,8 +102,8 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                return_value=self._mock_response(content),
+                "scripts.judge.llm_client.execute_llm",
+                return_value=self._execute_llm_result(content),
             ),
         ):
             result = judge.evaluate_design("diff", "goal")
@@ -124,8 +118,8 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                return_value=self._mock_response(content),
+                "scripts.judge.llm_client.execute_llm",
+                return_value=self._execute_llm_result(content),
             ),
         ):
             result = judge.evaluate_design("diff", "goal")
@@ -133,8 +127,8 @@ class JudgeTests(unittest.TestCase):
         self.assertTrue(result["approved"])
 
     def test_evaluate_design_retries_then_succeeds(self) -> None:
-        bad_resp = self._mock_response("not json")
-        good_resp = self._mock_response(
+        bad_result = self._execute_llm_result("not json")
+        good_result = self._execute_llm_result(
             json.dumps({"approved": True, "reason": "ok"})
         )
         with (
@@ -142,28 +136,28 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                side_effect=[bad_resp, good_resp],
-            ) as mock_post,
+                "scripts.judge.llm_client.execute_llm",
+                side_effect=[bad_result, good_result],
+            ) as mock_execute,
         ):
             result = judge.evaluate_design("diff", "goal")
-        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_execute.call_count, 2)
         self.assertEqual(result["status"], "ok")
         self.assertTrue(result["approved"])
 
     def test_evaluate_design_dual_parse_failure(self) -> None:
-        bad_resp = self._mock_response("not json at all")
+        bad_result = self._execute_llm_result("not json at all")
         with (
             mock.patch(
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                return_value=bad_resp,
-            ) as mock_post,
+                "scripts.judge.llm_client.execute_llm",
+                return_value=bad_result,
+            ) as mock_execute,
         ):
             result = judge.evaluate_design("diff", "goal")
-        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_execute.call_count, 2)
         self.assertEqual(result["status"], "error")
         self.assertFalse(result["approved"])
         self.assertIn("Could not parse judge response after retry", result["reason"])
@@ -174,12 +168,12 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                side_effect=requests.RequestException("connection error"),
-            ) as mock_post,
+                "scripts.judge.llm_client.execute_llm",
+                side_effect=RuntimeError("connection error"),
+            ) as mock_execute,
         ):
             result = judge.evaluate_design("diff", "goal")
-        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_execute.call_count, 2)
         self.assertEqual(result["status"], "error")
         self.assertFalse(result["approved"])
 
@@ -189,10 +183,10 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok",
                 return_value={"ok": False, "reason": "peak hours"},
             ),
-            mock.patch("scripts.judge.requests.post") as mock_post,
+            mock.patch("scripts.judge.llm_client.execute_llm") as mock_execute,
         ):
             result = judge.evaluate_design("diff", "goal")
-        mock_post.assert_not_called()
+        mock_execute.assert_not_called()
         self.assertEqual(result["status"], "skipped")
         self.assertFalse(result["approved"])
         self.assertEqual(result["reason"], "peak hours")
@@ -205,8 +199,8 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                return_value=self._mock_response(content),
+                "scripts.judge.llm_client.execute_llm",
+                return_value=self._execute_llm_result(content),
             ),
         ):
             judge.evaluate_design("diff", "goal")
@@ -221,10 +215,10 @@ class JudgeTests(unittest.TestCase):
                 "scripts.judge.check_tier3_peak_hours_ok",
                 return_value={"ok": False, "reason": "peak hours"},
             ),
-            mock.patch("scripts.judge.requests.post") as mock_post,
+            mock.patch("scripts.judge.llm_client.execute_llm") as mock_execute,
         ):
             judge.extract_pattern("full file", "diff")
-        mock_post.assert_not_called()
+        mock_execute.assert_not_called()
 
     def test_extract_pattern_writes_snippet(self) -> None:
         content = "<triapi_snippet>\n### Lesson\nbody\n</triapi_snippet>"
@@ -235,8 +229,8 @@ class JudgeTests(unittest.TestCase):
                     "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
                 ),
                 mock.patch(
-                    "scripts.judge.requests.post",
-                    return_value=self._mock_response(content),
+                    "scripts.judge.llm_client.execute_llm",
+                    return_value=self._execute_llm_result(content),
                 ),
                 mock.patch("scripts.judge.Path", side_effect=lambda p: hivemind_path if p == "knowledge/hivemind.md" else Path(p)),
             ):
@@ -246,19 +240,19 @@ class JudgeTests(unittest.TestCase):
         self.assertIn("body", written)
 
     def test_extract_pattern_dual_parse_failure_logs_error(self) -> None:
-        bad_resp = self._mock_response("no snippet tags here")
+        bad_result = self._execute_llm_result("no snippet tags here")
         with (
             mock.patch(
                 "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch(
-                "scripts.judge.requests.post",
-                return_value=bad_resp,
-            ) as mock_post,
+                "scripts.judge.llm_client.execute_llm",
+                return_value=bad_result,
+            ) as mock_execute,
             mock.patch("scripts.judge.log") as mock_log,
         ):
             judge.extract_pattern("full file", "diff")
-        self.assertEqual(mock_post.call_count, 2)
+        self.assertEqual(mock_execute.call_count, 2)
         mock_log.error.assert_called_once()
 
     def test_extract_pattern_lock_contention_skips_lock_but_still_writes(self) -> None:
@@ -270,8 +264,8 @@ class JudgeTests(unittest.TestCase):
                     "scripts.judge.check_tier3_peak_hours_ok", return_value={"ok": True}
                 ),
                 mock.patch(
-                    "scripts.judge.requests.post",
-                    return_value=self._mock_response(content),
+                    "scripts.judge.llm_client.execute_llm",
+                    return_value=self._execute_llm_result(content),
                 ),
                 mock.patch("scripts.judge.Path", side_effect=lambda p: hivemind_path if p == "knowledge/hivemind.md" else Path(p)),
                 mock.patch(

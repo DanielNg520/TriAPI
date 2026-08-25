@@ -5,9 +5,8 @@ import sys
 import time
 from pathlib import Path
 
-import requests
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts import llm_client
 from scripts.budget_guard import check_tier3_peak_hours_ok
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
@@ -55,40 +54,41 @@ def _call_tier3_with_retries(
 
     model_key = tier3["default_model"]
     model_name = tier3["models"][model_key]
-    model_pricing = tier3["pricing"][model_key]
+    # .get(...) with an empty-dict fallback, not tier3["pricing"][model_key]:
+    # a CLI-based provider in this slot (agy, cli) has no token pricing block
+    # at all -- compute_cost() already treats missing price entries as
+    # partial/$0 via its own .get() calls, so an empty dict here is the
+    # correct "no token-based cost" signal, not a crash. Found 2026-08-25
+    # when tier_3_debugger was swapped from DeepSeek to agy mid-dispatch.
+    model_pricing = tier3.get("pricing", {}).get(model_key, {})
 
     cost_usd = 0.0
     last_error = None
 
     for attempt in range(2):
         try:
-            resp = requests.post(
-                f"{tier3['endpoint']}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {secrets[tier3['api_key_secret']]}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "stream": False,
-                },
-                timeout=180,
+            # Route through the generic provider dispatcher (same one
+            # tier3_escalate.py uses) instead of a hardcoded DeepSeek-shaped
+            # HTTP call -- tier_3_debugger is a hot-swappable slot (any
+            # provider: openrouter/deepseek/agy/cli/ollama can sit here per
+            # config/tiers.yaml's own design), so the judge must not assume
+            # DeepSeek's specific request/response shape.
+            response_text, _billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+                provider=tier3.get("provider", "deepseek"),
+                endpoint=tier3.get("endpoint"),
+                api_key=secrets.get(tier3.get("api_key_secret")),
+                model=model_name,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                effort=tier3.get("effort"),
             )
-            resp.raise_for_status()
-            data = resp.json()
-        except (requests.RequestException, ValueError) as e:
-            last_error = f"API request/parse failed: {e}"
+        except Exception as e:
+            last_error = f"Tier 3 request failed: {e}"
             log.warning("[%s] Attempt %d failed: %s", task_id, attempt + 1, last_error)
             continue
 
-        usage = data.get("usage", {})
-        cache_hit_tokens = usage.get("prompt_cache_hit_tokens", 0)
-        cache_miss_tokens = usage.get("prompt_cache_miss_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
+        cache_hit_tokens = 0
+        cache_miss_tokens = input_tokens
 
         attempt_cost, partial = compute_cost(model_pricing, cache_hit_tokens, cache_miss_tokens, output_tokens)
         cost_usd += attempt_cost
@@ -108,7 +108,6 @@ def _call_tier3_with_retries(
         )
 
         try:
-            response_text = data["choices"][0]["message"]["content"]
             validated = validator_fn(response_text)
             return validated, cost_usd, None
         except Exception as e:

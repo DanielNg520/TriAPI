@@ -199,14 +199,18 @@ def claude_baseline_cost(total_input: int, total_output: int, model: str, use_in
 
 
 def deepseek_flash_cost(total_input: int, total_output: int) -> float:
-    """Prices Tier 4's volume as if it had run on Tier 3 (DeepSeek flash)
-    instead of locally -- config/tiers.yaml's own verified pricing block,
-    not a re-guess. output_per_mtok_usd is unverified there (None), so
-    output tokens are priced at the cache-miss rate as a conservative
-    stand-in, same convention tier3_escalate.py uses via its own
-    cost_partial field."""
+    """Prices Tier 4's volume as if it had run on DeepSeek flash instead of
+    locally -- config/tiers.yaml's own verified `deepseek_reference_pricing`
+    block, not a re-guess. This is a fixed external benchmark, independent
+    of whichever tier slot (if any) DeepSeek currently occupies -- do not
+    couple it back to a tier_N_* block, that pricing is hot-swappable and
+    already broke this function once (2026-08-25, tier_3_debugger swapped
+    to agy and its pricing.flash sub-block went with it). output_per_mtok_usd
+    is unverified there (None), so output tokens are priced at the
+    cache-miss rate as a conservative stand-in, same convention
+    tier3_escalate.py uses via its own cost_partial field."""
     tiers = load_tiers()
-    pricing = tiers["tier_3_debugger"]["pricing"]["flash"]
+    pricing = tiers["deepseek_reference_pricing"]
     miss_rate = pricing.get("cache_miss_per_mtok_usd") or 0.0
     out_rate = pricing.get("output_per_mtok_usd") or miss_rate
     return total_input / 1_000_000 * miss_rate + total_output / 1_000_000 * out_rate
