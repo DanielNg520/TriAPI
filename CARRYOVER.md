@@ -100,6 +100,27 @@ wrong branch. Fix: make the `else` branch only handle `provider ==
 and `tier3_escalate.py`'s existing pattern — both already dispatch
 DeepSeek generically with zero code changes needed on their end).
 
+**Progress update, 2026-08-25: run `20260824-164451-2b7635` (the
+OpenRouter-fixes run referenced throughout this file) completed all 4
+phases.** All 3 bugs fixed and verified (full suite green, 101 tests).
+One item needed a manual doc write instead of automated dispatch: the
+Phase 4 PLAN.md-append step exhausted all three `tier_5_librarian`
+escalation legs against `PLAN.md` itself — **even with this run's own
+phone/IP sanitizer fix already live, the OpenRouter fallback leg still
+403'd**, meaning something else in `PLAN.md`'s ~189KB of content trips
+the content filter, not yet isolated (worth a closer look — possibly
+another digit-shaped pattern not yet covered, or filter behavior keyed
+on sheer volume/repetition rather than a specific pattern). Written by
+hand instead (PLAN.md's own Phase 30 entry) per the standing docs
+exception — **but the item's description also asked to shrink PLAN.md
+back under the 73,728-char ceiling, which was NOT done** (it's now
+192,722 chars, even larger) — that's a much bigger job, already covered
+by the separately-queued "consolidate historical PLAN.md content out of
+target-repo docs" follow-on (Tier 5 exists now, so that follow-on can
+actually be planned/dispatched whenever it's picked up). Don't treat this
+run's PLAN.md item as having addressed the size problem — it only added
+the Phase 30 summary.
+
 **Sequencing once resumed:** (1) `agy` smoke test, (2) new `provider:
 "agy"` branch in `llm_client.py` + its own budget-guard/quota-exhaustion
 handling, (3) `_breakdown_phase_attempt()` provider-branch fix, (4)

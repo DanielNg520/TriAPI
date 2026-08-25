@@ -196,6 +196,10 @@ class TestTier5Librarian(unittest.TestCase):
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    side_effect=librarian_escalate.llm_client.execute_llm,
+                ) as execute_llm,
                 mock.patch.object(llm_client.requests, "post", side_effect=responses) as post,
                 mock.patch.object(llm_client, "_call_claude_cli", new=paid_ladder_sentinel),
                 mock.patch.object(llm_client, "_call_gemini_api", new=paid_ladder_sentinel),
@@ -224,6 +228,12 @@ class TestTier5Librarian(unittest.TestCase):
             self.assertIn("localhost:11434", call_urls[0])
             self.assertIn("localhost:11434", call_urls[1])
             self.assertIn("openrouter.ai", call_urls[2])
+            # The openrouter fallback must be dispatched with the
+            # tier_1_planner endpoint, not None or the local Ollama host.
+            self.assertEqual(
+                execute_llm.call_args_list[2].kwargs["endpoint"],
+                "https://openrouter.ai/api/v1",
+            )
             paid_ladder_sentinel.assert_not_called()
 
     # -- (6) chain exhaustion ---------------------------------------------
@@ -431,10 +441,15 @@ class TestTier5Librarian(unittest.TestCase):
 
             self.assertEqual(execute_llm.call_count, 3)
             call_models = [c.kwargs["model"] for c in execute_llm.call_args_list]
-            self.assertNotEqual(call_models[0], call_models[1])
             self.assertEqual(
                 call_models,
                 ["mistral-small:latest", "qwen2.5-coder:14b-instruct-q6_K", "stealth/ox-alpha"],
+            )
+            # Third call (openrouter fallback) must use the tier_1_planner
+            # endpoint, not None or the local Ollama host.
+            self.assertEqual(
+                execute_llm.call_args_list[2].kwargs["endpoint"],
+                "https://openrouter.ai/api/v1",
             )
             self.assertEqual(result["status"], "human_handoff")
             self.assertIsNone(result["resolved_by"])
