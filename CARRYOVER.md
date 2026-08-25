@@ -90,6 +90,27 @@ user's own stated preference for this change, not a silent hand-edit.
   matching the "everything configurable" principle — natural extension of
   the backend-registry architecture item below.
 
+**Open root-cause question, never actually resolved, flagged by the user
+2026-08-25 morning:** Phases 30/31/32 each hit the OpenRouter `[PHONE]`
+content-filter 403 on `PLAN.md` **even after** the phone/IP sanitizer fix
+(`_PHONE_LIKE_RE`/`_IP_LIKE_RE` in `llm_client.py`) landed and was
+confirmed working elsewhere. That fix only matches specific *shapes*
+(3-3-4 phone grouping, IPv4 dotted-quad) — it was never actually verified
+whether OpenRouter's real trigger is shape-specific at all, or whether it
+flags **any sufficiently long unbroken digit run** (which `PLAN.md`'s
+dense timestamp/hash content would trip regardless of grouping, and which
+`_PHONE_LIKE_RE`/`_IP_LIKE_RE` would NOT catch, since both require
+separators). **Attempted a direct live test 2026-08-25 morning** (an
+18-digit separator-free string through a real `execute_llm(provider=
+"openrouter", ...)` call) — inconclusive, hit the OpenRouter shared-pool
+429 before getting a real answer either way (see
+`project_openrouter_shared_rate_limit` memory). Retry when convenient,
+away from other OpenRouter activity so a 429 doesn't mask the result
+again. Worth resolving before assuming the sanitizer is complete, though
+the queued `agy`-as-librarian-fallback item above sidesteps the whole
+question for the specific PLAN.md case (agy doesn't go through
+OpenRouter's filter at all).
+
 **3. Groq provider addition** (`qwen/qwen3.6-27b`, `groq_api_key` already
 in `secrets.enc.yaml`, unwired) — for a lightweight/router role, not a
 tier replacement. Rate limits given: RPM 30, RPD 1,000, TPM 8,000, and a
