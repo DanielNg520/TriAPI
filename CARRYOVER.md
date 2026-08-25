@@ -31,6 +31,39 @@ onto Tier 1 too (real code change in `dispatcher.breakdown_phase()`,
 goes through the pipeline once resumed, not hand-coded). **Do not
 disable Tier 2 in config until this is resolved.**
 
+**RESOLVED, 2026-08-25 (user's answer): repoint `tier_2_manager` itself at
+Claude Code CLI, `claude-sonnet-5`, effort `"low"`** (distinct from
+`tier_1_manager`'s effort `"high"` — Tier 2 stays the cheaper/lighter of
+the two CLI-backed tiers, Tier 1 the strongest). This keeps Tier 2 doing
+breakdown (and, incidentally, removes the reason it was excluded from
+repair too, since CLI has no OpenRouter shared-pool exposure — worth
+confirming with the user whether Tier 2 should come back into the repair
+chain now that it's not an OpenRouter tier, or stay repair-excluded
+regardless). **Confirmed by reading the code — one real gap, not a pure
+config flip:**
+- `tier2_escalate.py` (real repair path) needs **zero code changes** — it
+  already calls `llm_client.execute_llm(provider=tier2.get("provider",
+  "openrouter"), ...)` generically, and `execute_llm(provider="cli", ...)`
+  already exists and is exactly what `tier_1_manager` uses today (`effort`
+  param included). Flipping `tier_2_manager.provider` to `cli` alone makes
+  this path work.
+- `dispatcher._breakdown_phase_attempt()` (plan breakdown) **does need a
+  small code change** — it hardcodes `if provider == "openrouter": ...
+  else: <google/gemini_fallback path>`, so `provider: "cli"` would
+  currently fall into the wrong (Google-shaped) branch and break. Fix:
+  make the `else` branch only handle `provider == "google"` specifically,
+  and route everything else (`openrouter`, `cli`) through
+  `llm_client.execute_llm()` generically, matching `tier2_escalate.py`'s
+  existing pattern.
+**Sequencing once resumed:** dispatch the `_breakdown_phase_attempt()` fix
+FIRST, using the still-functional current Tier 2 config (Nemotron/
+OpenRouter) to do that one planning/breakdown call — only flip
+`tier_2_manager.provider` to `cli` in `config/tiers.yaml` after that fix
+is landed and tested, to avoid breaking breakdown before its own fix can
+be planned. Bundle this into the same plan as the Groq provider addition
+if convenient (both are `llm_client.py`/`config/tiers.yaml` changes in
+the same area), or run separately — user's call.
+
 **New request queued while paused, 2026-08-25 (do not act on this until
 resume — starting a `triapi plan` now would itself burn OpenRouter's
 shared rate-limit budget, which is exactly what we're waiting out):** add
