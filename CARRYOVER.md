@@ -5,64 +5,71 @@ retries, resume when DeepSeek is next off-peak. Currently inside the
 01:00-04:00 UTC peak window (confirmed live via
 `budget_guard.check_tier3_peak_hours_ok()`); off-peak resumes at **04:00
 UTC**. All work up to this point is committed. Nothing is running.
-**Resume by retrying `triapi dispatch 20260824-164451-2b7635`** (OpenRouter
-fixes run, Phase 1 done, Phase 2 item 0 done, Phase 2 item 1 stuck on
-repeated transient Nemotron/OpenRouter errors — see the incident entry
-below for full detail) once off-peak, not before.
+**Resume order once off-peak:**
+1. Retry `triapi dispatch 20260824-164451-2b7635` (OpenRouter fixes run,
+   Phase 1 done, Phase 2 item 0 done, Phase 2 item 1 stuck on repeated
+   transient Nemotron/OpenRouter errors — see the incident entry below)
+   through to completion. Uses the still-working Nemotron/OpenRouter Tier
+   2 for its own breakdown — unaffected by the tier changes below since
+   those haven't landed yet.
+2. THEN draft/dispatch the new-tier-layout plan (see the "FINAL,
+   2026-08-25" decision below): `_breakdown_phase_attempt()` provider-
+   branch fix + peak-hours-gate generalization to DeepSeek specifically,
+   THEN the actual `config/tiers.yaml` reassignment (Tier 2 = DeepSeek
+   API, Tier 3 = local DeepSeek-family, Tier 4 = local qwen). Also queued
+   and can bundle in: the Groq provider addition.
 
-**Decision, 2026-08-25 (user confirmed): simplified 3-tier setup for the
-rest of the month — Tier 1 = `stealth/ox-alpha`, Tier 3 = DeepSeek,
-Tier 4 = local qwen (`qwen2.5-coder` via Ollama). Tier 2 (Nemotron)
-dropped from the repair-escalation ladder.** Rationale: Tier 2's role
-(architectural correction, larger context) doesn't fit a low-TPM budget
-model well, and fewer OpenRouter-dependent tiers means less exposure to
-tonight's shared-rate-limit cascade. **Unresolved before touching
-config/code — ASK THE USER, don't assume:** `dispatcher.breakdown_phase()`
-also uses Tier 2/Nemotron, for plan breakdown (not just repair) — every
-`triapi plan` run depends on it. Disabling Tier 2 in config (e.g. zeroing
-its `pricing.free_tier_rpm`/`free_tier_rpd`, which would cleanly make
-`budget_guard.check_tier2_ok()` always refuse) would silently break the
-ability to break down ANY new plan, including the plan needed to
-implement this very change. Two options, needs the user's call: (a) leave
-Tier 2 wired for breakdown only, exclude it from `orchestrator.run_task()`'s
-repair chain specifically (`config`-only if there's a way to gate just
-that call site, otherwise a small code change); or (b) move breakdown
-onto Tier 1 too (real code change in `dispatcher.breakdown_phase()`,
-goes through the pipeline once resumed, not hand-coded). **Do not
-disable Tier 2 in config until this is resolved.**
+**FINAL, 2026-08-25 (superseding two earlier drafts of this same
+decision below only for historical trace — this is the one to
+implement): new tier layout for the rest of the month —**
+- **Tier 1** = `stealth/ox-alpha` (OpenRouter), Claude CLI fallback
+  (unchanged).
+- **Tier 2** = DeepSeek, real hosted API (`api.deepseek.com`) — promoted
+  from Tier 3.
+- **Tier 3** = DeepSeek, local via Ollama (a local DeepSeek-family model —
+  candidates `deepseek-coder-v2:16b` or `deepseek-r1:14b`, both already
+  pulled on this box; avoid the `:32b` variants, this machine's AMD 780M
+  iGPU has documented OOM/timeout history with 30B+ models per PLAN.md).
+- **Tier 4** = qwen, local via Ollama (`qwen2.5-coder:14b-instruct-q6_K`,
+  already proven reliable here).
+- Nemotron/OpenRouter dropped from Tier 2 entirely; two prior drafts of
+  this decision (Tier 2 = nothing, then Tier 2 = Claude CLI) are
+  superseded by this one.
 
-**RESOLVED, 2026-08-25 (user's answer): repoint `tier_2_manager` itself at
-Claude Code CLI, `claude-sonnet-5`, effort `"low"`** (distinct from
-`tier_1_manager`'s effort `"high"` — Tier 2 stays the cheaper/lighter of
-the two CLI-backed tiers, Tier 1 the strongest). This keeps Tier 2 doing
-breakdown (and, incidentally, removes the reason it was excluded from
-repair too, since CLI has no OpenRouter shared-pool exposure — worth
-confirming with the user whether Tier 2 should come back into the repair
-chain now that it's not an OpenRouter tier, or stay repair-excluded
-regardless). **Confirmed by reading the code — one real gap, not a pure
-config flip:**
-- `tier2_escalate.py` (real repair path) needs **zero code changes** — it
-  already calls `llm_client.execute_llm(provider=tier2.get("provider",
-  "openrouter"), ...)` generically, and `execute_llm(provider="cli", ...)`
-  already exists and is exactly what `tier_1_manager` uses today (`effort`
-  param included). Flipping `tier_2_manager.provider` to `cli` alone makes
-  this path work.
-- `dispatcher._breakdown_phase_attempt()` (plan breakdown) **does need a
-  small code change** — it hardcodes `if provider == "openrouter": ...
-  else: <google/gemini_fallback path>`, so `provider: "cli"` would
-  currently fall into the wrong (Google-shaped) branch and break. Fix:
-  make the `else` branch only handle `provider == "google"` specifically,
-  and route everything else (`openrouter`, `cli`) through
-  `llm_client.execute_llm()` generically, matching `tier2_escalate.py`'s
-  existing pattern.
-**Sequencing once resumed:** dispatch the `_breakdown_phase_attempt()` fix
-FIRST, using the still-functional current Tier 2 config (Nemotron/
-OpenRouter) to do that one planning/breakdown call — only flip
-`tier_2_manager.provider` to `cli` in `config/tiers.yaml` after that fix
-is landed and tested, to avoid breaking breakdown before its own fix can
-be planned. Bundle this into the same plan as the Groq provider addition
-if convenient (both are `llm_client.py`/`config/tiers.yaml` changes in
-the same area), or run separately — user's call.
+**Required alongside the config change — not optional, per the
+"everything configurable" principle below:** `budget_guard.
+check_tier3_peak_hours_ok()` is currently named/wired for "Tier 3"
+specifically. It must be generalized to key off **the real DeepSeek
+hosted API specifically** (`provider == "deepseek"` AND the paid
+`api.deepseek.com` endpoint), not a tier-number position — since DeepSeek
+now sits in the Tier 2 slot, and a *local* Ollama-hosted DeepSeek-family
+model in Tier 3 has no API pricing/peak-hours concept at all and must
+NOT be gated by this check. Whichever tier's config currently resolves to
+the real DeepSeek API should be the one this gate protects, found by
+provider+endpoint match, not by tier name — this is the same class of
+fix as `dispatcher._breakdown_phase_attempt()`'s hardcoded provider
+branch (see the standing principle below), so consider doing both in the
+same plan.
+
+Also still true from the superseded CLI draft (Tier 2's provider changed
+again, but the underlying `_breakdown_phase_attempt()` bug is unrelated
+to which provider Tier 2 ends up as): `dispatcher._breakdown_phase_attempt()`
+hardcodes `if provider == "openrouter": ... else: <google/gemini_fallback
+path>` — DeepSeek-as-Tier-2 would fall into the same wrong branch CLI
+would have. Fix: make the `else` branch only handle `provider == "google"`
+specifically, and route everything else through `llm_client.execute_llm()`
+generically (matching `tier2_escalate.py`'s and `tier3_escalate.py`'s
+existing pattern — both already dispatch DeepSeek generically with zero
+code changes needed on their end).
+
+**Sequencing once resumed:** dispatch the `_breakdown_phase_attempt()`
+fix AND the peak-hours-gate generalization FIRST, using the
+still-functional current Tier 2 config (Nemotron/OpenRouter) to do that
+one planning/breakdown call — only flip `config/tiers.yaml`'s tier
+assignments to the FINAL layout above after those two fixes are landed
+and tested. Bundle with the Groq provider addition if convenient (all
+touch `llm_client.py`/`config/tiers.yaml` in the same area), or run
+separately — user's call.
 
 **Standing principle added, 2026-08-25 (user's own words): "Every single
 feature of TriAPI pipeline has to be highly configurable. If there is
