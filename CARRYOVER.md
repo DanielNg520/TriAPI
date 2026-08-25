@@ -1,4 +1,4 @@
-# Carryover — 2026-08-25 (session end)
+# Carryover — 2026-08-25 (updated, mid-day session paused by user request)
 
 **Standing rule for this file: stay brief.** Only what's needed to resume
 the *next* session goes here. Finished-work narrative, per-round findings,
@@ -13,16 +13,22 @@ notes"/addenda sections further down this file.
 index, `AGENT_GUIDE.md` for the operating manual (what's safe to hand-edit
 vs. must route through `triapi plan`/`dispatch`).
 
-## Current state, 2026-08-25 (session end) — everything queued tonight is
-DONE and on `main`. Working tree clean, full suite green (118 tests:
-`PYTHONPATH=. python3 -m unittest tests.test_branch_features
-tests.test_tier5_librarian tests.test_llm_client_sanitize
-tests.test_dispatcher_peak_hours tests.test_tier_reassignment_prep
-tests.test_run_build_pipefail tests.test_orchestrator_tier3_peak_skip -v`).
-Three stale `triapi/TriAPI-*` review branches from earlier sessions (all
-already fully merged into `main`) were cleaned up and deleted this
-session — `main` is now the single source of truth, nothing stranded on
-an unmerged branch.
+## Current state — system was rebooted after the overnight session below,
+then a short follow-up session ran during the day: fixed a stale memory
+file, recorded an unresolved OpenRouter root-cause question (see "Next
+up" below the standing rules), and drafted+approved the tier-reassignment
+plan (`20260825-092344-5ff4a7`) but **deliberately did not dispatch it**
+— stopped here at the user's request so the next session can pick it up
+cleanly. Working tree clean, everything committed to `main`, nothing
+running. Full suite green as of the overnight session's end (118 tests,
+command below) — not rerun this short session since nothing code-facing
+changed.
+
+## Overnight session summary (2026-08-24/25) — everything below was
+DONE and committed to `main` by the end of that session. Three stale
+`triapi/TriAPI-*` review branches from earlier sessions (all already
+fully merged into `main`) were cleaned up and deleted — `main` is the
+single source of truth, nothing stranded on an unmerged branch.
 
 **Completed this session** (full detail in `PLAN.md` Phases 30-32):
 - OpenRouter fixes (phone/IP content-filter sanitizer, dispatcher
@@ -66,22 +72,30 @@ an unmerged branch.
 
 ## Next up
 
-**1. The actual tier reassignment (config/tiers.yaml) — both prep plans
-are done, this is now unblocked.** Final agreed layout ("FINAL, v2" design
-from earlier tonight — search this file's history if the summary below
-isn't enough):
-- Tier 1 = `stealth/ox-alpha` (unchanged)
-- Tier 2 = DeepSeek **v4 pro** (real API) — **exact model string not yet
-  verified against DeepSeek's real API**, don't guess, check before wiring
-- Tier 3 = Gemini 3.1 pro via `agy` CLI, effort high,
-  `--dangerously-skip-permissions` (now has a real, tested provider branch
-  to use — see Phase 31)
-- Tier 4 = local qwen (`qwen2.5-coder:14b-instruct-q6_K`, unchanged)
-This is a config-only change now that the code prerequisites exist, but
-still real behavior change — go through `triapi plan`/`dispatch` per the
-user's own stated preference for this change, not a silent hand-edit.
+**1. The tier reassignment plan is drafted, approved, and READY TO
+DISPATCH — resume with `triapi dispatch 20260825-092344-5ff4a7`.**
+$0 planning cost, 4 phases: (1) edit `config/tiers.yaml` — Tier 2 →
+DeepSeek `deepseek-v4-pro` (real API, confirmed live via
+`GET https://api.deepseek.com/models` this session — this is the exact,
+verified model id, not a guess; peak-hours gating moves here too), Tier 3
+→ `agy` CLI running `gemini-3.1-pro` effort high (no config field needed
+for `--dangerously-skip-permissions`, `_call_agy_cli()` already always
+sets it), Tier 4 → back to local Ollama `qwen2.5-coder:14b-instruct-q6_K`
+(it was actually still on OpenRouter's `dots-3-note-preview` from an
+earlier swap, not already-local as an earlier draft of this note assumed
+— caught before the plan was drafted); Tier 1 unchanged. (2) live
+`probe_models()` pre-flight check against the real edited config —
+inherently makes real calls to the new DeepSeek/agy tiers, that's the
+point. (3) fix the one stale test fixture
+(`tests/test_orchestrator_tier3_peak_skip.py`'s `TIER_3_DEBUGGER_CONFIG`
+→ `TIER_2_MANAGER_CONFIG`, since DeepSeek moves tiers). (4) `AGENTS.md`/
+`PLAN.md` updates (Phase 33 entry). **Not yet dispatched this session —
+next session should just run the dispatch and supervise it through, same
+pattern as the last several runs** (resolve any human_handoff by
+retargeting/diagnosing precisely, not blind-approving; correct the run's
+own bookkeeping by hand only when independently re-verified).
 
-**2. Two follow-ons queued, not yet started:**
+**2. Two follow-ons queued, not yet started (do after #1 lands):**
 - Add `agy` as a `tier_5_librarian` fallback leg (its ~1M context solves
   the recurring PLAN.md doc-update failures hit three times tonight —
   Phases 30, 31, 32 all had to write PLAN.md's own phase entry by hand
