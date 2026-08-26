@@ -58,6 +58,7 @@ class TestTier5Librarian(unittest.TestCase):
                     "primary": "mistral-small:latest",
                     "fallback_local": "ollama_fallback",
                     "fallback_openrouter": "stealth/ox-alpha",
+                    "fallback_agy": "default",
                 },
                 "target_globs": ["*.md", "docs/**"],
                 "verify_command": None,
@@ -71,7 +72,7 @@ class TestTier5Librarian(unittest.TestCase):
             "escalation_rules": {
                 "tier5_to_fallbacks": {
                     "threshold": 2,
-                    "chain": ["fallback_local", "fallback_openrouter", "log_and_notify"],
+                    "chain": ["fallback_local", "fallback_agy", "fallback_openrouter", "log_and_notify"],
                 }
             },
         }
@@ -146,6 +147,8 @@ class TestTier5Librarian(unittest.TestCase):
                 ">>>>>>> REPLACE\n"
             )
 
+            agy_sentinel = mock.Mock()
+
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
@@ -154,44 +157,46 @@ class TestTier5Librarian(unittest.TestCase):
                     librarian_escalate.llm_client, "execute_llm",
                     return_value=(response, "ollama", 12, 7),
                 ) as execute_llm,
-                mock.patch.object(
-                    librarian_escalate.content_guard, "check_write",
-                    wraps=content_guard.check_write,
-                ) as check_write,
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
-                    "t-success", "keep guide fresh", str(target), workdir=tmp,
+                    "t-success-billing", "keep guide fresh", str(target), workdir=tmp,
                 )
 
             execute_llm.assert_called_once()
-            check_write.assert_called_once()
-            clear_state.assert_called_once_with("t-success")
+            agy_sentinel.assert_not_called()
+            clear_state.assert_called_once_with("t-success-billing")
             self.assertEqual(target.read_text(encoding="utf-8"), "# Guide\n\nNew sentence here.\n")
             self.assertEqual(result["status"], "success")
-            self.assertEqual(result["resolved_by"], "tier_5")
             self.assertTrue(result["changed"])
 
-            cost_lines = cost_log.read_text(encoding="utf-8").splitlines()
+            cost_lines = [json.loads(line) for line in cost_log.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(cost_lines), 1)
-            cost_entry = json.loads(cost_lines[0])
-            self.assertEqual(cost_entry["billing"], "local")
+            self.assertEqual(cost_lines[0]["billing"], "local")
+            self.assertEqual(cost_lines[0]["model"], "mistral-small:latest")
 
     # -- (5) escalation order + paid-ladder sentinels ----------------------
 
-    def test_escalation_order_is_primary_then_fallback_local_then_openrouter(self) -> None:
+    def test_escalation_order_is_primary_then_fallback_local_then_agy_then_openrouter_then_log_and_notify(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "docs" / "STALE.md"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("stale doc\n", encoding="utf-8")
 
-            # Every attempt returns content that fails defensive_json_parse,
-            # so the chain runs to full exhaustion through all 3 providers.
+            # Every attempt returns content that fails edit-block application,
+            # so the chain runs to full exhaustion through all 5 legs.
             responses = [_fake_response("not JSON, sorry") for _ in range(3)]
+            post_count_at_agy = []
 
             paid_ladder_sentinel = mock.Mock(
                 side_effect=AssertionError("paid tier must never be called from tier_5_librarian")
             )
+            agy_sentinel = mock.Mock()
+
+            def agy_side_effect(*args, **kwargs):
+                post_count_at_agy.append(post.call_count)
+                return ("not JSON, sorry", "subscription", 4, 2)
 
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
@@ -200,6 +205,7 @@ class TestTier5Librarian(unittest.TestCase):
                     librarian_escalate.llm_client, "execute_llm",
                     side_effect=librarian_escalate.llm_client.execute_llm,
                 ) as execute_llm,
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
                 mock.patch.object(llm_client.requests, "post", side_effect=responses) as post,
                 mock.patch.object(llm_client, "_call_claude_cli", new=paid_ladder_sentinel),
                 mock.patch.object(llm_client, "_call_gemini_api", new=paid_ladder_sentinel),
@@ -215,7 +221,11 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(lessons, "LESSONS_PATH", Path(tmp) / "lessons.jsonl"),
                 mock.patch.object(lessons, "HANDOFF_LESSONS_PATH", Path(tmp) / "handoffs.jsonl"),
             ):
-                librarian_escalate.run("t-order", "update stale doc", str(target), workdir=tmp)
+                agy_sentinel.side_effect = agy_side_effect
+                result = librarian_escalate.run("t-order", "update stale doc", str(target), workdir=tmp)
+
+            self.assertEqual(post_count_at_agy, [2])
+            agy_sentinel.assert_called_once()
 
             self.assertEqual(post.call_count, 3)
             call_models = [c.kwargs["json"]["model"] for c in post.call_args_list]
@@ -228,6 +238,7 @@ class TestTier5Librarian(unittest.TestCase):
             self.assertIn("localhost:11434", call_urls[0])
             self.assertIn("localhost:11434", call_urls[1])
             self.assertIn("openrouter.ai", call_urls[2])
+            
             # The openrouter fallback must be dispatched with the
             # tier_1_planner endpoint, not None or the local Ollama host.
             self.assertEqual(
@@ -235,6 +246,25 @@ class TestTier5Librarian(unittest.TestCase):
                 "https://openrouter.ai/api/v1",
             )
             paid_ladder_sentinel.assert_not_called()
+
+            responses_second = [_fake_response("not JSON, sorry") for _ in range(3)]
+            agy_sentinel_second = mock.Mock(return_value=("not JSON, sorry", "subscription", 4, 2))
+            human_handoff = mock.Mock()
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel_second),
+                mock.patch.object(llm_client.requests, "post", side_effect=responses_second),
+                mock.patch.object(orchestrator, "human_handoff", wraps=human_handoff) as human_handoff_mock,
+            ):
+                result = librarian_escalate.run("t-order", "update stale doc", str(target), workdir=tmp)
+
+            human_handoff_mock.assert_called_once()
+            agy_sentinel_second.assert_called_once()
+            handoff_reason = human_handoff.call_args.args[1]
+            self.assertIn("primary -> fallback_local -> fallback_agy -> fallback_openrouter", handoff_reason)
+            self.assertEqual(result["status"], "human_handoff")
+            self.assertIsNone(result["resolved_by"])
 
     # -- (6) chain exhaustion ---------------------------------------------
 
@@ -246,20 +276,31 @@ class TestTier5Librarian(unittest.TestCase):
             logs_dir = Path(tmp) / "logs"
 
             responses = [_fake_response("not JSON, sorry") for _ in range(3)]
+            agy_sentinel = mock.Mock(
+                return_value=("not JSON, sorry", "subscription", 4, 2)
+            )
 
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(llm_client.requests, "post", side_effect=responses),
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
                 mock.patch.object(orchestrator, "ESCALATIONS_DIR", logs_dir),
                 mock.patch.object(orchestrator, "ESCALATIONS_LOG", logs_dir / "escalations.jsonl"),
                 mock.patch.object(lessons, "LESSONS_PATH", Path(tmp) / "lessons.jsonl"),
                 mock.patch.object(lessons, "HANDOFF_LESSONS_PATH", Path(tmp) / "handoffs.jsonl"),
+                mock.patch.object(
+                    orchestrator, "human_handoff", wraps=orchestrator.human_handoff,
+                ) as human_handoff,
             ):
                 result = librarian_escalate.run(
                     "t-exhausted", "update stale doc", str(target), workdir=tmp,
                 )
 
+            agy_sentinel.assert_called_once()
+            human_handoff.assert_called_once()
+            handoff_reason = human_handoff.call_args.args[1]
+            self.assertIn("primary -> fallback_local -> fallback_agy -> fallback_openrouter", handoff_reason)
             self.assertEqual(result["status"], "human_handoff")
             self.assertIsNone(result["resolved_by"])
             summary_path = logs_dir / "escalation_t-exhausted.md"
@@ -423,6 +464,9 @@ class TestTier5Librarian(unittest.TestCase):
                 ("not FRESH and not a SEARCH/REPLACE block either", "ollama", 4, 2)
                 for _ in range(3)
             ]
+            agy_sentinel = mock.Mock(
+                return_value=("not FRESH and not a SEARCH/REPLACE block either", "subscription", 4, 2)
+            )
 
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
@@ -430,6 +474,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(
                     librarian_escalate.llm_client, "execute_llm", side_effect=responses,
                 ) as execute_llm,
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
                 mock.patch.object(orchestrator, "ESCALATIONS_DIR", logs_dir),
                 mock.patch.object(orchestrator, "ESCALATIONS_LOG", logs_dir / "escalations.jsonl"),
                 mock.patch.object(lessons, "LESSONS_PATH", Path(tmp) / "lessons.jsonl"),
@@ -445,6 +490,9 @@ class TestTier5Librarian(unittest.TestCase):
                 call_models,
                 ["mistral-small:latest", "qwen2.5-coder:14b-instruct-q6_K", "stealth/ox-alpha"],
             )
+            
+            agy_sentinel.assert_called_once()
+            
             # Third call (openrouter fallback) must use the tier_1_planner
             # endpoint, not None or the local Ollama host.
             self.assertEqual(

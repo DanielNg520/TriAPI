@@ -636,3 +636,18 @@ This is more than a cosmetic reordering. It changes the **default behavior** fro
 4. **Reuse the config value in the dispatch.** The diff not only reorders the branch; it also passes `provider=provider` into `execute_llm()` instead of hardcoding `"openrouter"`, so the same generic path correctly forwards whatever provider was configured.
 
 This is a small, surgical fix, but the pattern is universal: **when you find yourself special-casing a vendor, invert the logic so the special case is explicit and everything else gets the generic, provider-agnostic treatment.**
+
+### Cost-Aware Gradual Escalation
+
+**Context:**
+When an automated task (like documentation generation or code drafting) fails with its primary model, it is standard practice to route the task through a fallback chain of alternative models or providers. 
+
+**Pattern/Lesson:**
+Avoid binary "cheap local vs. most expensive remote" fallback transitions. Instead, implement a **gradual escalation chain** that steps through intermediate capability and cost tiers. 
+
+In this configuration change, a mid-tier fallback (`fallback_agy`) was strategically inserted between the secondary local fallback (`fallback_local`) and the premium, high-cost remote fallback (`fallback_openrouter`). 
+
+**Benefits:**
+- **Cost Optimization:** Tasks that are slightly too complex for small local models can often be resolved by mid-tier models, preventing unnecessary spend on top-tier, expensive APIs.
+- **Resilience:** Introducing diverse providers and models into the fallback chain increases the overall reliability of the pipeline in the event of rate limits or provider downtime.
+- **Resource Efficiency:** Reserves the most capable (and most expensive) models as true last resorts rather than immediate second choices.

@@ -98,6 +98,7 @@ tier_5_librarian:
     primary: "mistral-small:latest"
     fallback_local: ollama_fallback
     fallback_openrouter: "stealth/ox-alpha"
+    fallback_agy: default
   target_globs: ["*.md", "docs/**"]
   verify_command: null
   max_attempts: 2
@@ -130,7 +131,7 @@ escalation_rules:
     action: log_and_notify
   tier5_to_fallbacks:
     threshold: 2
-    chain: [fallback_local, fallback_openrouter, log_and_notify]
+    chain: [fallback_local, fallback_agy, fallback_openrouter, log_and_notify]
 critique:
   enabled: true
   applies_to_tiers: ["tier_3", "tier_1", "tier_2"]

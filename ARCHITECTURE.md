@@ -70,6 +70,33 @@ The whole premise of this pipeline is conserving paid quota, so Tier 1 and Tier 
 
 `scripts/cost_report.py` aggregates `logs/cost_log.jsonl` per task and clearly separates **actual dollars spent** (DeepSeek, metered) from **notional cost** (what Tier 1 would have cost on metered billing, but was actually covered by the subscription at $0 real cost) — so the user always knows exactly what a task cost.
 
+## Tier 5 — doc librarian fallback chain and CLI/HTTP timeouts
+
+Tier 5 (`tier_5_librarian`, added 2026-08-24) keeps `*.md`/`docs/**` targets
+out of the code-repair tiers above: a single-model dispatcher
+(`scripts/librarian_escalate.py`) that escalates through an all-local/free
+chain rather than the paid Tier 1-3 ladder. As of 2026-08-26 the chain is
+`primary` (Ollama `mistral-small:latest`) → `fallback_local` (Ollama
+`ollama_fallback`'s model) → **`fallback_agy`** (Antigravity CLI,
+`gemini-3.1-pro`, effort high, subscription-billed at $0 marginal cost) →
+`fallback_openrouter` (OpenRouter free-tier model) → `log_and_notify`
+(human handoff). `fallback_agy` was inserted between the two Ollama legs and
+OpenRouter — cheapest-first — so a librarian item doesn't stall when local
+Ollama is slow or unavailable, or when a doc exceeds Ollama's effective
+context ceiling. Motivating incidents: the Phases 30-32 `PLAN.md`-too-large
+librarian gap, and a 2026-08-25 `self_fix_drafted` crash (run
+`20260825-174353-a25d29`) where the librarian's Ollama probe hit a
+hardcoded 300s HTTP read timeout against `localhost:11434`.
+
+That crash's root cause — and the reason `fallback_agy` alone isn't a full
+fix — is a shallow HTTP timeout, the same bug class already fixed for the
+CLI-subprocess path (`_CLI_TIMEOUT`, raised 300→600s, commit `5a6ae01`) but
+missed for direct HTTP calls. `scripts/llm_client.py` now defines a
+sibling constant, `_HTTP_TIMEOUT` (default 600, override via
+`TRIAPI_HTTP_TIMEOUT`), used by both `_call_openai_api()` (the Ollama/
+OpenRouter-shaped HTTP path) and `_call_gemini_api()`, following the same
+"everything configurable" env-var convention as `_CLI_TIMEOUT`.
+
 ## Design decisions that changed during the build
 
 The plan (`PLAN.md`) is the authoritative record of how this design evolved; summarized here:

@@ -1,5 +1,6 @@
 """LLM client with primary/fallback routing across providers."""
 
+import os
 import re
 import subprocess
 import json
@@ -50,6 +51,12 @@ _IP_LIKE_RE = re.compile(
 # headroom without changing that error-vs-escalate design (a separate,
 # bigger question, not addressed here).
 _CLI_TIMEOUT = 600
+
+# New constant for HTTP timeout, configurable via TRIAPI_HTTP_TIMEOUT
+try:
+    _HTTP_TIMEOUT = int(os.getenv('TRIAPI_HTTP_TIMEOUT', '600'))
+except ValueError:
+    _HTTP_TIMEOUT = 600
 
 
 def _redact_phone_like(match: re.Match) -> str:
@@ -136,6 +143,23 @@ def execute_llm(
         (response_text, billing_type, input_tokens, output_tokens)
     """
     return _primary_request(provider, endpoint, api_key, model, prompt, system_prompt, effort)
+
+
+def execute_agy(
+    model: str | None,
+    prompt: str,
+    system_prompt: str | None = None,
+    effort: str | None = None,
+) -> Tuple[str, str, int, int]:
+    """Public entry point for the `agy` CLI, for callers outside the
+    provider-dispatch table in `_primary_request` (e.g. `librarian_escalate.py`'s
+    `fallback_agy` leg). Thin wrapper around `_call_agy_cli` -- no duplicated
+    subprocess logic.
+
+    Returns:
+        (response_text, billing_type, input_tokens, output_tokens)
+    """
+    return _call_agy_cli(prompt, model, effort, system_prompt)
 
 
 def _primary_request(
@@ -241,7 +265,7 @@ def _call_gemini_api(
         "contents": [{"parts": [{"text": prompt}]}],
         "system_instruction": {"parts": [{"text": system_prompt}]},
     }
-    resp = requests.post(url, json=payload, timeout=300)
+    resp = requests.post(url, json=payload, timeout=_HTTP_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     response_text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -278,7 +302,7 @@ def _call_openai_api(
             {"role": "user", "content": prompt},
         ],
     }
-    resp = requests.post(url, headers=headers, json=payload, timeout=300)
+    resp = requests.post(url, headers=headers, json=payload, timeout=_HTTP_TIMEOUT)
     resp.raise_for_status()
     data = resp.json()
     # OpenRouter free models (e.g. `nvidia/nemotron-3-ultra-550b-a55b:free`) can return HTTP 200 with the error embedded in the body instead of a real error status, which previously crashed as a bare `KeyError: 'choices'` (real Tier 2 dispatch crash, 2026-08-24); attaching `.response.status_code` lets `tier2_escalate.py`'s existing `status in (429, 403)` fallback-chain check keep working for this case instead of aborting.

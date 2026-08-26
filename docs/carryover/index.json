@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260825-173000-tier-flip-complete-false-success-bug-fixed.md",
+  "active": "20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -42,8 +42,20 @@
     {
       "file": "20260825-173000-tier-flip-complete-false-success-bug-fixed.md",
       "date": "2026-08-25",
-      "status": "ACTIVE",
+      "status": "RESOLVED",
       "topic": "False-success dispatcher.py bug fixed+committed (5a6ae01): _run_design_judge/handle_fix_forward outcome propagation; two 300s timeout root causes fixed; incidental agy system_prompt bug fixed; updated queue"
+    },
+    {
+      "file": "20260826-025500-paused-for-deepseek-offpeak-agy-fallback-queued.md",
+      "date": "2026-08-26",
+      "status": "RESOLVED",
+      "topic": "AGENTS.md checkbox bookkeeping fix (mark_plan_complete) for already-completed run 8927c3; agy tier_5_librarian fallback + _HTTP_TIMEOUT root fix plan approved as run b54313 then paused mid-DeepSeek-peak-hours per explicit instruction; resumed and completed in the next file"
+    },
+    {
+      "file": "20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md",
+      "date": "2026-08-26",
+      "status": "ACTIVE",
+      "topic": "Run b54313 completed: agy tier_5_librarian fallback leg + shared _HTTP_TIMEOUT constant; found+fixed a missing llm_client.execute_agy() function that stalled the pipeline; 2 items resolved manually per AGENT_GUIDE.md workflow; ARCHITECTURE.md staleness and doc-target-failure-surface gaps queued"
     }
   ]
 }

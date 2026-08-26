@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260825-173000-tier-flip-complete-false-success-bug-fixed.md`](docs/carryover/20260825-173000-tier-flip-complete-false-success-bug-fixed.md) | **ACTIVE** — current state, standing rules, full queue |
+| [`docs/carryover/20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md`](docs/carryover/20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md) | **ACTIVE** — `agy` fallback leg + `_HTTP_TIMEOUT` fix complete and committed (run `20260825-194415-b54313`); a missing `llm_client.execute_agy()` bug found+fixed; session closed cleanly, nothing mid-flight |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -32,6 +32,8 @@ understanding why a past decision was made).
 | [`20260824-235900-misc-resolved-fixes.md`](docs/carryover/20260824-235900-misc-resolved-fixes.md) | 2026-08-24 | RESOLVED | `KeyError: 'choices'` fix; `probe_models()` retry tolerance; Ollama lifecycle test hang (found, not fixed) |
 | [`20260825-000000-openrouter-fixes-tier-prep-pipefail-complete.md`](docs/carryover/20260825-000000-openrouter-fixes-tier-prep-pipefail-complete.md) | 2026-08-25 | RESOLVED | OpenRouter phone/IP sanitizer + peak-hours dedup (Phase 30); `agy` provider + generic routing + position-independent peak gate (Phase 31); `run_build()` pipefail fix (Phase 32); `git_ops` auto-branch removed |
 | [`20260825-092344-active-tier-flip-plan-and-queue.md`](docs/carryover/20260825-092344-active-tier-flip-plan-and-queue.md) | 2026-08-25 | RESOLVED | Tier reassignment plan drafted+approved+dispatched+committed (`762ff81`); 3 hardcoded-Tier-3 bugs fixed; a recurring false-success pipeline bug first discovered here |
+| [`20260825-173000-tier-flip-complete-false-success-bug-fixed.md`](docs/carryover/20260825-173000-tier-flip-complete-false-success-bug-fixed.md) | 2026-08-25 | RESOLVED | False-success `dispatcher.py` bug fixed+committed (`5a6ae01`): `_run_design_judge`/`handle_fix_forward` outcome propagation; two 300s timeout root causes fixed; incidental `agy` `system_prompt` bug fixed; updated queue |
+| [`20260826-025500-paused-for-deepseek-offpeak-agy-fallback-queued.md`](docs/carryover/20260826-025500-paused-for-deepseek-offpeak-agy-fallback-queued.md) | 2026-08-26 | RESOLVED | Session paused mid-dispatch for DeepSeek peak hours (run `20260825-194415-b54313`); resumed and completed in the next file |
 
 ## Convention for adding a new entry (read once, then follow every session)
 

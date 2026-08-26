@@ -184,14 +184,15 @@ def run(
     current_contents = target_path.read_text() if editing else None
 
     # Escalation chain per config/tiers.yaml: primary (Ollama mistral-small)
-    # -> fallback_local (Ollama, ollama_fallback's model) -> fallback_openrouter
-    # (OpenRouter, tier_1_planner's free model). DeepSeek/Claude/Gemini are
-    # strictly forbidden anywhere in this chain.
+    # -> fallback_local (Ollama, ollama_fallback's model) -> fallback_agy
+    # (agy CLI) -> fallback_openrouter (OpenRouter, tier_1_planner's free model).
+    # DeepSeek/Claude/Gemini are strictly forbidden anywhere in this chain.
     models_cfg = lib_config.get("models", {})
     fallback_local_block = config.get(models_cfg.get("fallback_local", "ollama_fallback"), {})
     providers = [
         {"name": "ollama", "model": model_override or models_cfg.get("primary", "mistral-small:latest")},
         {"name": "ollama", "model": model_override or fallback_local_block.get("models", {}).get("default")},
+        {"name": "agy", "model": models_cfg.get("fallback_agy")},
         {"name": "openrouter", "model": model_override or models_cfg.get("fallback_openrouter")},
     ]
 
@@ -212,6 +213,9 @@ def run(
         if provider == "openrouter":
             endpoint = config.get("tier_1_planner", {}).get("endpoint")
             api_key = secrets.get(lib_config.get("api_key_secret", "open_router_api_key"))
+        elif provider == "agy":
+            endpoint = None
+            api_key = None
         else:
             endpoint = secrets.get("ollama_host")
             api_key = None
@@ -219,26 +223,37 @@ def run(
         log.info("[%s] Librarian attempt %d via %s/%s", task_id, attempt_idx + 1, provider, model)
 
         try:
-            response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
-                provider=provider,
-                endpoint=endpoint,
-                api_key=api_key,
-                model=model,
-                prompt=prompt,
-                system_prompt="",
-                is_tier4=False,
-            )
+            if provider == "agy":
+                response_text, billing_type, input_tokens, output_tokens = llm_client.execute_agy(
+                    model=model,
+                    prompt=prompt,
+                    system_prompt="",
+                )
+            else:
+                response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+                    provider=provider,
+                    endpoint=endpoint,
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                    system_prompt="",
+                    is_tier4=False,
+                )
         except Exception as e:
             log.error("[%s] Librarian %s request failed: %s", task_id, provider, e, exc_info=True)
             last_stderr = f"LLM request failed: {e}"
             continue
 
         # Both "ollama"-provider slots (primary + fallback_local) run on local
-        # hardware at zero cost; tag them "local" for cost_report.py rather
-        # than the raw provider string, so the openrouter fallback (still a
-        # cloud call, even though it's a free-tier model) remains
-        # distinguishable from the two genuinely local attempts.
-        billing_label = "local" if provider == "ollama" else billing_type
+        # hardware at zero cost; tag them "local" for cost_report.py. The agy
+        # leg is a subscription CLI, so tag it "subscription" ($0 marginal).
+        # The openrouter fallback remains distinguishable via billing_type.
+        if provider == "ollama":
+            billing_label = "local"
+        elif provider == "agy":
+            billing_label = "subscription"
+        else:
+            billing_label = billing_type
         log_cost(
             {
                 "timestamp": time.time(),
@@ -329,7 +344,7 @@ def run(
     log.error("[%s] All librarian attempts failed, escalating to human handoff", task_id)
     _escalate_to_human(
         task_id, target_path,
-        "tier_5_librarian exhausted primary -> fallback_local -> fallback_openrouter",
+        "tier_5_librarian exhausted primary -> fallback_local -> fallback_agy -> fallback_openrouter",
         f"**Last error:**\n```\n{last_stderr}\n```",
     )
     return {
