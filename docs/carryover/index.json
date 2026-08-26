@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260825-092344-active-tier-flip-plan-and-queue.md",
+  "active": "20260825-173000-tier-flip-complete-false-success-bug-fixed.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -36,8 +36,14 @@
     {
       "file": "20260825-092344-active-tier-flip-plan-and-queue.md",
       "date": "2026-08-25",
+      "status": "RESOLVED",
+      "topic": "Tier reassignment plan drafted+approved+dispatched+committed (762ff81); 3 hardcoded-Tier-3 bugs fixed; a recurring false-success pipeline bug first discovered here"
+    },
+    {
+      "file": "20260825-173000-tier-flip-complete-false-success-bug-fixed.md",
+      "date": "2026-08-25",
       "status": "ACTIVE",
-      "topic": "Tier reassignment plan drafted+approved, not dispatched; standing rules; full queue (agy librarian fallback, fallback configurability, Groq provider, architecture items)"
+      "topic": "False-success dispatcher.py bug fixed+committed (5a6ae01): _run_design_judge/handle_fix_forward outcome propagation; two 300s timeout root causes fixed; incidental agy system_prompt bug fixed; updated queue"
     }
   ]
 }

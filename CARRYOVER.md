@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260825-092344-active-tier-flip-plan-and-queue.md`](docs/carryover/20260825-092344-active-tier-flip-plan-and-queue.md) | **ACTIVE** — current state, standing rules, full queue |
+| [`docs/carryover/20260825-173000-tier-flip-complete-false-success-bug-fixed.md`](docs/carryover/20260825-173000-tier-flip-complete-false-success-bug-fixed.md) | **ACTIVE** — current state, standing rules, full queue |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -31,6 +31,7 @@ understanding why a past decision was made).
 | [`20260824-190000-queue-snapshot-openrouter-obstacles.md`](docs/carryover/20260824-190000-queue-snapshot-openrouter-obstacles.md) | 2026-08-24 | SUPERSEDED | Old queue snapshot mid-fix — OpenRouter dispatch obstacles (403s, 429s, `probe_models()` over-gating found) |
 | [`20260824-235900-misc-resolved-fixes.md`](docs/carryover/20260824-235900-misc-resolved-fixes.md) | 2026-08-24 | RESOLVED | `KeyError: 'choices'` fix; `probe_models()` retry tolerance; Ollama lifecycle test hang (found, not fixed) |
 | [`20260825-000000-openrouter-fixes-tier-prep-pipefail-complete.md`](docs/carryover/20260825-000000-openrouter-fixes-tier-prep-pipefail-complete.md) | 2026-08-25 | RESOLVED | OpenRouter phone/IP sanitizer + peak-hours dedup (Phase 30); `agy` provider + generic routing + position-independent peak gate (Phase 31); `run_build()` pipefail fix (Phase 32); `git_ops` auto-branch removed |
+| [`20260825-092344-active-tier-flip-plan-and-queue.md`](docs/carryover/20260825-092344-active-tier-flip-plan-and-queue.md) | 2026-08-25 | RESOLVED | Tier reassignment plan drafted+approved+dispatched+committed (`762ff81`); 3 hardcoded-Tier-3 bugs fixed; a recurring false-success pipeline bug first discovered here |
 
 ## Convention for adding a new entry (read once, then follow every session)
 
