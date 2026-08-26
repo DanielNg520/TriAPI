@@ -1631,6 +1631,15 @@ def test_escalate_with_null_content_returns_failure_and_preserves_file(tmp_path)
     mock_response.raise_for_status = mock.Mock()
 
     with (
+        mock.patch.object(tier3_escalate, "load_tiers", return_value={
+            "tier_3_debugger": {
+                "provider": "deepseek",
+                "endpoint": "https://api.deepseek.com",
+                "api_key_secret": "deepseek_apikey",
+                "models": {"default": "deepseek-v4-pro"},
+                "default_model": "default"
+            }
+        }),
         mock.patch.object(tier3_escalate, "load_secrets", return_value={"deepseek_apikey": "test-key"}),
         mock.patch.object(llm_client.requests, "post", return_value=mock_response) as mock_post,
     ):
