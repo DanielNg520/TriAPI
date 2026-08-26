@@ -266,12 +266,18 @@ def verify_task(task_id: str, build_cmd: str, workdir: str = ".") -> dict:
     log.info("[%s] verify_task starting: %s", task_id, build_cmd)
     # A verify_only step is a single one-shot check with no per-tier-attempt
     # budget to protect (unlike a draft/build loop that retries repeatedly),
-    # so it can afford a longer timeout than run_build()'s 120s default --
-    # e.g. a project's full test suite can legitimately take a few minutes
-    # if it cold-loads a large local model. Found for real 2026-08-11: the
-    # 120s default made `./run_tests.sh` time out and crash the whole
-    # dispatch process (see tier4_worker.run_build()'s TimeoutExpired fix).
-    ok, output = run_build(build_cmd, workdir, timeout=300)
+    # so it can afford a longer timeout than run_build()'s 300s default --
+    # e.g. this repo's own full test suite legitimately takes 166-330s
+    # (observed live, 2026-08-25), leaving no headroom at 300s and tripping
+    # a false human_handoff on ordinary load variance, not a real failure
+    # (found for real 2026-08-25 while dispatching run 20260825-154633-8927c3:
+    # a 191-test run hit exactly this wall at 300s, independently reconfirmed
+    # passing in 230s moments later). Raised to 600s for real headroom as
+    # this repo's suite keeps growing; run_build()'s own 300s default is
+    # unaffected since draft/build-loop tiers retry rather than needing one
+    # long timeout to hold. Originally 120s until 2026-08-11's identical
+    # discovery (`./run_tests.sh` crashing the whole dispatch process).
+    ok, output = run_build(build_cmd, workdir, timeout=600)
     cost_rep = report(task_id)
     if ok:
         clear_state(task_id)

@@ -40,8 +40,16 @@ _IP_LIKE_RE = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b"
 )
 
-# Timeout for CLI subprocesses (claude, agy) in seconds.
-_CLI_TIMEOUT = 300
+# Timeout for CLI subprocesses (claude, agy) in seconds. Raised from 300 to
+# 600 2026-08-25 after a real live crash: a `agy -p ... --effort high` call
+# (gemini-3.1-pro via Antigravity CLI) hit exactly this wall mid-dispatch
+# (run 20260825-154633-8927c3), and orchestrator.run_task() treats any Tier 3
+# "error" status (this included) as a hard crash of the whole dispatch rather
+# than a soft escalation to Tier 2 -- so a slow-but-working call was
+# indistinguishable from a real failure. 600s gives high-effort calls real
+# headroom without changing that error-vs-escalate design (a separate,
+# bigger question, not addressed here).
+_CLI_TIMEOUT = 600
 
 
 def _redact_phone_like(match: re.Match) -> str:
@@ -143,7 +151,7 @@ def _primary_request(
     if provider == "cli":
         return _call_claude_cli(prompt, system_prompt, model, effort)
     if provider == "agy":
-        return _call_agy_cli(prompt, model, effort)
+        return _call_agy_cli(prompt, model, effort, system_prompt)
     if provider == "google":
         return _call_gemini_api(endpoint, api_key, model, prompt, system_prompt)
     # openrouter, deepseek, and any other OpenAI-compatible endpoint
@@ -172,7 +180,7 @@ def _call_claude_cli(
 
 
 def _call_agy_cli(
-    prompt: str, model: str | None, effort: str | None
+    prompt: str, model: str | None, effort: str | None, system_prompt: str | None = None
 ) -> Tuple[str, str, int, int]:
     """Run the local `agy` CLI with JSON output format.
 
@@ -188,6 +196,8 @@ def _call_agy_cli(
     stderr tail, so the existing per-tier fallthrough skips to the next
     tier gracefully.
     """
+    if system_prompt:
+        prompt = f"{system_prompt}\n\n{prompt}"
     cmd = ["agy", "-p", prompt]
     if model:
         cmd.extend(["--model", model])

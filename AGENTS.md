@@ -119,6 +119,7 @@ Full reference moved to [`docs/agents/20260825-100000-scripts-directory-referenc
 - `test_file_size_ceiling_and_oversize_escalation.py` — regression coverage for `scripts/dispatcher.py`'s `_enforce_file_size_ceiling` (rejects a plan item targeting an existing over-ceiling file, ignores small/nonexistent targets) and `scripts/tier4_worker.py`'s `_tier4_fail(..., is_oversize_failure=...)` 1-attempt escalation shortcut for timeout and truncated-response failures vs. the normal 2-attempt threshold for ordinary build failures. Fixture-repo pattern, split out per the same convention as the other dedicated test files above.
 - `test_llm_client_sanitize.py` (2026-08-25) — regression coverage for `llm_client._sanitize_for_openrouter_content_filter()`'s phone/IP cases: a phone-shaped and an IPv4-shaped input are each changed by the sanitizer, while a TriAPI `run_id`/timestamp-shaped input, a hex hash, and a 3-part version string are all left untouched. Split out per the same file-size convention as the other dedicated test files.
 - `test_dispatcher_peak_hours.py` (2026-08-25) — regression test asserting `scripts/dispatcher._is_deepseek_peak_hours()` purely delegates to `budget_guard.check_tier3_peak_hours_ok()` rather than any hardcoded weekend/peak-window logic of its own: `ok=True` (e.g. weekend off-peak) yields `False`, `ok=False` (inside a peak window) yields `True`, and the mock is asserted called. Created as a new file rather than appended to `tests/test_branch_features.py`, which was at 73,571 chars against the 73,728-char Tier 4 ceiling with no headroom left — same "split out, don't keep extending" convention as the other dedicated test files above.
+- `test_design_judge_fix_forward_status.py` (2026-08-25) — regression coverage for the false-success bugfix in `scripts/dispatcher.py`'s `_run_design_judge()`/`handle_fix_forward()` (found live in run `20260825-092344-5ff4a7`: an item was recorded `status: success` despite the target file being byte-for-byte unchanged, because a design-judge rejection whose fix-forward attempt also failed was silently discarded). Fixture-repo/tempdir pattern, zero real LLM/network calls, mocks `judge.evaluate_design`/`tier3_escalate.escalate`/`run_build`/`_git_diff_for` at their `scripts.dispatcher`-local use sites: (a) judge approves → status stays `success`, `handle_fix_forward` not called; (b) judge rejects but fix-forward succeeds (Tier 3 applies + rebuild passes) → status stays `success`; (c) judge rejects and fix-forward fails (Tier 3 returns non-`fix_applied`) → status is downgraded to `build_failed`/`resolved_by: None`, matching the pipeline's existing `mock_patch_lint`-override convention, and the file is confirmed reverted to its original bytes. Split out per the same file-size convention as the other dedicated test files above.
 
 ## logs/
 - `state/` — per-task JSON state files (gitignored contents, dir kept via `.gitkeep`).
@@ -161,3 +162,78 @@ Full reference moved to [`docs/agents/20260825-100000-scripts-directory-referenc
 - [ ] Append a new dated phase entry to `PLAN.md` (repo root) in the same style as Phase 30/31/32 (see those entries for exact tone/format — one `## Phase 33: ...` heading, a short bolded context line, a numbered list of what changed, and a one-line `**Verification**:` sentence). Content: title something like `## Phase 33: Tier reassignment — DeepSeek to Tier 2, Gemini/agy to Tier 3, local Ollama back to Tier 4 (2026-08-25)`; state this is a config-only change to `config/tiers.yaml` (no application code touched, per `llm_client.execute_llm()`'s already-generic provider dispatch, confirmed by Phases 31/32's prerequisite work); list the three reassignments (Tier 2 → DeepSeek `deepseek-v4-pro` with peak-hours gating moved here, Tier 3 → `agy`/`gemini-3.1-pro` high effort, Tier 4 → local Ollama `qwen2.5-coder:14b-instruct-q6_K`); note `gemini_fallback` is now fully dead/unused config, deliberately left in place, out of scope; note the one regression-test fixture fix (`tests/test_orchestrator_tier3_peak_skip.py`) and why it was needed; close with the verification command from Phase 3's last step and its pass count. Verify: `grep -c "^## Phase 33" PLAN.md` returns `1`.
 - [ ] Run `git status` and `git diff --stat` to confirm the full change set is exactly: `config/tiers.yaml`, `tests/test_orchestrator_tier3_peak_skip.py`, `AGENTS.md`, `PLAN.md` — no other file touched (in particular, `scripts/llm_client.py`, `scripts/dispatcher.py`, `scripts/budget_guard.py`, `scripts/orchestrator.py` must show zero diff).
 <!-- triapi:plan run_id=20260825-092344-5ff4a7 end -->
+
+<!-- triapi:plan run_id=20260825-154633-8927c3 start -->
+## TriAPI Plan (run 20260825-154633-8927c3, appended 2026-08-25)
+
+## Execution plan — fix silent false-`"success"` after design-judge rejection (`_run_design_judge`/`handle_fix_forward`, run 20260825-092344-5ff4a7)
+
+### Phase 1 — Ground truth & baseline (read-only, no edits)
+
+- [ ] **`scripts/dispatcher.py`** — Pin the exact current code shapes before touching anything: line numbers and full bodies of `_run_design_judge()` (~line 1048) and `handle_fix_forward()` (~line 1071 area), the main-loop call site (~line 1288), and verbatim the analogous `"build_failed"` downgrade block at the mock_patch_lint override just below the call site (its exact field set is the convention the fix must mirror). Also record, from inside `handle_fix_forward`: every exit path (there must be no remaining implicit-`None` return after the fix), the `escalate_ok`/`rebuild_ok` variable flow, the revert-to-snapshot call, the `tech_debt.log_tech_debt(...)` call, and the **exact rebuild callable + argument names** it invokes (needed as the mock target in Phase 3). Record output:
+  ```bash
+  grep -n "def _run_design_judge\|def handle_fix_forward\|handle_fix_forward(\|_run_design_judge(\|build_failed" scripts/dispatcher.py && sed -n '1040,1110p' scripts/dispatcher.py && sed -n '1260,1330p' scripts/dispatcher.py
+  ```
+- [ ] **`scripts/judge.py`** — Record the exact return-dict key contract of `judge.evaluate_design(git_diff, description)` (e.g. `{"approved": bool, "reason": str}` — use the real key names, not assumed ones) so the regression-test mocks in Phase 3 return faithfully-shaped values:
+  ```bash
+  grep -n "def evaluate_design" -A 30 scripts/judge.py
+  ```
+- [ ] **`tests/` (size-ceiling check)** — Measure every existing test file against the 73,728-char ceiling to confirm the goal's "check first" instruction; expected conclusion either way: create a **new** dedicated file `tests/test_design_judge_fix_forward_status.py`, matching the repo's established split-out convention (`test_mock_patch_lint.py`, `test_dispatcher_test_context_guard.py`, etc.) and keeping headroom:
+  ```bash
+  wc -c tests/*.py | sort -n | tail -12
+  ```
+- [ ] **`tests/test_branch_features.py` + full suite (baseline)** — Capture the pre-change suite baseline for later comparison (this fix sits on a path that runs after every successful dispatch item, so the post-change delta must be exactly +3 tests): record total tests run, failures, errors, and skipped counts; require `OK`:
+  ```bash
+  PYTHONPATH=. python3 -m unittest discover -s tests -v 2>&1 | tail -15
+  ```
+
+### Phase 2 — Surgical fix in `scripts/dispatcher.py`
+
+- [ ] **`scripts/dispatcher.py` — `handle_fix_forward()` returns its outcome.** First audit all callers (`grep -rn "handle_fix_forward" scripts/ tests/` — expected: the only production caller is `_run_design_judge()`; any other caller ignores the return today and tolerates a dict). Then change **only the return behavior**: keep the signature `(item, judge_reason, state, task_id)` and every internal statement of the existing `escalate_ok`/`rebuild_ok`/snapshot-revert/tech-debt logic byte-identical; replace each exit path's implicit `None` with an explicit return of a dict `{"fixed": <bool>, "reason": <str>}`:
+  - `escalate_ok and rebuild_ok` → `{"fixed": True, "reason": "fix-forward edit applied and rebuild passed"}`
+  - not `escalate_ok` (Tier 3 response had no parseable SEARCH/REPLACE blocks; file reverted, tech debt logged) → `{"fixed": False, "reason": "tier3 escalation produced no applicable SEARCH/REPLACE edit; file reverted and tech debt logged"}`
+  - `escalate_ok` but not `rebuild_ok` → `{"fixed": False, "reason": "rebuild failed after fix-forward edit"}`
+
+  Verify compile-clean:
+  ```bash
+  python3 -m py_compile scripts/dispatcher.py
+  ```
+- [ ] **`scripts/dispatcher.py` — `_run_design_judge()` rejection branch consumes the outcome.** Replace the buggy tail (the no-op `result = dict(result)` followed by returning the original untouched result) so the branch becomes: call `ff = handle_fix_forward(item, judge_res["reason"], state, task_id)`; if `isinstance(ff, dict) and ff.get("fixed")` → return the original `result` unchanged (genuine repair occurred; `"success"` legitimately stands, `resolved_by` untouched). Otherwise build `downgraded = dict(result)` and set **exactly the field set the mock_patch_lint-override downgrade block uses** (required: `status = "build_failed"`, `resolved_by = None`; plus copy verbatim any diagnostic/message field that block sets) and return it. Do **not** touch the judge-approval path, `judge.evaluate_design()`, `tier3_escalate.escalate()`, or anything else in `dispatcher.py`:
+  ```bash
+  python3 -m py_compile scripts/dispatcher.py && grep -n "build_failed" scripts/dispatcher.py
+  ```
+
+### Phase 3 — Regression test (new file)
+
+- [ ] **`tests/test_design_judge_fix_forward_status.py`** — New dedicated test file (confirmed in Phase 1 that splitting out is correct per convention + ceiling). `unittest.TestCase`, fixture-repo/tempdir pattern like the sibling dispatcher tests, **zero real LLM/network calls**. Fixture: a `tempfile.TemporaryDirectory` containing a small target file (known broken→fixed content pair); item shaped like a real dispatch item (`{"target": <tmpfile>, "description": "..."}`); seed `result={"status": "success", "resolved_by": "tier_5", ...}`; call `dispatcher._run_design_judge(item, result, state, task_id)` directly. Mock **at the use sites as looked up inside `scripts.dispatcher`**, using the exact symbols/keys recorded in Phase 1: `_git_diff_for` → deterministic diff string; `judge.evaluate_design` → approval or rejection dict with the real key contract; `tier3_escalate.escalate` → case (b): `side_effect` writes the corrected content to the tmp target and returns `"fix_applied"`; case (c): returns a non-`"fix_applied"` status; the rebuild callable used inside `handle_fix_forward` → `True`; and `tech_debt.log_tech_debt` → `MagicMock` (**mandatory** — protects the real `knowledge/TECH_DEBT.md` from test writes in case c). Three tests:
+  - (a) judge approves → returned `status == "success"` unchanged, and `handle_fix_forward` asserted **not called** (guards against regressing the approval path);
+  - (b) judge rejects + fix-forward succeeds (escalate `"fix_applied"`, rebuild ok) → final `status == "success"`;
+  - (c) judge rejects + `tier3_escalate.escalate` returns non-`"fix_applied"` → final `status == "build_failed"` **and** `resolved_by is None` (explicitly not `"success"`), `log_tech_debt` asserted called, fixture file reverted to original bytes.
+  
+  Verify:
+  ```bash
+  python3 -m py_compile tests/test_design_judge_fix_forward_status.py && PYTHONPATH=. python3 -m unittest tests.test_design_judge_fix_forward_status -v
+  ```
+  Expected output: `Ran 3 tests ... OK`. Also confirm ceiling headroom: `wc -c tests/test_design_judge_fix_forward_status.py` (< 73,728).
+
+### Phase 4 — Full regression gate
+
+- [ ] **Full suite re-run** — Compare strictly against the Phase 1 baseline: total = baseline total **+ 3**, **0 failures, 0 errors, skipped == baseline skipped count (zero unexpected skips)**. Any deviation → stop and diagnose before proceeding:
+  ```bash
+  PYTHONPATH=. python3 -m unittest discover -s tests -v 2>&1 | tail -15
+  ```
+
+### Phase 5 — Index/bookkeeping (repo convention: docs updated at end of the work)
+
+- [ ] **`AGENTS.md`** — Append one row to the tests/ file-map table for `tests/test_design_judge_fix_forward_status.py` in the exact style of its sibling rows (bold markdown link, date, one-sentence coverage summary: judge-approve / successful-fix-forward / failing-fix-forward status outcomes; note fixture-repo pattern, full mocking, split out per the size-ceiling convention). Verify the file stays under the ceiling and the row landed:
+  ```bash
+  wc -c AGENTS.md && grep -c "test_design_judge_fix_forward_status" AGENTS.md
+  ```
+  Expected: size < 73,728; count ≥ 1.
+- [ ] **`docs/agents/20260825-100000-scripts-directory-reference.md`** — Update the `dispatcher.py` entry (this is where full per-script documentation lives since the 2026-08-25 move) to document the changed contracts: `handle_fix_forward()` now returns `{"fixed": bool, "reason": str}` instead of implicit `None`; `_run_design_judge()`'s rejection branch downgrades the item to `status: "build_failed"` / `resolved_by: None` (mirroring the mock_patch_lint-override convention) whenever fix-forward does not genuinely repair + rebuild, and leaves `"success"` standing only on judge approval or a verified fix-forward repair; cite run 20260825-092344-5ff4a7 item `-p3-i1` as the motivating reproduced incident. Date-stamp with the actual edit date. Verify:
+  ```bash
+  grep -n "handle_fix_forward" docs/agents/20260825-100000-scripts-directory-reference.md
+  ```
+
+No git clone/pull/commit/push steps are included — the goal requests none (the triggering run is already committed; this fix makes no git operation part of its definition).
+<!-- triapi:plan run_id=20260825-154633-8927c3 end -->

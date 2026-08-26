@@ -39,6 +39,7 @@ class CmdDispatchOllamaLifecycleTests(unittest.TestCase):
                     "tier_4_worker": {"endpoint": "http://localhost:11434", "provider": "ollama"},
                 },
             ),
+            mock.patch.object(triapi.llm_client, "probe_models"),
             mock.patch.object(triapi, "_breakdown_and_dispatch", side_effect=fail_dispatch),
             mock.patch.object(triapi.self_fix, "capture_crash"),
             mock.patch.object(triapi.self_fix, "queue_self_fix"),

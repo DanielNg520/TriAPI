@@ -1055,8 +1055,15 @@ def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> di
         except Exception as e:
             log.warning("[%s] Best-effort pattern extraction failed: %s", task_id, e)
     else:
-        handle_fix_forward(item, judge_res["reason"], state, task_id)
-        result = dict(result)  # Ensure result is bound and copied on this path
+        ff = handle_fix_forward(item, judge_res["reason"], state, task_id)
+        if isinstance(ff, dict) and ff.get("fixed"):
+            return result
+        
+        downgraded = dict(result)
+        downgraded["status"] = "build_failed"
+        downgraded["resolved_by"] = None
+        downgraded["reason"] = ff.get("reason") if isinstance(ff, dict) else "fix-forward repair failed"
+        return downgraded
     return result
 
 
@@ -1071,7 +1078,7 @@ def _is_deepseek_peak_hours(now_utc: time.struct_time | None = None) -> bool:
     return not check_tier3_peak_hours_ok()["ok"]
 
 
-def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> None:
+def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> dict:
     """Invokes Tier 3 to apply the design judge's refactor instructions directly.
 
     Note: Tier 3 (tier3_escalate) uses DeepSeek, which charges a higher rate
@@ -1128,6 +1135,13 @@ def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_
         else:
             reason = f"Rebuild failed after Tier 3 rewrite: {build_output}"
         tech_debt.log_tech_debt(str(target_path), reason=reason)
+
+    if escalate_ok and rebuild_ok:
+        return {"fixed": True, "reason": "fix-forward edit applied and rebuild passed"}
+    elif not escalate_ok:
+        return {"fixed": False, "reason": "tier3 escalation produced no applicable SEARCH/REPLACE edit; file reverted and tech debt logged"}
+    else:
+        return {"fixed": False, "reason": "rebuild failed after fix-forward edit"}
 
 
 def _is_transient_timeout_failure(result: dict, remaining: int) -> bool:
