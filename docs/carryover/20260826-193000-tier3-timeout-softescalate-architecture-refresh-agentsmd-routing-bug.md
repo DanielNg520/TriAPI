@@ -99,32 +99,7 @@ of the original `build_failed` is still not confirmed** — see queue item
 
 ## Worth queuing (not urgent except where noted)
 
-1. **NEW, real, reproducible: `dispatcher.py`'s doc-target routing is
-   inconsistent for identically-shaped plan items.** Phase 2's "invoke
-   `librarian_escalate.py` against `ARCHITECTURE.md`" item and Phase 3's
-   "invoke `librarian_escalate.py` against `AGENTS.md`" item were worded
-   almost identically and both had `verify_only: false`, `target:
-   "<file>.md"` — by `is_doc_target()`'s logic (`dispatcher.py:944`) both
-   should route straight to `tier_5_librarian` via the `else` branch at
-   `dispatcher.py:1260`, never touching the generic Tier 4→1 code-repair
-   chain. Phase 2's item did (`resolved_by: "tier_5"`, clean single-shot
-   success). Phase 3's item did **not** — it ended `build_failed`,
-   `resolved_by: null`, with a `build_cmd` that was literally the raw
-   shell invocation of `librarian_escalate.py` (unlike Phase 2's item,
-   whose `build_cmd` was a read-only grep verification, with the actual
-   edit happening via the `librarian_escalate.run()` Python call at
-   `dispatcher.py:1264`, not a shell-out). This strongly suggests the
-   **breakdown step** (whichever tier turns a phase's prose into
-   structured items) sometimes emits a `build_cmd` that itself contains
-   the edit command (bypassing `is_doc_target()`'s dedicated Python-call
-   routing and falling into the plain command-runner path instead), and
-   sometimes emits a routing-friendly shape — inconsistently, for the
-   same kind of request. **Needs its own `triapi plan`/dispatch pass**:
-   root-cause why breakdown produces two different item shapes for the
-   same instruction pattern, and make the doc-routing decision robust to
-   either shape (e.g. `is_doc_target()` should fire before/regardless of
-   whether `build_cmd` happens to already contain a `librarian_escalate.py`
-   invocation).
+1. **CORRECTED: real root cause confirmed — `dispatcher.py`'s `_run_design_judge()` ignores `critique.applies_to_tiers`, triggering bogus fix-forward on tier_5 successes.** Verified against `logs/triapi.log` (2026-08-27 session): `is_doc_target()` routing worked correctly and identically for BOTH the `ARCHITECTURE.md` and `AGENTS.md` items (both logged `'[ROUTING] <file> -> tier_5_librarian'`). The real root cause, confirmed via `logs/triapi.log` lines ~54443-54446 and ~55006-55013 of the `20260826-121026-fa6eea` run: `scripts/dispatcher.py`'s `_run_design_judge()` (called unconditionally at `dispatcher.py:1302` whenever a 'regular item' succeeds, regardless of which tier resolved it) is NOT gated by `config/tiers.yaml`'s `critique.applies_to_tiers` list (which is `['tier_3','tier_1','tier_2']` — tier_4 and tier_5 are deliberately excluded, per the existing precedent at `scripts/orchestrator.py:82` which DOES check `applies_to_tiers` before critiquing). Because `_run_design_judge` ignores `resolved_by`/`applies_to_tiers` entirely, every `tier_5_librarian` success (a doc edit, or even a librarian `'FRESH: no change needed'` no-op) gets run through the design judge and, on rejection, `handle_fix_forward()` — which invokes Tier 3 (agy/gemini-3.1-pro CLI) to 'refactor rewrite' a Markdown file. For the `AGENTS.md` item this produced a bad rewrite that failed rebuild and was reverted, ending the item as `build_failed` with `resolved_by` null (the exact failure this queue item originally, incorrectly, blamed on inconsistent `build_cmd` shapes). For the `ARCHITECTURE.md` item the same bogus fix-forward cycle also fired but happened to pass, masking the bug as a clean success. A secondary, separate finding worth its own queue line: `scripts/librarian_escalate.py`'s 'FRESH' escape hatch (`librarian_escalate.py:277-280`) returned FRESH for both files on their second attempt (qwen2.5-coder fallback) even though both files demonstrably needed real edits — a possible false-negative freshness judgment that deserves its own investigation, separate from the design-judge gating bug. **Fix needed (to be dispatched via `triapi plan`/dispatch against TriAPI's own repo, not hand-written):** gate `scripts/dispatcher.py`'s call to `_run_design_judge` (around `dispatcher.py:1301-1302`) on `result['resolved_by']` being in `config/tiers.yaml`'s `critique.applies_to_tiers` list, mirroring `scripts/orchestrator.py:82`'s existing pattern. Root-cause is now confirmed (not to be re-investigated).
 2. **`logs/cost_log.jsonl` is ~858KB, ~11.6x this repo's 73,728-char
    Tier 4 ceiling.** Already surfaced by this run's own Phase 2 verify
    item (which passed anyway, since it only greps the tail). Needs
@@ -175,9 +150,7 @@ of the original `build_failed` is still not confirmed** — see queue item
 
 ## Next up (priority order)
 
-1. **New, highest-value**: root-cause and fix the doc-target routing
-   inconsistency (queue item 1 above) — it's the reason this session
-   needed a manual recovery at all.
+1. **New, highest-value**: gate `dispatcher.py`'s `_run_design_judge()` call on `resolved_by` ∈ `critique.applies_to_tiers` (queue item 1 above) — root-cause confirmed, fix will be dispatched via `triapi plan`/dispatch, not hand-written.
 2. `logs/cost_log.jsonl` size split (queue item 2).
 3. `git_ops.push()` `git add -A` scoping fix (queue item 3).
 4. OpenRouter `[PHONE]` filter root-cause (queue item 4).
