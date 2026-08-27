@@ -397,6 +397,8 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             result3 = tier3_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description
             )
+            if result3.get("status") == "timeout":
+                log.warning("[%s] Tier 3 timed out; soft-escalating to Tier 2: %s", task_id, result3.get("reason"))
             if result3.get("status") == "error":
                 raise RuntimeError(f"Tier 3 failed: {result3.get('reason')}")
             if result3.get("status") == "fix_rejected":

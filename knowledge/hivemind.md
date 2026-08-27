@@ -651,3 +651,15 @@ In this configuration change, a mid-tier fallback (`fallback_agy`) was strategic
 - **Cost Optimization:** Tasks that are slightly too complex for small local models can often be resolved by mid-tier models, preventing unnecessary spend on top-tier, expensive APIs.
 - **Resilience:** Introducing diverse providers and models into the fallback chain increases the overall reliability of the pipeline in the event of rate limits or provider downtime.
 - **Resource Efficiency:** Reserves the most capable (and most expensive) models as true last resorts rather than immediate second choices.
+
+### Distinguish Timeouts from Generic Errors
+
+When wrapping operations that interact with external services or shell commands, explicitly catch specific timeout exceptions (e.g., `subprocess.TimeoutExpired`) before falling back to a blanket `Exception` catch block. 
+
+Distinguishing a timeout from a general failure allows upstream logic to apply specific handling—such as implementing retry backoffs or reporting a distinct `timeout` status rather than a generic `error`. This improves system resilience and makes debugging much clearer when long-running external processes or CLI-backed providers hang.
+
+### Graceful Degradation via Soft Escalation
+
+In multi-tier fallback or escalation pipelines (such as LLM routing or service architectures), distinguish between **fatal structural errors** and **transient failures** (like network timeouts). 
+
+When a specific tier encounters a transient issue such as a timeout, handle it by logging the issue and allowing the system to "soft escalate" (fall through) to the next available tier, rather than raising a hard exception that crashes the entire pipeline. Hard exceptions should be reserved for unrecoverable state errors where subsequent tiers are also guaranteed to fail.

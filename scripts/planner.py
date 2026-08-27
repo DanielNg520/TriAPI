@@ -52,11 +52,13 @@ TIER3_DEEPSEEK_PEAK_UTC_START = 6  # inclusive
 TIER3_DEEPSEEK_PEAK_UTC_END = 10  # exclusive
 
 # Repo docs (README.md/AGENTS.md) legitimately contain `git@github.com:...`
-# SSH URLs, which OpenRouter's free stealth/ox-alpha model's content filter
-# flags as PII ("Request blocked by content filter: [EMAIL]") and 403s the
-# whole call -- confirmed live 2026-08-23. Only applied to the copy of the
-# context blob sent to non-cli providers; the CLI path never hits this
-# filter and is left untouched.
+# SSH URLs, which OpenRouter's free-tier content filter (originally observed
+# on stealth/ox-alpha, since pulled from OpenRouter's catalog 2026-08-26;
+# tier_1_planner now runs nvidia/nemotron-3-ultra-550b-a55b:free, same
+# content-filter behavior applies) flags as PII ("Request blocked by content
+# filter: [EMAIL]") and 403s the whole call -- confirmed live 2026-08-23.
+# Only applied to the copy of the context blob sent to non-cli providers;
+# the CLI path never hits this filter and is left untouched.
 _EMAIL_LIKE_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 
 
@@ -307,7 +309,7 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
         )
         return _fallback()
 
-    # Non-'cli' providers (e.g. tier_1_planner's OpenRouter stealth/ox-alpha):
+    # Non-'cli' providers (e.g. tier_1_planner's OpenRouter nemotron-3-ultra):
     # enrich and dispatch through execute_llm(). Content sent off-box is
     # sanitized against OpenRouter's PII content filter (see
     # _sanitize_for_content_filter's docstring). On any failure, fall back to

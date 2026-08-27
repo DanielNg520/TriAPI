@@ -1,17 +1,18 @@
 # Architecture
 
-TriAPI orchestrates a C++/Edge AI debugging workflow across four tiers, cheapest first, so that paid subscription quota (Claude Pro/Max, and previously intended Gemini/Antigravity usage) is reserved for genuinely hard problems instead of routine build failures.
+TriAPI orchestrates a C++/Edge AI debugging workflow across five tiers (four automated repair tiers plus a doc-only librarian tier), cheapest first, so that paid subscription quota (Claude Pro/Max, and previously intended Gemini/Antigravity usage) is reserved for genuinely hard problems instead of routine build failures.
 
-## The four tiers
+## The five tiers
 
 | Tier | Surface | Cost model | Role |
 |---|---|---|---|
 | **4 — Worker** | OpenRouter (`dots-studio/dots-3-note-preview:free`) / Local Ollama (`qwen2.5-coder`) | OpenRouter API / $0 local | Drafts/fixes code, runs the build, tries repeatedly |
-| **3 — Debugger** | DeepSeek API (`deepseek-v4-flash`/`-pro`) | Metered, ~$0.0003/call in practice (prefix-cache discount) | Harder logic errors Tier 4 couldn't fix |
-| **2 — Manager** | Nemotron (OpenRouter API) | OpenRouter API / Gemini REST fallback | Second automated repair attempt |
+| **3 — Debugger** | agy / gemini-3.1-pro (Antigravity CLI, effort high) | Subscription-billed, $0 marginal cost | Harder logic errors Tier 4 couldn't fix |
+| **2 — Manager** | DeepSeek API (`deepseek-v4-pro`) | Metered, prefix-cache discount | Second automated repair attempt |
 | **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | Strongest, last automated repair attempt before human review (its `tier_1_planner` role, initial `triapi plan` authoring, is separate and always runs first regardless of this repair ordering) |
+| **5 — Librarian** | Ollama mistral-small (local), escalating to agy/OpenRouter | $0 local / subscription on agy fallback | Doc-only repair for *.md/docs/** targets, see the existing Tier 5 section below |
 
-If all four are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically. Tier 1 (Claude) is deliberately ordered last in the repair chain, after Tier 2 (Gemini), so subscription quota is spent only on problems the cheaper/free tiers couldn't already resolve.
+If all four repair tiers are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically. Tier 1 (Claude) is deliberately ordered last in the repair chain, after Tier 2 (DeepSeek), so subscription quota is spent only on problems the cheaper/free tiers couldn't already resolve.
 
 ## Escalation state machine
 
@@ -23,7 +24,7 @@ Tier 4 (OpenRouter/Ollama): draft + build
   └─ fails twice (escalation_rules.tier4_to_tier3.threshold)
        │
        ▼
-     Tier 3 (DeepSeek): patch file, then Tier 4 does a PLAIN REBUILD
+     Tier 3 (agy/gemini-3.1-pro): patch file, then Tier 4 does a PLAIN REBUILD
        │  (not a re-draft -- that would overwrite the patch)
        ├─ builds ───────────────────────────────────────► done
        └─ still fails
@@ -34,7 +35,7 @@ Tier 4 (OpenRouter/Ollama): draft + build
             ├─ refused (free-tier limit) ─► skip to Tier 1
             └─ ok
                  ▼
-               Tier 2 (Nemotron/Gemini): patch file, plain rebuild
+               Tier 2 (DeepSeek): patch file, plain rebuild
                  ├─ builds ─────────────────────────────► done
                  └─ still fails
                       │
@@ -53,7 +54,7 @@ Claude (Tier 1) sits last in this chain, not because it's the weakest tier -- it
 
 State (consecutive build-failure count, last stderr) is file-backed at `logs/state/<task_id>.json`, not in-memory, because Tier 4 is designed to run as discrete process invocations rather than one long-lived loop.
 
-Human handoff writes `logs/escalations.jsonl` (one line per escalation) and a readable `logs/escalation_<task_id>.md` summary, and prints a console notice. Nothing in this repo calls Antigravity, Jules, or any other GUI/agent tool programmatically — those remain manual review surfaces the user opens themselves.
+Human handoff writes `logs/escalations.jsonl` (one line per escalation) and a readable `logs/escalation_<task_id>.md` summary, and prints a console notice. Except for the Tier 5 doc librarian (which programmatically calls the Antigravity CLI), nothing in this repo calls Antigravity, Jules, or any other GUI/agent tool programmatically — those remain manual review surfaces the user opens themselves.
 
 ## Why DeepSeek's cache-hit economics matter
 
@@ -101,7 +102,7 @@ OpenRouter-shaped HTTP path) and `_call_gemini_api()`, following the same
 
 The plan (`PLAN.md`) is the authoritative record of how this design evolved; summarized here:
 
-- **Tier 2 was redesigned from GUI-only (Antigravity desktop app has no CLI/headless mode) to a direct Gemini API call**, once it became clear Google AI Studio exposes a real REST API. Antigravity's role dropped to an optional manual review surface.
+- **Tier 2 was redesigned from GUI-only (Antigravity desktop app has no CLI/headless mode) to a direct Gemini API call**, once it became clear Google AI Studio exposes a real REST API. Antigravity's role dropped to an optional manual review surface (though the Antigravity CLI was later adopted for the Tier 5 librarian).
 - **An MCP server (originally Phase 5) was skipped entirely** once Tier 2 stopped needing Antigravity to dispatch anything — `orchestrator.py` is already a complete, standalone entry point (CLI or importable Python function).
 - **Jules (Google's async coding-agent CLI) was considered as a Tier 2 primary** with Gemini API as fallback, but is deferred pending `jules login` (interactive OAuth, not run yet) and more research — see `PLAN.md` Phase 4's DEFERRED note for what's already known (async session/poll/pull model, requires a GitHub-connected repo, likely much slower than the other tiers).
 - **Secrets use sops + age, not `.env`** — `config/secrets.enc.yaml` is sops-encrypted ciphertext; only `scripts/secrets_loader.py` (which shells out to `sops -d`) ever sees plaintext values, at runtime, in memory. **As of 2026-08-17 the encrypted file itself is also gitignored/local-only, not committed** — the earlier design committed the ciphertext (encryption alone was judged sufficient), but the convention changed to keep it off the public repo entirely; a full git-history purge (`git filter-repo`) removed the previously-committed ciphertext from every past commit. `config/secrets.example.yaml` (real, safe-to-commit placeholder values) remains the only tracked reference for which keys are needed.

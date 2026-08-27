@@ -12,6 +12,7 @@ tiers.yaml's pricing block goes stale.
 import argparse
 import json
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -206,6 +207,17 @@ def escalate(
             is_tier4=False,
             effort=tier3.get("effort"),
         )
+    except subprocess.TimeoutExpired as e:
+        log.warning("[%s] Tier 3 request timed out: %s", task_id, e)
+        return {
+            "status": "timeout",
+            "reason": f"Tier 3 request timed out after {e.timeout}s: {e}",
+            "model": model_name,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        }
     except Exception as e:
         log.error("[%s] Tier 3 request failed: %s", task_id, e)
         return {

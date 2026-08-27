@@ -2,17 +2,22 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  # Primary planner: OpenRouter's free stealth/ox-alpha model. On any failure
+  # Primary planner: OpenRouter's free Nemotron model. On any failure
   # (content-filter 403, rate limit, connectivity), planner.py falls back to
   # tier_1_manager's Claude CLI (Sonnet 5, high effort) instead of erroring
   # out -- there is no separate fallback block here by design, it always
   # falls back to tier_1_manager's config.
+  # 2026-08-26: swapped from "stealth/ox-alpha" -- that stealth slug rotated
+  # out of OpenRouter's catalog (confirmed via GET /api/v1/models, 404 on
+  # probe), which hard-blocked the whole pipeline at the probe_models()
+  # pre-flight stage. Replaced with the next already-user-approved free
+  # model per the allowed-models list, not a newly-added one.
   provider: openrouter
   api_key_secret: open_router_api_key
   name: "OpenRouter"
   endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "stealth/ox-alpha"
+    default: "nvidia/nemotron-3-ultra-550b-a55b:free"
   default_model: "default"
   role: "strategic planning"
   automatable: true
@@ -97,7 +102,7 @@ tier_5_librarian:
   models:
     primary: "mistral-small:latest"
     fallback_local: ollama_fallback
-    fallback_openrouter: "stealth/ox-alpha"
+    fallback_openrouter: "nvidia/nemotron-3-ultra-550b-a55b:free"
     fallback_agy: default
   target_globs: ["*.md", "docs/**"]
   verify_command: null
