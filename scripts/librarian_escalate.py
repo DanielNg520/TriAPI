@@ -183,14 +183,18 @@ def run(
     editing = target_path.exists()
     current_contents = target_path.read_text() if editing else None
 
-    # Escalation chain per config/tiers.yaml: primary (Ollama mistral-small)
+    # Escalation chain per config/tiers.yaml: primary (config-driven provider)
     # -> fallback_local (Ollama, ollama_fallback's model) -> fallback_agy
     # (agy CLI) -> fallback_openrouter (OpenRouter, tier_1_planner's free model).
     # DeepSeek/Claude/Gemini are strictly forbidden anywhere in this chain.
     models_cfg = lib_config.get("models", {})
     fallback_local_block = config.get(models_cfg.get("fallback_local", "ollama_fallback"), {})
     providers = [
-        {"name": "ollama", "model": model_override or models_cfg.get("primary", "mistral-small:latest")},
+        {
+            "name": lib_config.get("provider", "ollama"),
+            "model": model_override or models_cfg.get("primary", "mistral-small:latest"),
+            "effort": lib_config.get("effort"),
+        },
         {"name": "ollama", "model": model_override or fallback_local_block.get("models", {}).get("default")},
         {"name": "agy", "model": models_cfg.get("fallback_agy")},
         {"name": "openrouter", "model": model_override or models_cfg.get("fallback_openrouter")},
@@ -228,6 +232,7 @@ def run(
                     model=model,
                     prompt=prompt,
                     system_prompt="",
+                    effort=provider_info.get("effort"),
                 )
             else:
                 response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(

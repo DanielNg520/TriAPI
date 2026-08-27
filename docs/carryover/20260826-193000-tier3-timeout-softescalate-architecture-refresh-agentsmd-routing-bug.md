@@ -1,4 +1,4 @@
-# 2026-08-26 19:30 UTC — ACTIVE: Tier 3 timeout soft-escalation + ARCHITECTURE.md refresh complete, committed; new plan-routing bug found+worked around, queued for a real fix
+# 2026-08-26 19:30 UTC — ACTIVE: Tier 3 timeout soft-escalation + ARCHITECTURE.md refresh complete, committed; tier_5-fed-into-_run_design_judge bug RESOLVED (gated dispatcher on critique.applies_to_tiers, regression tests added)
 
 **This is the primary file to read to resume work — everything else in
 `docs/carryover/` is historical/completed context only.**
@@ -94,12 +94,17 @@ resolved_by: "manual"` with a freshly recomputed `content_hash`
 (`regression_guard.hash_file()`), per `AGENT_GUIDE.md`'s documented
 `human_handoff`-equivalent manual-resolution workflow — then the run was
 resumed and finished the last verify item cleanly. **The real root cause
-of the original `build_failed` is still not confirmed** — see queue item
-1 below.
+of the original `build_failed` was confirmed and FIXED in a follow-up
+dispatch** — `scripts/dispatcher.py`'s `_run_design_judge()` call is now
+gated on `result['resolved_by']` being in `config/tiers.yaml`'s
+`critique.applies_to_tiers` (which now includes `tier_4`, still excludes
+`tier_5`), mirroring `scripts/orchestrator.py:82`'s existing pattern.
+Regression tests added in `tests/test_design_judge_fix_forward_status.py`
+and `tests/test_branch_features.py`.
 
 ## Worth queuing (not urgent except where noted)
 
-1. **CORRECTED: real root cause confirmed — `dispatcher.py`'s `_run_design_judge()` ignores `critique.applies_to_tiers`, triggering bogus fix-forward on tier_5 successes.** Verified against `logs/triapi.log` (2026-08-27 session): `is_doc_target()` routing worked correctly and identically for BOTH the `ARCHITECTURE.md` and `AGENTS.md` items (both logged `'[ROUTING] <file> -> tier_5_librarian'`). The real root cause, confirmed via `logs/triapi.log` lines ~54443-54446 and ~55006-55013 of the `20260826-121026-fa6eea` run: `scripts/dispatcher.py`'s `_run_design_judge()` (called unconditionally at `dispatcher.py:1302` whenever a 'regular item' succeeds, regardless of which tier resolved it) is NOT gated by `config/tiers.yaml`'s `critique.applies_to_tiers` list (which is `['tier_3','tier_1','tier_2']` — tier_4 and tier_5 are deliberately excluded, per the existing precedent at `scripts/orchestrator.py:82` which DOES check `applies_to_tiers` before critiquing). Because `_run_design_judge` ignores `resolved_by`/`applies_to_tiers` entirely, every `tier_5_librarian` success (a doc edit, or even a librarian `'FRESH: no change needed'` no-op) gets run through the design judge and, on rejection, `handle_fix_forward()` — which invokes Tier 3 (agy/gemini-3.1-pro CLI) to 'refactor rewrite' a Markdown file. For the `AGENTS.md` item this produced a bad rewrite that failed rebuild and was reverted, ending the item as `build_failed` with `resolved_by` null (the exact failure this queue item originally, incorrectly, blamed on inconsistent `build_cmd` shapes). For the `ARCHITECTURE.md` item the same bogus fix-forward cycle also fired but happened to pass, masking the bug as a clean success. A secondary, separate finding worth its own queue line: `scripts/librarian_escalate.py`'s 'FRESH' escape hatch (`librarian_escalate.py:277-280`) returned FRESH for both files on their second attempt (qwen2.5-coder fallback) even though both files demonstrably needed real edits — a possible false-negative freshness judgment that deserves its own investigation, separate from the design-judge gating bug. **Fix needed (to be dispatched via `triapi plan`/dispatch against TriAPI's own repo, not hand-written):** gate `scripts/dispatcher.py`'s call to `_run_design_judge` (around `dispatcher.py:1301-1302`) on `result['resolved_by']` being in `config/tiers.yaml`'s `critique.applies_to_tiers` list, mirroring `scripts/orchestrator.py:82`'s existing pattern. Root-cause is now confirmed (not to be re-investigated).
+1. **RESOLVED: `dispatcher.py`'s `_run_design_judge()` was ignoring `critique.applies_to_tiers`, triggering bogus fix-forward on tier_5 successes.** Root cause confirmed via `logs/triapi.log` lines ~54443-54446 and ~55006-55013 of the `20260826-121026-fa6eea` run. **FIXED:** `scripts/dispatcher.py`'s call to `_run_design_judge()` (around `dispatcher.py:1301-1302`) is now gated on `result['resolved_by']` being in `config/tiers.yaml`'s `critique.applies_to_tiers` list (which now includes `tier_4`, still excludes `tier_5`), mirroring `scripts/orchestrator.py:82`'s existing pattern. Regression tests added in `tests/test_design_judge_fix_forward_status.py` and `tests/test_branch_features.py`. A secondary, separate finding worth its own queue line: `scripts/librarian_escalate.py`'s 'FRESH' escape hatch (`librarian_escalate.py:277-280`) returned FRESH for both files on their second attempt (qwen2.5-coder fallback) even though both files demonstrably needed real edits — a possible false-negative freshness judgment that deserves its own investigation, separate from the design-judge gating bug.
 2. **`logs/cost_log.jsonl` is ~858KB, ~11.6x this repo's 73,728-char
    Tier 4 ceiling.** Already surfaced by this run's own Phase 2 verify
    item (which passed anyway, since it only greps the tail). Needs
@@ -150,13 +155,16 @@ of the original `build_failed` is still not confirmed** — see queue item
 
 ## Next up (priority order)
 
-1. **New, highest-value**: gate `dispatcher.py`'s `_run_design_judge()` call on `resolved_by` ∈ `critique.applies_to_tiers` (queue item 1 above) — root-cause confirmed, fix will be dispatched via `triapi plan`/dispatch, not hand-written.
-2. `logs/cost_log.jsonl` size split (queue item 2).
-3. `git_ops.push()` `git add -A` scoping fix (queue item 3).
-4. OpenRouter `[PHONE]` filter root-cause (queue item 4).
-5. Groq provider addition (queue item 5).
-6. Architecture items: backend registry, complexity router, per-tier
+1. `logs/cost_log.jsonl` size split (queue item 2).
+2. `git_ops.push()` `git add -A` scoping fix (queue item 3).
+3. OpenRouter `[PHONE]` filter root-cause (queue item 4).
+4. Groq provider addition (queue item 5).
+5. Architecture items: backend registry, complexity router, per-tier
    fallback toggles (queue item 6).
+6. **Investigate `librarian_escalate.py`'s 'FRESH' false-negative** (from
+   resolved queue item 1's secondary finding): qwen2.5-coder fallback
+   returned FRESH for both `AGENTS.md` and `ARCHITECTURE.md` on second
+   attempt even though both files needed real edits.
 
 **Separately, on hold for the user (not part of the ordering above):**
 - **Virtual Codebase Plan** (`VIRTUAL_CODEBASE_PLAN.md`) — user wants to

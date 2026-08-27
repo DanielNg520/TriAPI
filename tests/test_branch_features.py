@@ -1368,6 +1368,90 @@ class DispatcherHookAndFixForwardTests(unittest.TestCase):
         mock_extract.assert_called_once()
         mock_handle_ff.assert_not_called()
 
+    @mock.patch("scripts.dispatcher.save_run")
+    @mock.patch("scripts.dispatcher.check_tier2_ok", return_value={"ok": True})
+    @mock.patch("scripts.dispatcher.run_task")
+    @mock.patch("scripts.judge.evaluate_design")
+    @mock.patch("scripts.judge.extract_pattern")
+    @mock.patch("scripts.dispatcher.handle_fix_forward")
+    @mock.patch("subprocess.run")
+    def test_tier5_success_skips_design_judge(
+        self, mock_run, mock_handle_ff, mock_extract, mock_eval, mock_run_task, mock_check_ok, mock_save
+    ):
+        mock_run_task.return_value = {"status": "success", "resolved_by": "tier_5"}
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        state = {
+            "run_id": "run-test",
+            "project_dir": self.project_dir,
+            "status": "planned",
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "Phase 1",
+                        "items": [
+                            {
+                                "description": "Test task",
+                                "target": str(self.target_file.relative_to(self.project_dir)),
+                                "build_cmd": "echo 'built'",
+                                "verify_only": False,
+                                "context_files": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "results": []
+        }
+
+        dispatcher.dispatch(state)
+
+        mock_eval.assert_not_called()
+        mock_extract.assert_not_called()
+        mock_handle_ff.assert_not_called()
+
+    @mock.patch("scripts.dispatcher.save_run")
+    @mock.patch("scripts.dispatcher.check_tier2_ok", return_value={"ok": True})
+    @mock.patch("scripts.dispatcher.run_task")
+    @mock.patch("scripts.judge.evaluate_design")
+    @mock.patch("scripts.judge.extract_pattern")
+    @mock.patch("scripts.dispatcher.handle_fix_forward")
+    @mock.patch("subprocess.run")
+    def test_tier4_success_still_runs_design_judge(
+        self, mock_run, mock_handle_ff, mock_extract, mock_eval, mock_run_task, mock_check_ok, mock_save
+    ):
+        mock_run_task.return_value = {"status": "success", "resolved_by": "tier_4"}
+        mock_eval.return_value = {"status": "ok", "approved": True, "reason": "looks good", "cost_usd": 0.0}
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        state = {
+            "run_id": "run-test",
+            "project_dir": self.project_dir,
+            "status": "planned",
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "Phase 1",
+                        "items": [
+                            {
+                                "description": "Test task",
+                                "target": str(self.target_file.relative_to(self.project_dir)),
+                                "build_cmd": "echo 'built'",
+                                "verify_only": False,
+                                "context_files": []
+                            }
+                        ]
+                    }
+                ]
+            },
+            "results": []
+        }
+
+        dispatcher.dispatch(state)
+
+        mock_eval.assert_called_once()
+        mock_extract.assert_called_once()
+
     @mock.patch("subprocess.run")
     @mock.patch("scripts.tier3_escalate.escalate", autospec=True)
     @mock.patch("scripts.dispatcher.run_build")

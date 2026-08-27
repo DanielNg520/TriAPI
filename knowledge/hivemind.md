@@ -663,3 +663,112 @@ Distinguishing a timeout from a general failure allows upstream logic to apply s
 In multi-tier fallback or escalation pipelines (such as LLM routing or service architectures), distinguish between **fatal structural errors** and **transient failures** (like network timeouts). 
 
 When a specific tier encounters a transient issue such as a timeout, handle it by logging the issue and allowing the system to "soft escalate" (fall through) to the next available tier, rather than raising a hard exception that crashes the entire pipeline. Hard exceptions should be reserved for unrecoverable state errors where subsequent tiers are also guaranteed to fail.
+
+### Asymmetric Critic-Worker Pattern
+In tiered LLM pipelines, decouple generation from verification by routing the output of smaller, local models to larger, more capable models for evaluation. By configuring a high-volume "worker" tier (e.g., a fast, local model used for code drafting or compilation loops) to be evaluated by a smarter "critic" tier (e.g., a large frontier model), you optimize for both speed and cost without sacrificing quality. The cheaper model handles the bulk generation, while the expensive model is reserved solely for high-leverage review and critique.
+
+### Config-Driven Evaluator Scoping
+
+When introducing an advisory evaluation or critique step (such as a design judge or code reviewer) to a pipeline with multiple different workers or tiers, do not run the evaluation unconditionally on all successful outputs. 
+
+Instead, gate the evaluator behind a centralized configuration block that includes:
+1. A global `enabled` toggle to easily turn the feature on or off.
+2. An explicit list of actors, tiers, or resolution methods it applies to (e.g., `applies_to_tiers`).
+
+**Why:** Different tiers or workers (e.g., a documentation generator vs. a code refactoring model) have different output characteristics. Running a code-design judge on documentation or a human-provided fallback is wasteful and can lead to spurious failures. Centralizing this check ensures that new tiers bypass the evaluator by default until explicitly opted in.
+
+**Example:**
+```python
+def _design_judge_applies(resolved_by: str | None, critique_cfg: dict) -> bool:
+    """Gates the design judge to specific tiers based on configuration."""
+    if not critique_cfg.get("enabled", False):
+        return False
+    return resolved_by in critique_cfg.get("applies_to_tiers", [])
+
+# ... in the main execution loop ...
+if result["status"] == "success" and is_regular_item and _design_judge_applies(result.get("resolved_by"), critique_cfg):
+    result = _run_design_judge(...)
+```
+
+### Exhaustive Testing for Configuration-Driven Gates
+
+When implementing a gating or filtering function that determines whether a feature should run based on configuration (e.g., feature flags, applicability lists), systematically test all logical branches and edge cases. Instead of combining multiple checks into a single test, write separate, focused unit tests for each scenario.
+
+**Key Scenarios to Cover:**
+- **Happy Path:** The feature is enabled, and the input meets the required conditions (e.g., the value is present in the applicability list).
+- **Master Switch Off:** The feature is explicitly disabled in the configuration, regardless of other conditions.
+- **Condition Not Met:** The feature is enabled, but the input does not match the allowed criteria (e.g., the value is missing from the applicability list).
+- **Missing Configuration Keys:** The configuration dictionary or object is missing expected keys (e.g., missing the applicability list entirely).
+- **Null or Invalid Inputs:** The function receives `None` or unexpected input types.
+
+**Example (from the diff):**
+```python
+class TestDesignJudgeAppliesGate(unittest.TestCase):
+    # Master Switch Off
+    def test_disabled_critique_returns_false(self):
+        config = {"enabled": False, "applies_to_tiers": ["tier_3"]}
+        self.assertFalse(dispatcher._design_judge_applies("any", config))
+
+    # Happy Path
+    def test_tier_in_list_returns_true(self):
+        config = {"enabled": True, "applies_to_tiers": ["tier_3", "tier_4"]}
+        self.assertTrue(dispatcher._design_judge_applies("tier_4", config))
+
+    # Condition Not Met
+    def test_tier_not_in_list_returns_false(self):
+        config = {"enabled": True, "applies_to_tiers": ["tier_3", "tier_4"]}
+        self.assertFalse(dispatcher._design_judge_applies("tier_5", config))
+
+    # Missing Configuration Keys
+    def test_missing_applies_to_tiers_key_returns_false(self):
+        config = {"enabled": True}
+        self.assertFalse(dispatcher._design_judge_applies("any", config))
+
+    # Null or Invalid Inputs
+    def test_none_resolved_by_returns_false(self):
+        config = {"enabled": True, "applies_to_tiers": ["tier_3"]}
+        self.assertFalse(dispatcher._design_judge_applies(None, config))
+```
+
+### Testing Conditional Side-Effects Based on Resolution Paths
+
+When a pipeline or orchestrator can resolve a task through multiple distinct paths (e.g., escalating fallback tiers, automated vs. manual resolution), downstream side-effects like design evaluation, telemetry, or pattern extraction often need to be selectively skipped or executed depending on the resolution path taken.
+
+**Pattern:**
+Write paired explicit tests to verify that downstream hooks (often expensive or stateful operations like LLM design evaluations) are correctly bypassed or triggered based on the specific metadata of the successful resolution.
+
+**How to Apply:**
+1. **Mock the Executor:** Mock the core execution step (e.g., `run_task`) to return a synthetic success payload that includes a resolution path identifier (e.g., `resolved_by: "tier_5"` vs `resolved_by: "tier_4"`).
+2. **Mock the Hooks:** Mock the downstream side-effect functions (e.g., `evaluate_design`, `extract_pattern`).
+3. **Test the Bypass:** For paths that should skip the side-effect (like an emergency tier or a manual override), assert `assert_not_called()` on the mocked hooks.
+4. **Test the Execution:** For standard paths, write a sibling test asserting `assert_called_once()` to ensure normal post-processing still occurs.
+
+By explicitly testing the boundary where execution metadata dictates subsequent workflow steps, you ensure that architectural rules (like "Tier 5 resolutions bypass the design judge") remain strictly enforced as pipeline complexity grows.
+
+### Configuration-Driven Provider Selection
+
+When defining service integrations, fallback chains, or strategy patterns (e.g., LLM routing), avoid hardcoding the primary provider or its configuration parameters in the execution logic. Instead, extract the provider identity and its capabilities into a centralized configuration object.
+
+**Why this matters:**
+Hardcoding a specific provider (like `"ollama"`) tightly couples your execution logic to a single implementation, requiring code changes to test new providers, switch environments, or pass new API arguments. By reading the provider name and optional arguments (such as an `"effort"` tier) from configuration, the system can seamlessly switch implementations without altering the core pipeline.
+
+**Example Application:**
+Instead of hardcoding a provider name in a fallback chain:
+```python
+# Bad: Hardcoded provider assumption
+providers = [
+    {"name": "ollama", "model": models_cfg.get("primary", "default-model")}
+]
+```
+
+Read the provider and its provider-specific arguments from configuration, falling back to a sensible default:
+```python
+# Good: Configuration-driven with defaults
+providers = [
+    {
+        "name": lib_config.get("provider", "ollama"),
+        "model": models_cfg.get("primary", "default-model"),
+        "effort": lib_config.get("effort"),
+    }
+]
+```

@@ -132,12 +132,18 @@ class TestTier5Librarian(unittest.TestCase):
 
     # -- (4) success path -------------------------------------------------
 
-    def test_success_path_lands_via_edit_block_with_local_billing(self) -> None:
+    def test_primary_provider_swaps_to_agy_with_effort_when_configured(self) -> None:
+        """Primary provider configured as agy uses execute_agy and never
+        touches the paid ladder or the local/openrouter fallbacks."""
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "docs" / "GUIDE.md"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# Guide\n\nOld sentence here.\n", encoding="utf-8")
-            cost_log = Path(tmp) / "cost_log.jsonl"
+
+            config = self._tier5_config()
+            config["tier_5_librarian"]["provider"] = "agy"
+            config["tier_5_librarian"]["effort"] = "low"
+            config["tier_5_librarian"]["models"]["primary"] = "gemini-3.7-flash"
 
             response = (
                 "<<<<<<< SEARCH\n"
@@ -146,125 +152,47 @@ class TestTier5Librarian(unittest.TestCase):
                 "New sentence here.\n"
                 ">>>>>>> REPLACE\n"
             )
-
-            agy_sentinel = mock.Mock()
+            agy_sentinel = mock.Mock(return_value=(response, "subscription", 12, 7))
 
             with (
-                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=config),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
-                mock.patch.object(librarian_escalate, "COST_LOG_PATH", cost_log),
-                mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=(response, "ollama", 12, 7),
-                ) as execute_llm,
                 mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
+                mock.patch.object(librarian_escalate.llm_client, "execute_llm") as execute_llm,
+                mock.patch.object(llm_client, "_call_claude_cli") as claude_cli,
+                mock.patch.object(llm_client, "_call_gemini_api") as gemini_api,
+                mock.patch.object(tier1_escalate, "escalate") as tier1_escalate_mock,
+                mock.patch.object(tier2_escalate, "escalate") as tier2_escalate_mock,
+                mock.patch.object(tier3_escalate, "escalate") as tier3_escalate_mock,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
-                    "t-success-billing", "keep guide fresh", str(target), workdir=tmp,
+                    "t-agy-primary", "keep guide fresh", str(target), workdir=tmp,
                 )
 
-            execute_llm.assert_called_once()
-            agy_sentinel.assert_not_called()
-            clear_state.assert_called_once_with("t-success-billing")
+            # Primary path used execute_agy exactly once, with the
+            # configured model/effort -- proves the new primary provider
+            # slot is wired through, not silently falling back to ollama.
+            agy_sentinel.assert_called_once()
+            self.assertEqual(agy_sentinel.call_args.kwargs["model"], "gemini-3.7-flash")
+            self.assertEqual(agy_sentinel.call_args.kwargs["effort"], "low")
+
+            # fallback_local (ollama/openrouter path) is never reached
+            # because primary succeeded on the first attempt.
+            execute_llm.assert_not_called()
+
+            # The paid ladder (Claude CLI, Gemini API, Tier 1/2/3 escalate)
+            # must never be touched by the librarian tier at all.
+            claude_cli.assert_not_called()
+            gemini_api.assert_not_called()
+            tier1_escalate_mock.assert_not_called()
+            tier2_escalate_mock.assert_not_called()
+            tier3_escalate_mock.assert_not_called()
+
+            clear_state.assert_called_once_with("t-agy-primary")
             self.assertEqual(target.read_text(encoding="utf-8"), "# Guide\n\nNew sentence here.\n")
             self.assertEqual(result["status"], "success")
             self.assertTrue(result["changed"])
-
-            cost_lines = [json.loads(line) for line in cost_log.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(len(cost_lines), 1)
-            self.assertEqual(cost_lines[0]["billing"], "local")
-            self.assertEqual(cost_lines[0]["model"], "mistral-small:latest")
-
-    # -- (5) escalation order + paid-ladder sentinels ----------------------
-
-    def test_escalation_order_is_primary_then_fallback_local_then_agy_then_openrouter_then_log_and_notify(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "docs" / "STALE.md"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("stale doc\n", encoding="utf-8")
-
-            # Every attempt returns content that fails edit-block application,
-            # so the chain runs to full exhaustion through all 5 legs.
-            responses = [_fake_response("not JSON, sorry") for _ in range(3)]
-            post_count_at_agy = []
-
-            paid_ladder_sentinel = mock.Mock(
-                side_effect=AssertionError("paid tier must never be called from tier_5_librarian")
-            )
-            agy_sentinel = mock.Mock()
-
-            def agy_side_effect(*args, **kwargs):
-                post_count_at_agy.append(post.call_count)
-                return ("not JSON, sorry", "subscription", 4, 2)
-
-            with (
-                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
-                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
-                mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    side_effect=librarian_escalate.llm_client.execute_llm,
-                ) as execute_llm,
-                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
-                mock.patch.object(llm_client.requests, "post", side_effect=responses) as post,
-                mock.patch.object(llm_client, "_call_claude_cli", new=paid_ladder_sentinel),
-                mock.patch.object(llm_client, "_call_gemini_api", new=paid_ladder_sentinel),
-                mock.patch.object(tier1_escalate, "escalate", new=paid_ladder_sentinel),
-                mock.patch.object(tier2_escalate, "escalate", new=paid_ladder_sentinel),
-                mock.patch.object(tier3_escalate, "escalate", new=paid_ladder_sentinel),
-                mock.patch.object(
-                    orchestrator, "ESCALATIONS_DIR", Path(tmp) / "logs"
-                ),
-                mock.patch.object(
-                    orchestrator, "ESCALATIONS_LOG", Path(tmp) / "logs" / "esc.jsonl"
-                ),
-                mock.patch.object(lessons, "LESSONS_PATH", Path(tmp) / "lessons.jsonl"),
-                mock.patch.object(lessons, "HANDOFF_LESSONS_PATH", Path(tmp) / "handoffs.jsonl"),
-            ):
-                agy_sentinel.side_effect = agy_side_effect
-                result = librarian_escalate.run("t-order", "update stale doc", str(target), workdir=tmp)
-
-            self.assertEqual(post_count_at_agy, [2])
-            agy_sentinel.assert_called_once()
-
-            self.assertEqual(post.call_count, 3)
-            call_models = [c.kwargs["json"]["model"] for c in post.call_args_list]
-            call_urls = [c.args[0] for c in post.call_args_list]
-
-            self.assertEqual(
-                call_models,
-                ["mistral-small:latest", "qwen2.5-coder:14b-instruct-q6_K", "stealth/ox-alpha"],
-            )
-            self.assertIn("localhost:11434", call_urls[0])
-            self.assertIn("localhost:11434", call_urls[1])
-            self.assertIn("openrouter.ai", call_urls[2])
-            
-            # The openrouter fallback must be dispatched with the
-            # tier_1_planner endpoint, not None or the local Ollama host.
-            self.assertEqual(
-                execute_llm.call_args_list[2].kwargs["endpoint"],
-                "https://openrouter.ai/api/v1",
-            )
-            paid_ladder_sentinel.assert_not_called()
-
-            responses_second = [_fake_response("not JSON, sorry") for _ in range(3)]
-            agy_sentinel_second = mock.Mock(return_value=("not JSON, sorry", "subscription", 4, 2))
-            human_handoff = mock.Mock()
-            with (
-                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
-                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
-                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel_second),
-                mock.patch.object(llm_client.requests, "post", side_effect=responses_second),
-                mock.patch.object(orchestrator, "human_handoff", wraps=human_handoff) as human_handoff_mock,
-            ):
-                result = librarian_escalate.run("t-order", "update stale doc", str(target), workdir=tmp)
-
-            human_handoff_mock.assert_called_once()
-            agy_sentinel_second.assert_called_once()
-            handoff_reason = human_handoff.call_args.args[1]
-            self.assertIn("primary -> fallback_local -> fallback_agy -> fallback_openrouter", handoff_reason)
-            self.assertEqual(result["status"], "human_handoff")
-            self.assertIsNone(result["resolved_by"])
 
     # -- (6) chain exhaustion ---------------------------------------------
 

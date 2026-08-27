@@ -1045,6 +1045,17 @@ def _git_diff_for(target: str, project_dir: str) -> str:
     return res.stdout
 
 
+def _design_judge_applies(resolved_by: str | None, critique_cfg: dict) -> bool:
+    """Mirrors orchestrator.py's _critique_and_maybe_revise_inner() gate: the
+    design judge is advisory scaffolding scoped to the same tiers as the
+    diff-quality critique step, driven by config/tiers.yaml's critique block
+    (critique.enabled, critique.applies_to_tiers) so tier_5 (and any future
+    tier not listed there) is never routed through it."""
+    if not critique_cfg.get("enabled", False):
+        return False
+    return resolved_by in critique_cfg.get("applies_to_tiers", [])
+
+
 def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> dict:
     git_diff = _git_diff_for(item["target"], state["project_dir"])
     judge_res = judge.evaluate_design(git_diff, item["description"])
@@ -1190,7 +1201,9 @@ def dispatch(state: dict) -> dict:
 
     # tier_5_librarian routes documentation targets out of the Tier 4
     # draft/build loop and into the librarian escalation path instead.
-    tier_5 = (load_tiers().get("tier_5_librarian") or {})
+    _cfg = load_tiers()
+    tier_5 = (_cfg.get("tier_5_librarian") or {})
+    critique_cfg = _cfg.get("critique", {})
 
     if _recheck_regression_flags(state):
         state["status"] = "stopped_on_failure"
@@ -1298,7 +1311,7 @@ def dispatch(state: dict) -> dict:
                     continue
                 break
             is_regular_item = "git" not in item and not item.get("verify_only")
-            if result["status"] == "success" and is_regular_item:
+            if result["status"] == "success" and is_regular_item and _design_judge_applies(result.get("resolved_by"), critique_cfg):
                 result = _run_design_judge(item, result, state, task_id)
 
             content_hash = (

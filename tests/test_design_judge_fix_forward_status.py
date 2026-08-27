@@ -112,5 +112,37 @@ class TestDesignJudgeFixForwardStatus(unittest.TestCase):
         mock_log_debt.assert_called_once()
         self.assertEqual(self.target_file.read_bytes(), self.original_content)
 
+class TestDesignJudgeAppliesGate(unittest.TestCase):
+
+    def test_disabled_critique_returns_false(self):
+        config = {"enabled": False, "applies_to_tiers": ["tier_3"]}
+        self.assertFalse(
+            dispatcher._design_judge_applies("any", config)
+        )
+
+    def test_tier_in_list_returns_true(self):
+        config = {"enabled": True, "applies_to_tiers": ["tier_3", "tier_4"]}
+        self.assertTrue(
+            dispatcher._design_judge_applies("tier_4", config)
+        )
+
+    def test_tier_not_in_list_returns_false(self):
+        config = {"enabled": True, "applies_to_tiers": ["tier_3", "tier_4"]}
+        self.assertFalse(
+            dispatcher._design_judge_applies("tier_5", config)
+        )
+
+    def test_missing_applies_to_tiers_key_returns_false(self):
+        config = {"enabled": True}
+        self.assertFalse(
+            dispatcher._design_judge_applies("any", config)
+        )
+
+    def test_none_resolved_by_returns_false(self):
+        config = {"enabled": True, "applies_to_tiers": ["tier_3"]}
+        self.assertFalse(
+            dispatcher._design_judge_applies(None, config)
+        )
+
 if __name__ == '__main__':
     unittest.main()
