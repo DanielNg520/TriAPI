@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md`](docs/carryover/20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md) | **ACTIVE** — `agy` fallback leg + `_HTTP_TIMEOUT` fix complete and committed (run `20260825-194415-b54313`); a missing `llm_client.execute_agy()` bug found+fixed; session closed cleanly, nothing mid-flight |
+| [`docs/carryover/20260826-193000-tier3-timeout-softescalate-architecture-refresh-agentsmd-routing-bug.md`](docs/carryover/20260826-193000-tier3-timeout-softescalate-architecture-refresh-agentsmd-routing-bug.md) | **ACTIVE** — Tier 3 CLI-timeout soft-escalation to Tier 2 + regression test complete and committed (60cd085); ARCHITECTURE.md refreshed for the 5-tier state; new doc-target routing-inconsistency bug found and worked around, queued for a real fix |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md`](docs/carryover/20260826-063000-agy-fallback-http-timeout-complete-queue-updated.md) | 2026-08-26 | RESOLVED | `agy` fallback leg + `_HTTP_TIMEOUT` fix complete and committed (run `20260825-194415-b54313`); a missing `llm_client.execute_agy()` bug found+fixed; session closed cleanly, nothing mid-flight |
 | [`20260823-210000-openrouter-merge-and-tier-swap.md`](docs/carryover/20260823-210000-openrouter-merge-and-tier-swap.md) | 2026-08-23 | RESOLVED | OpenRouter branch merge into `main`; Tier 3/4 provider swap; 4 early bug fixes; backend-registry and complexity-router architecture items first queued |
 | [`20260824-030000-librarian-tier5-redesign-debugging.md`](docs/carryover/20260824-030000-librarian-tier5-redesign-debugging.md) | 2026-08-24 | RESOLVED | Tier 5 librarian build: 5 debugging addenda (epoch-collision staleness bug, stale test mocks, human_handoff bookkeeping bug, PLAN.md-too-large stall, OpenRouter phone-filter fix drafted) |
 | [`20260824-190000-queue-snapshot-openrouter-obstacles.md`](docs/carryover/20260824-190000-queue-snapshot-openrouter-obstacles.md) | 2026-08-24 | SUPERSEDED | Old queue snapshot mid-fix — OpenRouter dispatch obstacles (403s, 429s, `probe_models()` over-gating found) |
