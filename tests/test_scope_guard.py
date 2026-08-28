@@ -37,6 +37,43 @@ index 1111111..2222222 100644
      cmd = ["agy", "-p", prompt]
 """
 
+# Real shape of the 2026-08-28 incident that exposed the whole-function-
+# deletion blind spot: the item's description names ONLY
+# `_is_deepseek_peak_hours` (docstring-only, "do not change any
+# implementation logic"), but the diff instead deletes that whole
+# function (its hunk anchors to the PRECEDING function,
+# `_run_design_judge`, per git's xfuncname heuristic -- the deleted
+# function's own `def` line never appears as any hunk header) and
+# inlines its logic into `handle_fix_forward`.
+_WHOLE_FUNCTION_DELETION_DIFF = """\
+diff --git a/scripts/dispatcher.py b/scripts/dispatcher.py
+index 2db2cc3..92a34b2 100644
+--- a/scripts/dispatcher.py
++++ b/scripts/dispatcher.py
+@@ -1012,17 +1012,6 @@ def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> di
+     return result
+
+
+-def _is_deepseek_peak_hours(now_utc: time.struct_time | None = None) -> bool:
+-    \"\"\"True when the given UTC time (default: now) is inside DeepSeek's peak
+-    billing window (06:00-10:00 UTC).\"\"\"
+-    return not check_tier3_peak_hours_ok()["ok"]
+-
+-
+ def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> dict:
+     \"\"\"Invokes Tier 3 to apply the design judge's refactor instructions directly.
+     \"\"\"
+-    if _is_deepseek_peak_hours():
++    peak_guard = check_tier3_peak_hours_ok()
++    if not peak_guard["ok"]:
+         log.warning(
+-            "[%s] Tier 3 is in DeepSeek peak billing hours",
++            "[%s] %s",
+             task_id,
++            peak_guard["reason"],
+         )
+"""
+
 
 class TestScopeGuard(unittest.TestCase):
     """Regression coverage for the Tier 3 out-of-scope-edit pattern (queue
@@ -79,6 +116,19 @@ class TestScopeGuard(unittest.TestCase):
 
     def test_empty_diff_is_not_flagged(self):
         self.assertEqual(scope_guard.find_out_of_scope_functions("", "some description"), [])
+
+    def test_whole_function_deletion_is_flagged_via_body_scan(self):
+        # Regression for the live 2026-08-28 blind spot: the hunk-header
+        # heuristic alone missed this because a fully deleted function's
+        # own name never appears as any hunk's header context.
+        concerns = scope_guard.find_out_of_scope_functions(
+            _WHOLE_FUNCTION_DELETION_DIFF,
+            "Update the docstring of _is_deepseek_peak_hours(). "
+            "Do not change any implementation logic.",
+        )
+        self.assertIn("_run_design_judge", concerns)
+        self.assertIn("handle_fix_forward", concerns)
+        self.assertNotIn("_is_deepseek_peak_hours", concerns)
 
 
 if __name__ == "__main__":
