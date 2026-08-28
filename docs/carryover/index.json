@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260828-090500-agy-argv-fix-tier1-planner-moved-off-openrouter.md",
+  "active": "20260828-100000-queue-drained-5-items-plus-file-split.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -80,6 +80,12 @@
       "date": "2026-08-28",
       "status": "RESOLVED",
       "topic": "3 of 4 previously-queued bugs resolved+committed (AGENTS.md bloat, staleness_precheck false-negative, dynamic-shell-expression-target bug); agy argument-length bug reopened with a corrected diagnosis (stdin approach disproven live, reverted cleanly); tier_1_planner swapped off a repeatedly-hallucinating free Nemotron model to dots-3-note-preview:free, live-verified; 4 new gaps queued; working tree clean, nothing mid-flight"
+    },
+    {
+      "file": "20260828-090500-agy-argv-fix-tier1-planner-moved-off-openrouter.md",
+      "date": "2026-08-28",
+      "status": "RESOLVED",
+      "topic": "agy argv crash fixed+committed; tier_1_planner moved off two hallucinating free OpenRouter models onto agy/Gemini 3.1 Pro; effort-forwarding bug and librarian fallback_openrouter endpoint bug found+fixed; multi-turn planner statelessness bug newly discovered, queued -- resolved in next file"
     }
   ]
 }
