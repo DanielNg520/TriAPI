@@ -31,7 +31,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import gemini_fallback, git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, tech_debt, tier3_escalate
+from scripts import gemini_fallback, git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
 from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok
@@ -1405,6 +1405,19 @@ def dispatch(state: dict) -> dict:
                     result["reason"] = reasons
                     content_hash = None
 
+            scope_concerns = []
+            if is_regular_item and result["status"] == "success":
+                scope_concerns = scope_guard.find_out_of_scope_functions(
+                    _git_diff_for(resolved_target, state["project_dir"]),
+                    item["description"],
+                )
+                if scope_concerns:
+                    log.warning(
+                        "[%s] Possible out-of-scope edit in %s: touched %s, not named "
+                        "in item description -- not blocking, review this diff by hand",
+                        task_id, resolved_target, scope_concerns,
+                    )
+
             entry = {
                 "task_id": task_id,
                 "phase": phase["name"],
@@ -1416,6 +1429,8 @@ def dispatch(state: dict) -> dict:
                 entry["target"] = resolved_target
                 entry["build_cmd"] = build_cmd
                 entry["content_hash"] = content_hash
+                if scope_concerns:
+                    entry["scope_concerns"] = scope_concerns
             state["results"].append(entry)
             save_run(state)
             if result["status"] == "success" and is_regular_item and _check_for_regressions(state, task_id):
