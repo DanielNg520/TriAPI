@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260826-193000-tier3-timeout-softescalate-architecture-refresh-agentsmd-routing-bug.md",
+  "active": "20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -60,8 +60,14 @@
     {
       "file": "20260826-193000-tier3-timeout-softescalate-architecture-refresh-agentsmd-routing-bug.md",
       "date": "2026-08-26",
+      "status": "RESOLVED",
+      "topic": "Run fa6eea completed+committed (60cd085): Tier 3 CLI-timeout soft-escalation to Tier 2 + regression test; ARCHITECTURE.md refreshed for the 5-tier state (2 manual librarian retries, narrower scope); stealth/ox-alpha pulled from OpenRouter, swapped to nemotron-3-ultra; the doc-target routing-inconsistency theory queued here turned out to be a misdiagnosis, corrected and resolved in the next file; git_ops.push() git-add-A scoping gap found (swept user's own untracked docs/TUI_plan.md into an automated commit, still unfixed)"
+    },
+    {
+      "file": "20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md",
+      "date": "2026-08-28",
       "status": "ACTIVE",
-      "topic": "Run fa6eea completed+committed (60cd085): Tier 3 CLI-timeout soft-escalation to Tier 2 + regression test; ARCHITECTURE.md refreshed for the 5-tier state (2 manual librarian retries, narrower scope); stealth/ox-alpha pulled from OpenRouter, swapped to nemotron-3-ultra; new doc-target routing-inconsistency bug found+worked around (queued for a real fix); git_ops.push() git-add-A scoping gap found (swept user's own untracked docs/TUI_plan.md into an automated commit)"
+      "topic": "Corrected prior misdiagnosis and fixed the real bug (dispatcher.py's _run_design_judge ignoring critique.applies_to_tiers), committed as 96e005e; tier_5_librarian primary swapped from slow local mistral-small to agy/Gemini-3.7-Flash, live-verified, committed same commit; a design-judge regression got silently reintroduced mid-session and was caught by its own test, hand-restored; 4 new real bugs found and queued (AGENTS.md hallucinated-block bloat, agy CLI argument-too-long crash, librarian_escalate.py staleness_precheck false-negative FRESH judgments, dynamic-shell-expression-target bypass in tier_5 routing); one dispatch run paused mid-flight on a single cosmetic item, blocked on the AGENTS.md bloat; session paused for DeepSeek peak hours per user instruction"
     }
   ]
 }
