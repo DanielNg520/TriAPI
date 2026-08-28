@@ -67,7 +67,10 @@ class TestTier5Librarian(unittest.TestCase):
                 "endpoint": "http://localhost:11434",
                 "models": {"default": "qwen2.5-coder:14b-instruct-q6_K"},
             },
-            "tier_1_planner": {"endpoint": "https://openrouter.ai/api/v1"},
+            "openrouter_defaults": {
+                "endpoint": "https://openrouter.ai/api/v1",
+                "api_key_secret": "open_router_api_key",
+            },
             "escalation_rules": {
                 "tier5_to_fallbacks": {
                     "threshold": 2,
@@ -418,8 +421,8 @@ class TestTier5Librarian(unittest.TestCase):
             
             agy_sentinel.assert_called_once()
             
-            # Third call (openrouter fallback) must use the tier_1_planner
-            # endpoint, not None or the local Ollama host.
+            # Third call (openrouter fallback) must use openrouter_defaults'
+            # shared endpoint, not None or the local Ollama host.
             self.assertEqual(
                 execute_llm.call_args_list[2].kwargs["endpoint"],
                 "https://openrouter.ai/api/v1",

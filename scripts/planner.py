@@ -329,6 +329,7 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
             model=model,
             prompt=_sanitize_for_content_filter(enriched_message),
             system_prompt=SYSTEM_PROMPT,
+            effort=tier1.get("effort"),
         )
     except Exception as exc:
         log.warning("Planning turn failed via execute_llm (provider=%s): %s. Falling back to tier_1_manager CLI.", provider, exc)

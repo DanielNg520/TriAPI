@@ -185,7 +185,9 @@ def run(
 
     # Escalation chain per config/tiers.yaml: primary (config-driven provider)
     # -> fallback_local (Ollama, ollama_fallback's model) -> fallback_agy
-    # (agy CLI) -> fallback_openrouter (OpenRouter, tier_1_planner's free model).
+    # (agy CLI) -> fallback_openrouter (OpenRouter, via openrouter_defaults'
+    # shared endpoint/api_key_secret -- not tier_1_planner's, see that
+    # block's config comment for why).
     # DeepSeek/Claude/Gemini are strictly forbidden anywhere in this chain.
     models_cfg = lib_config.get("models", {})
     fallback_local_block = config.get(models_cfg.get("fallback_local", "ollama_fallback"), {})
@@ -215,8 +217,12 @@ def run(
         prompt = build_prompt(description, target_path, current_contents, last_stderr)
 
         if provider == "openrouter":
-            endpoint = config.get("tier_1_planner", {}).get("endpoint")
-            api_key = secrets.get(lib_config.get("api_key_secret", "open_router_api_key"))
+            openrouter_defaults = config.get("openrouter_defaults", {})
+            endpoint = openrouter_defaults.get("endpoint")
+            api_key_secret = lib_config.get(
+                "api_key_secret", openrouter_defaults.get("api_key_secret", "open_router_api_key")
+            )
+            api_key = secrets.get(api_key_secret)
         elif provider == "agy":
             endpoint = None
             api_key = None

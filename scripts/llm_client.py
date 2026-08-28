@@ -203,6 +203,24 @@ def _call_claude_cli(
     return response_text, "cli", 0, 0
 
 
+# `agy -p` requires its prompt as an argv element (confirmed live
+# 2026-08-28: `-p` does not accept a value via stdin -- omitting it and
+# piping stdin instead makes agy exit status 2, a Go-style flag requiring
+# an explicit argv value; a stdin-based fix was tried and reverted for this
+# reason). A prompt/system_prompt combo too large for the OS argv size
+# limit crashes subprocess.run() with an uncaught OSError (E2BIG,
+# "Argument list too long") instead of the controlled
+# subprocess.CalledProcessError _call_agy_cli()'s other failure modes
+# raise -- this bypasses the per-tier fallback chain entirely and crashes
+# the caller outright (confirmed live crashing probe_models()). Guard
+# against it before ever calling subprocess.run(). 100_000 chars is
+# conservative relative to Linux's typical ARG_MAX (~2MB, though the real
+# usable ceiling is lower once argv/environ overhead is counted) -- picked
+# to fail fast and predictably well under that ceiling rather than tuned
+# to the exact platform limit.
+_AGY_MAX_PROMPT_CHARS = 100_000
+
+
 def _call_agy_cli(
     prompt: str, model: str | None, effort: str | None, system_prompt: str | None = None
 ) -> Tuple[str, str, int, int]:
@@ -214,7 +232,8 @@ def _call_agy_cli(
 
     Success requires returncode 0, valid JSON stdout with
     `"status" == "SUCCESS"` and a string `"response"`; the response is
-    returned verbatim (trailing newline preserved). Any other outcome
+    returned verbatim (trailing newline preserved). Any other outcome,
+    including a prompt too large for argv (see _AGY_MAX_PROMPT_CHARS),
     raises subprocess.CalledProcessError (the same family
     `_call_claude_cli` raises) with a message embedding the status and
     stderr tail, so the existing per-tier fallthrough skips to the next
@@ -222,6 +241,14 @@ def _call_agy_cli(
     """
     if system_prompt:
         prompt = f"{system_prompt}\n\n{prompt}"
+    if len(prompt) > _AGY_MAX_PROMPT_CHARS:
+        cmd = ["agy", "-p", "<omitted: prompt too large for argv>"]
+        raise subprocess.CalledProcessError(
+            0, cmd,
+            "",
+            f"agy prompt too large for argv: {len(prompt)} chars "
+            f"(limit {_AGY_MAX_PROMPT_CHARS})",
+        )
     cmd = ["agy", "-p", prompt]
     if model:
         cmd.extend(["--model", model])

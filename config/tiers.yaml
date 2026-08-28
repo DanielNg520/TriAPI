@@ -2,16 +2,17 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  # Primary planner: OpenRouter's free "dots-3-note-preview" model. On any
-  # failure (content-filter 403, rate limit, connectivity), planner.py falls
-  # back to tier_1_manager's Claude CLI (Sonnet 5, high effort) instead of
-  # erroring out -- there is no separate fallback block here by design, it
-  # always falls back to tier_1_manager's config.
+  # Primary planner: local `agy` CLI (Gemini 3.1 Pro via Antigravity),
+  # same working provider/model/effort tier_3_debugger already uses --
+  # reused deliberately, not moved out of tier_3 (see tier_3_debugger below).
+  # On any failure, planner.py falls back to tier_1_manager's Claude CLI
+  # (Sonnet 5, high effort) instead of erroring out -- there is no separate
+  # fallback block here by design, it always falls back to tier_1_manager's
+  # config.
   # 2026-08-26: swapped from "stealth/ox-alpha" -- that stealth slug rotated
   # out of OpenRouter's catalog (confirmed via GET /api/v1/models, 404 on
   # probe), which hard-blocked the whole pipeline at the probe_models()
-  # pre-flight stage. Replaced with the next already-user-approved free
-  # model per the allowed-models list, not a newly-added one.
+  # pre-flight stage.
   # 2026-08-28: swapped from "nvidia/nemotron-3-ultra-550b-a55b:free" --
   # confirmed live, repeatedly, producing hallucinated planning output:
   # fully fabricated tool-call transcripts inventing nonexistent code/files
@@ -19,17 +20,21 @@ tier_1_planner:
   # items), truncated mid-sentence responses auto-approved as complete
   # plans, and degenerate self-repeating non-plans with zero real content --
   # roughly half of one session's planning calls were unusable. Replaced
-  # with "dots-studio/dots-3-note-preview:free", an already-approved free
-  # model previously used as tier_4_worker's model before the 2026-08-25
-  # Phase 33 reassignment (see AGENTS.md/PLAN.md Phase 33 history) --
-  # not a newly-added model.
-  provider: openrouter
-  api_key_secret: open_router_api_key
-  name: "OpenRouter"
-  endpoint: "https://openrouter.ai/api/v1"
+  # with "dots-studio/dots-3-note-preview:free" -- which ALSO, confirmed
+  # live the same day, hallucinated fake `<dots_function_call>`/`<invoke>`
+  # tool-call markup despite tier_1_planner's non-'cli' path having no
+  # tools wired in at all (planner.py's own docstring: non-'cli' providers
+  # "lack tools"). Two free OpenRouter models in a row fabricated tool use
+  # that was never offered to them -- moved off free OpenRouter models
+  # entirely for this tier, onto the same real, working, tool-using `agy`
+  # CLI path tier_3_debugger already relies on. `dots-3-note-preview:free`
+  # demoted to tier_3_debugger as a secondary model (see below), not
+  # dropped from the approved-models list entirely.
+  provider: agy
   models:
-    default: "dots-studio/dots-3-note-preview:free"
-  default_model: "default"
+    default: gemini-3.1-pro
+  default_model: default
+  effort: high
   role: "strategic planning"
   automatable: true
   outputs: ["PLAN.md", "ARCHITECTURE.md"]
@@ -69,6 +74,19 @@ gemini_fallback:
     flash: "gemini-3.5-flash"
   api_key_secret: google_ai_studio_api_key
 
+# Shared OpenRouter connection defaults for any tier/fallback leg that
+# dispatches through the "openrouter" provider. Previously borrowed from
+# tier_1_planner's own endpoint field, back when tier_1_planner itself used
+# OpenRouter -- broken 2026-08-28 when tier_1_planner moved to the `agy`
+# provider and dropped its endpoint/api_key_secret fields (see
+# tier_1_planner's history comment). Pulled out into its own stable block,
+# same pattern as gemini_fallback/deepseek_reference_pricing above, so it
+# survives any future tier reassignment. Used today by
+# tier_5_librarian's fallback_openrouter leg (librarian_escalate.py).
+openrouter_defaults:
+  endpoint: "https://openrouter.ai/api/v1"
+  api_key_secret: open_router_api_key
+
 # Fixed reference point for cost_report.deepseek_flash_cost() -- prices
 # Tier 4's actual volume as if it had run on DeepSeek flash instead,
 # regardless of which tier slot (if any) DeepSeek currently occupies.
@@ -88,6 +106,15 @@ tier_3_debugger:
   provider: agy
   models:
     default: gemini-3.1-pro
+    # 2026-08-28: demoted here from tier_1_planner (see tier_1_planner's
+    # history comment) after hallucinating fake tool-call markup twice on
+    # two different free OpenRouter models. Recorded as an available model
+    # id, NOT auto-selected -- tier3_escalate.py only ever reads
+    # `models[default_model]` and has no per-tier model-fallback wiring
+    # (unlike tier_5_librarian's fallback_local/fallback_agy/
+    # fallback_openrouter chain), so this key is inert until that wiring
+    # exists. Queued as a follow-up if live fallback here is wanted.
+    secondary: "dots-studio/dots-3-note-preview:free"
   default_model: default
   effort: high
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs (Gemini 3.1 Pro via Antigravity CLI)"
