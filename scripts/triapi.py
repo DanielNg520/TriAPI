@@ -81,10 +81,16 @@ def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
     session_id = None
     message = prompt
     total_notional = 0.0
+    # Accumulated (user, assistant) turn pairs, oldest first -- passed to
+    # planner.plan_turn() so non-'cli' providers (which have no server-side
+    # session/--resume, unlike the 'cli' provider) can still see the full
+    # conversation on turn 2+ instead of just the latest reply. See
+    # planner.py's plan_turn() docstring for how each provider uses this.
+    history: list[dict[str, str]] = []
 
     while True:
         try:
-            turn = planner.plan_turn(message, project_dir, session_id)
+            turn = planner.plan_turn(message, project_dir, session_id, history=history)
         except Exception as exc:
             log.warning("Planning failed: %s", exc)
             print("Planning failed: could not reach the LLM backend.")
@@ -134,6 +140,7 @@ def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
             print("Cancelled.")
             return
 
+        history.append({"user": message, "assistant": turn["text"]})
         message = reply
         print()
 

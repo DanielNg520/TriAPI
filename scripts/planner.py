@@ -127,33 +127,53 @@ SYSTEM_PROMPT = (
 )
 
 
-def plan_turn(message: str, project_dir: str, session_id: str | None) -> dict:
+def plan_turn(
+    message: str,
+    project_dir: str,
+    session_id: str | None,
+    history: list[dict[str, str]] | None = None,
+) -> dict:
     """One turn of the interactive planning conversation.
 
     Pass session_id=None for the first turn; pass back the session_id this
     returns for every subsequent turn.
 
+    `history` is the caller's accumulated list of prior turns, oldest
+    first, each a {"user": ..., "assistant": ...} dict -- REQUIRED for
+    real multi-turn behavior on non-'cli' providers (see below); pass None
+    or [] only for the first turn, when there is no history yet.
+
     The provider is read from config (tier_1_planner.provider). For the
     local Claude CLI ('cli'), planner.py shells out to `claude -p` natively
     with tools (Read,Glob,Grep), --output-format json, --add-dir, and
     --resume, parses its JSON output, and falls back to
-    _fallback_to_tier1_manager_cli() on failure. Non-'cli' providers and the
-    'cli' fallback enrich the prompt with a context blob (AGENTS.md,
-    PLAN.md, README.md) since they lack tools, and are dispatched through
-    llm_client.execute_llm(). execute_llm() returns no cross-turn session
-    identifier, so every turn returns session_id='stateless'.
+    _fallback_to_tier1_manager_cli() on failure -- `history` is ignored on
+    this path, since `--resume` already gives the CLI real server-side
+    conversation memory.
+
+    Non-'cli' providers and the 'cli' fallback enrich the prompt with a
+    context blob (AGENTS.md, PLAN.md, README.md) since they lack tools,
+    and are dispatched through llm_client.execute_llm(), which is a
+    single-shot call with no cross-turn session of its own (every turn
+    returns session_id='stateless'). Bug fixed 2026-08-28: `message` here
+    is only ever the caller's LATEST turn (see triapi.py's `message = reply`
+    loop) -- without `history`, every turn after the first was blind to
+    the original goal and all prior turns, confirmed live producing
+    responses that couldn't identify what was even being planned. `history`
+    is now prepended to the prompt as a readable transcript so these
+    providers see the full conversation, not just the latest message.
     """
     guard = check_tier1_ok()
     if not guard["ok"]:
         log.warning("Planning turn skipped: %s", guard["reason"])
         return {"status": "skipped", "reason": guard["reason"]}
 
-    log.info("Planning turn: project_dir=%s resume=%s message_len=%d", project_dir, bool(session_id), len(message))
+    log.info("Planning turn: project_dir=%s resume=%s message_len=%d history_len=%d", project_dir, bool(session_id), len(message), len(history or []))
 
     tier1 = config_loader.load_tiers().get("tier_1_planner", {})
     provider = tier1.get("provider", "cli")
 
-    return _plan_turn_llm(message, project_dir, session_id, tier1, provider)
+    return _plan_turn_llm(message, project_dir, session_id, tier1, provider, history or [])
 
 
 def _text_from_claude_json(data) -> str | None:
@@ -236,7 +256,27 @@ def _fallback_to_tier1_manager_cli(enriched_message: str) -> dict:
     }
 
 
-def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1: dict, provider: str) -> dict:
+def _build_history_transcript(history: list[dict[str, str]]) -> str:
+    """Render accumulated prior turns as a readable back-and-forth
+    transcript, oldest first, for providers with no real cross-turn
+    session memory (see _plan_turn_llm's docstring). Empty history (the
+    first turn) renders to an empty string."""
+    if not history:
+        return ""
+    parts = []
+    for turn in history:
+        parts.append(f"User: {turn['user']}\n\nAssistant: {turn['assistant']}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _plan_turn_llm(
+    message: str,
+    project_dir: str,
+    session_id: str | None,
+    tier1: dict,
+    provider: str,
+    history: list[dict[str, str]],
+) -> dict:
     """Dispatch a planning turn.
 
     Provider 'cli' runs the local `claude` CLI natively with tools
@@ -244,21 +284,27 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
     parses the JSON from stdout even when the return code is non-zero. On a
     successful parse the result is returned; on any failure or parse error a
     warning is logged and the call falls back to
-    _fallback_to_tier1_manager_cli(enriched_message).
+    _fallback_to_tier1_manager_cli(enriched_message). `history` is ignored
+    on this path -- `--resume` already gives it real session memory.
 
-    The 'cli' fallback and every non-'cli' provider lack CLI tools, so the
-    prompt is enriched first: build_context_blob() (imported from
-    scripts.tier4_worker) gathers AGENTS.md, PLAN.md, and README.md from the
-    project directory and the blob is prepended to the message. Non-'cli'
-    providers are dispatched through llm_client.execute_llm() with the
-    enriched message.
+    The 'cli' fallback and every non-'cli' provider lack CLI tools AND lack
+    any server-side session, so the prompt is enriched first:
+    build_context_blob() (imported from scripts.tier4_worker) gathers
+    AGENTS.md, PLAN.md, and README.md from the project directory, and
+    `history` (the caller's accumulated prior turns, see plan_turn's
+    docstring) is rendered as a transcript -- both are prepended to the
+    current message, in that order, so the model sees the repo context,
+    then the full conversation so far, then what it's actually being asked
+    now. Non-'cli' providers are dispatched through llm_client.execute_llm()
+    with this enriched message.
 
     Every successful path returns the same shape:
     {'status': 'ok', 'text': response, 'session_id': 'stateless',
      'notional_cost_usd': 0.0}.
     """
     # Enrich the prompt for paths that lack CLI tools (the 'cli' fallback and
-    # every non-'cli' provider) by grounding it in the repo's own docs.
+    # every non-'cli' provider) by grounding it in the repo's own docs and,
+    # for turn 2+, the conversation so far.
     project_path = Path(project_dir)
     context_paths = [
         fname
@@ -266,9 +312,9 @@ def _plan_turn_llm(message: str, project_dir: str, session_id: str | None, tier1
         if (project_path / fname).is_file()
     ]
     context_blob = build_context_blob(context_paths, project_dir)
-    enriched_message = (
-        context_blob + "\n\n" + message if context_blob else message
-    )
+    history_transcript = _build_history_transcript(history)
+    enriched_parts = [p for p in (context_blob, history_transcript, message) if p]
+    enriched_message = "\n\n".join(enriched_parts)
 
     if provider == "cli":
         cmd = [
