@@ -1001,9 +1001,18 @@ def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> di
             log.warning("[%s] Best-effort pattern extraction failed: %s", task_id, e)
     else:
         ff = handle_fix_forward(item, judge_res["reason"], state, task_id)
-        if isinstance(ff, dict) and ff.get("fixed"):
+        if isinstance(ff, dict) and (ff.get("fixed") or ff.get("reverted")):
+            # `fixed`: fix-forward's own edit applied and rebuilt clean.
+            # `reverted`: fix-forward's edit attempt failed, but the file
+            # was restored to the state that already passed run_task()'s
+            # own build check before this advisory judge ever ran -- the
+            # item's original success stands either way. See
+            # handle_fix_forward()'s docstring-comment for why downgrading
+            # here was wrong (discarded working Tier 4 output over an
+            # unrelated Tier 3 SEARCH/REPLACE failure, confirmed live
+            # 2026-08-28).
             return result
-        
+
         downgraded = dict(result)
         downgraded["status"] = "build_failed"
         downgraded["resolved_by"] = None
@@ -1074,19 +1083,35 @@ def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_
 
     if not escalate_ok or not rebuild_ok:
         shutil.copy2(snapshot_path, target_path)
-        log.info("[%s] handle_fix_forward reverted %s: rebuild still failing after Tier 3 refactor rewrite", task_id, item["target"])
         if not escalate_ok:
+            log.info("[%s] handle_fix_forward reverted %s: Tier 3 could not apply the refactor", task_id, item["target"])
             reason = esc_res.get("reason") or "Tier 3 escalation did not apply the fix"
         else:
+            log.info("[%s] handle_fix_forward reverted %s: rebuild failed after Tier 3 refactor rewrite", task_id, item["target"])
             reason = f"Rebuild failed after Tier 3 rewrite: {build_output}"
         tech_debt.log_tech_debt(str(target_path), reason=reason)
 
     if escalate_ok and rebuild_ok:
         return {"fixed": True, "reason": "fix-forward edit applied and rebuild passed"}
     elif not escalate_ok:
-        return {"fixed": False, "reason": "tier3 escalation produced no applicable SEARCH/REPLACE edit; file reverted and tech debt logged"}
+        # The design judge's critique is advisory (see this function's
+        # caller, _run_design_judge): the item's ORIGINAL build already
+        # passed before fix-forward was ever invoked -- `snapshot_path` was
+        # taken from that exact passing state, so the revert above restores
+        # a demonstrably-working file, not a broken one. Reporting
+        # `fixed: False` here previously caused _run_design_judge to
+        # downgrade the whole item to `build_failed` even though the file
+        # on disk was correctly restored to working code -- confirmed live
+        # 2026-08-28, three times in one run, discarding a passing Tier 4
+        # draft over an unrelated SEARCH/REPLACE-apply failure in Tier 3's
+        # own remedy attempt. `reverted: True` lets the caller keep the
+        # item's original success status instead, while the tech_debt
+        # entry above still records the judge's concern for later review.
+        return {"fixed": False, "reverted": True, "reason": "tier3 escalation produced no applicable SEARCH/REPLACE edit; file reverted to its last-passing state and tech debt logged"}
     else:
-        return {"fixed": False, "reason": "rebuild failed after fix-forward edit"}
+        # Same reasoning as above -- the revert on this path also restores
+        # the pre-fix-forward passing snapshot, not a broken file.
+        return {"fixed": False, "reverted": True, "reason": "rebuild failed after fix-forward edit; file reverted to its last-passing state and tech debt logged"}
 
 
 def _is_transient_timeout_failure(result: dict, remaining: int) -> bool:

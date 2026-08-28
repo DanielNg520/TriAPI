@@ -76,7 +76,18 @@ def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
 
     state = dispatcher.new_run(prompt, project_dir)
     log.info("[%s] triapi plan started: project_dir=%s", state["run_id"], project_dir)
-    print(f"Run ID: {state['run_id']}\n")
+    # Echo the resolved (absolute) project_dir up front, before any turn is
+    # printed or approved -- `--project-dir` silently defaults to "." (the
+    # cwd `triapi plan` happened to be invoked from), and this was
+    # confirmed live 2026-08-28 to cause a real supervisor mistake: a plan
+    # meant for a different repo was launched from TriAPI's own directory,
+    # and its whole plan text/dispatch got appended into TriAPI's own
+    # AGENTS.md and drafted stray files into TriAPI's own tests/ before the
+    # mistake was noticed well after the fact. Printing this here is a
+    # near-zero-cost line that gives a human/supervisor one clear moment to
+    # catch a wrong cwd before approving anything.
+    print(f"Run ID: {state['run_id']}")
+    print(f"Project dir: {state['project_dir']}\n")
 
     session_id = None
     message = prompt

@@ -89,6 +89,15 @@ class TestDesignJudgeFixForwardStatus(unittest.TestCase):
     @patch.object(dispatcher, "_git_diff_for", return_value="diff --git a/test_target.py b/test_target.py")
     @patch.object(dispatcher.judge, "evaluate_design")
     def test_reject_with_unsuccessful_fix_forward(self, mock_evaluate, mock_git_diff, mock_escalate, mock_log_debt, mock_run_build):
+        """When fix-forward's own Tier 3 attempt can't apply, the file is
+        reverted to the snapshot taken BEFORE fix-forward ran -- which is
+        the item's original, already-passing state (run_task() already
+        confirmed status=='success' before the design judge ever runs).
+        The item must keep that original success, not be downgraded to
+        build_failed: discarding a passing Tier 4/5 result over an
+        unrelated Tier 3 SEARCH/REPLACE-apply failure was a real bug,
+        confirmed live 2026-08-28 three times in one dispatch run. See
+        handle_fix_forward()'s `reverted` return key."""
         result = {"status": "success", "resolved_by": "tier_5"}
         mock_evaluate.return_value = {
             "status": "ok",
@@ -106,9 +115,44 @@ class TestDesignJudgeFixForwardStatus(unittest.TestCase):
         result = dispatcher._run_design_judge(self.item, result, self.state, self.task_id)
 
         mock_evaluate.assert_called_once()
-        self.assertEqual(result["status"], "build_failed")
-        self.assertIsNone(result["resolved_by"])
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["resolved_by"], "tier_5")
         mock_escalate.assert_called_once()
+        mock_log_debt.assert_called_once()
+        self.assertEqual(self.target_file.read_bytes(), self.original_content)
+
+    @patch.object(dispatcher, "run_build", return_value=(False, "rebuild broke"))
+    @patch.object(dispatcher.tech_debt, "log_tech_debt")
+    @patch.object(dispatcher.tier3_escalate, "escalate", autospec=True)
+    @patch.object(dispatcher, "_git_diff_for", return_value="diff --git a/test_target.py b/test_target.py")
+    @patch.object(dispatcher.judge, "evaluate_design")
+    def test_reject_with_applied_fix_but_failed_rebuild(self, mock_evaluate, mock_git_diff, mock_escalate, mock_log_debt, mock_run_build):
+        """Same reasoning as test_reject_with_unsuccessful_fix_forward, for
+        the OTHER revert branch: Tier 3's edit applies (fix_applied) but the
+        rebuild after it fails. The file is still reverted to the
+        pre-fix-forward (already-passing) snapshot, so the item must still
+        keep its original success, not be downgraded."""
+        result = {"status": "success", "resolved_by": "tier_5"}
+        mock_evaluate.return_value = {
+            "status": "ok",
+            "approved": False,
+            "reason": "needs fix",
+            "cost_usd": 0.0,
+        }
+
+        def fake_escalate(*args, **kwargs):
+            self.target_file.write_bytes(self.fixed_content)
+            return {"status": "fix_applied"}
+
+        mock_escalate.side_effect = fake_escalate
+
+        result = dispatcher._run_design_judge(self.item, result, self.state, self.task_id)
+
+        mock_evaluate.assert_called_once()
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["resolved_by"], "tier_5")
+        mock_escalate.assert_called_once()
+        mock_run_build.assert_called_once()
         mock_log_debt.assert_called_once()
         self.assertEqual(self.target_file.read_bytes(), self.original_content)
 
