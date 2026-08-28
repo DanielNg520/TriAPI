@@ -104,14 +104,18 @@ and `tests/test_branch_features.py`.
 
 ## Worth queuing (not urgent except where noted)
 
-1. **RESOLVED: `dispatcher.py`'s `_run_design_judge()` was ignoring `critique.applies_to_tiers`, triggering bogus fix-forward on tier_5 successes.** Root cause confirmed via `logs/triapi.log` lines ~54443-54446 and ~55006-55013 of the `20260826-121026-fa6eea` run. **FIXED:** `scripts/dispatcher.py`'s call to `_run_design_judge()` (around `dispatcher.py:1301-1302`) is now gated on `result['resolved_by']` being in `config/tiers.yaml`'s `critique.applies_to_tiers` list (which now includes `tier_4`, still excludes `tier_5`), mirroring `scripts/orchestrator.py:82`'s existing pattern. Regression tests added in `tests/test_design_judge_fix_forward_status.py` and `tests/test_branch_features.py`. A secondary, separate finding worth its own queue line: `scripts/librarian_escalate.py`'s 'FRESH' escape hatch (`librarian_escalate.py:277-280`) returned FRESH for both files on their second attempt (qwen2.5-coder fallback) even though both files demonstrably needed real edits — a possible false-negative freshness judgment that deserves its own investigation, separate from the design-judge gating bug.
-2. **`logs/cost_log.jsonl` is ~858KB, ~11.6x this repo's 73,728-char
+1. **NEW, HIGH PRIORITY: `AGENTS.md` has a ~1,294-line block of fabricated/hallucinated content appended between its triapi:plan markers.** A fake `config/tiers.yaml` transcript (never real, from an abandoned plan run `20260827-130810-27dd58` whose Nemotron planning turn invented tool-call output instead of reading the repo) was appended between `AGENTS.md`'s `triapi:plan` markers, inflating the file to ~147,933 chars — roughly 2x this repo's 73,728-char ceiling. Needs the exact `<!-- triapi:plan run_id=20260827-130810-27dd58 start/end -->` block removed.
+2. **NEW, HIGH PRIORITY: `AGENTS.md` bloat caused a live `agy` CLI crash (`OSError: [Errno 7] Argument list too long`).** Tonight, `scripts/llm_client.py`'s `_call_agy_cli()` crashed with `OSError: [Errno 7] Argument list too long` when trying to pass a prompt containing the full bloated `AGENTS.md` as context via a command-line argument. `agy` CLI invocations should pass large prompts via stdin instead of argv, or context size should be capped before building the CLI command.
+3. **NEW, HIGH PRIORITY: `scripts/librarian_escalate.py`'s `staleness_precheck` (the FRESH escape hatch) silently short-circuits edits as false-negative FRESH skips.** Produced at least 5 confirmed false-negative FRESH/skip judgments this session (`AGENTS.md` x2, `ARCHITECTURE.md` x1, and the active carryover file itself x2) where the target file demonstrably still needed the described edit. Root cause identified: the precheck only forces a real model call when the task description explicitly names the target file by basename/relpath/stem (per `tests/test_tier5_librarian.py`'s `test_staleness_precheck_explicit_mention_force_*` tests) — a description that refers to the target generically (e.g. 'the active carryover file', 'this file', 'AGENTS.md\'s own index') without literally restating its basename gets silently short-circuited as FRESH with `via: staleness_precheck, reason: doc is fresh`, with zero model call and zero edit, even when a real edit is clearly needed. This is a usability trap: every caller of `librarian_escalate.py` (`dispatcher.py`'s `tier_5` routing path included) must remember to literally name the target file in the description or their edit silently no-ops while reporting success.
+4. **NEW, HIGH PRIORITY: Dynamic shell expression targets in `dispatcher.py`'s `tier_5_librarian` routing bypass shell expansion and fail silently.** When a breakdown-generated item's `target` field is a dynamic shell expression like `docs/carryover/$(jq -r '.active' docs/carryover/index.json)` (which correctly resolves only when interpolated inside a real `build_cmd` shell command), `dispatcher.py`'s dedicated `tier_5_librarian` Python-call routing path (around `dispatcher.py:1264-1272`) passes `item['target']` directly to `librarian_escalate.run()` WITHOUT any shell expansion, so it operates against a literal nonexistent path. Confirmed live this session: run `20260827-132236-806da1`'s Phase 4 item 0 logged routing that exact unresolved string and reported a FRESH success despite the real active carryover file being untouched.
+5. **RESOLVED: `dispatcher.py`'s `_run_design_judge()` was ignoring `critique.applies_to_tiers`, triggering bogus fix-forward on tier_5 successes.** Root cause confirmed via `logs/triapi.log` lines ~54443-54446 and ~55006-55013 of the `20260826-121026-fa6eea` run. **FIXED:** `scripts/dispatcher.py`'s call to `_run_design_judge()` (around `dispatcher.py:1301-1302`) is now gated on `result['resolved_by']` being in `config/tiers.yaml`'s `critique.applies_to_tiers` list (which now includes `tier_4`, still excludes `tier_5`), mirroring `scripts/orchestrator.py:82`'s existing pattern. Regression tests added in `tests/test_design_judge_fix_forward_status.py` and `tests/test_branch_features.py`. A secondary, separate finding worth its own queue line: `scripts/librarian_escalate.py`'s 'FRESH' escape hatch (`librarian_escalate.py:277-280`) returned FRESH for both files on their second attempt (qwen2.5-coder fallback) even though both files demonstrably needed real edits — a possible false-negative freshness judgment that deserves its own investigation, separate from the design-judge gating bug.
+6. **`logs/cost_log.jsonl` is ~858KB, ~11.6x this repo's 73,728-char
    Tier 4 ceiling.** Already surfaced by this run's own Phase 2 verify
    item (which passed anyway, since it only greps the tail). Needs
    splitting into smaller cohesive files, not mechanical truncation — see
    the item's own note in `logs/runs/20260826-121026-fa6eea.json` for the
    exact framing already drafted.
-3. **`git_ops.push()` runs `git add -A` unconditionally** (`git_ops.py:141`),
+7. **`git_ops.push()` runs `git add -A` unconditionally** (`git_ops.py:141`),
    so any unrelated untracked file sitting in the working tree at
    run-completion time gets swept into that run's auto-commit and pushed
    to `origin/main` under a machine-generated message. Confirmed live
@@ -120,17 +124,17 @@ and `tests/test_branch_features.py`.
    `60cd085`. Not a data-loss risk (content unmodified) but a real
    commit-hygiene/scoping gap — worth a proper fix (scope the add to
    only the run's own touched files) rather than a blanket `-A`.
-4. Unresolved OpenRouter `[PHONE]` filter root-cause question (shape-
+8. Unresolved OpenRouter `[PHONE]` filter root-cause question (shape-
    specific vs. any long digit run) — carried forward, still not
    retried.
-5. Groq provider addition (`qwen/qwen3.6-27b`) — rate limits still need
+9. Groq provider addition (`qwen/qwen3.6-27b`) — rate limits still need
    re-verifying against Groq's real docs first.
-6. Architecture items (self-feature work — plan/dispatch, don't
+10. Architecture items (self-feature work — plan/dispatch, don't
    hand-build): named backend registry (`backends:` section in
    `tiers.yaml`); complexity-aware router ahead of the tier ladder;
    making every tier's fallback mechanism individually on/off
    configurable (carried forward from the prior session's queue).
-7. Design question carried forward but now resolved in code this
+11. Design question carried forward but now resolved in code this
    session: whether a Tier 3 CLI timeout should soft-escalate to Tier 2 —
    **yes, done, see Phase 1 above.** Removed from the queue.
 
