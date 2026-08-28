@@ -66,6 +66,67 @@ def _sanitize_for_content_filter(text: str) -> str:
     return _EMAIL_LIKE_RE.sub(lambda m: m.group(0).replace("@", "(at)"), text)
 
 
+# Markup naming any tool-invocation syntax the model might fabricate --
+# this planner has NO tools wired in for any non-'cli' provider (see
+# plan_turn's docstring), so any of these appearing in a response is
+# always fabricated, never real. Not an exhaustive list of every possible
+# model-specific tool-call dialect, just the ones confirmed live so far
+# (2026-08-28: dots-3-note-preview's `<dots_function_call>`/`<invoke>`).
+_FAKE_TOOL_CALL_RE = re.compile(
+    r"<(function_calls|invoke|tool_call|dots_function_call|antml:invoke)\b",
+    re.IGNORECASE,
+)
+
+# Below this many non-whitespace characters, a plan/question response is
+# almost certainly truncated or empty rather than a genuine short answer --
+# even a single clarifying question in the system prompt's required style
+# runs well over this in practice.
+_MIN_PLAN_TEXT_CHARS = 40
+
+
+def detect_degenerate_plan(text: str) -> list[str]:
+    """Fast, no-LLM-call sanity check on a raw planning turn's text, run
+    before the user is ever asked to approve it. Returns a list of
+    human-readable concerns (empty means nothing suspicious found).
+
+    This is NOT a correctness check -- it cannot tell a good plan from a
+    bad one -- it only catches the specific failure shapes confirmed live
+    in 2026-08-28's tier_1_planner incidents: fabricated tool-call markup
+    (the model has no tools, on any non-'cli' provider), truncated/empty
+    output, and degenerate self-repeating non-plans with near-zero real
+    content. A blind piped 'approve' (see triapi.py's cmd_plan()) must
+    never auto-approve a turn this flags -- see the caller for how that's
+    enforced.
+    """
+    concerns = []
+    stripped = text.strip()
+
+    if len(stripped) < _MIN_PLAN_TEXT_CHARS:
+        concerns.append(
+            f"suspiciously short response ({len(stripped)} chars) -- likely "
+            "truncated or an empty/near-empty reply"
+        )
+
+    fake_call = _FAKE_TOOL_CALL_RE.search(text)
+    if fake_call:
+        concerns.append(
+            f"contains fabricated tool-call markup ({fake_call.group(0)!r}) -- "
+            "this planner has no tools on any non-'cli' provider, so this was "
+            "invented by the model, not a real tool invocation"
+        )
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) >= 8:
+        distinct_ratio = len(set(lines)) / len(lines)
+        if distinct_ratio < 0.5:
+            concerns.append(
+                f"looks degenerate/self-repeating: only {len(set(lines))} distinct "
+                f"line(s) out of {len(lines)} total non-blank lines"
+            )
+
+    return concerns
+
+
 def in_tier3_deepseek_peak_utc(now: datetime | None = None) -> bool:
     """Return True when `now` falls in DeepSeek's Tier 3 peak billing window.
 

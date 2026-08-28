@@ -109,6 +109,13 @@ def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
         print(turn["text"])
         print()
 
+        concerns = planner.detect_degenerate_plan(turn["text"])
+        if concerns:
+            print("WARNING: this response looks suspicious:")
+            for c in concerns:
+                print(f"  - {c}")
+            print()
+
         try:
             reply = input("Your feedback, or 'approve' to proceed, or 'cancel' to abort: ").strip()
         except EOFError:
@@ -119,6 +126,40 @@ def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
             state["status"] = "failed"
             dispatcher.save_run(state)
             return
+
+        if reply.lower() in APPROVE_WORDS and concerns:
+            # Never let a single (e.g. blind piped) 'approve' auto-approve
+            # a turn flagged above -- require an explicit second
+            # confirmation. A blind pipe supplying only one line hits
+            # EOFError here and aborts instead of silently approving
+            # fabricated/truncated/degenerate content (2026-08-28).
+            try:
+                confirm = input(
+                    "This plan was flagged as suspicious (see warning above). "
+                    "Type 'approve' once more to confirm you've read it and still "
+                    "want to proceed, or give feedback/'cancel': "
+                ).strip()
+            except EOFError:
+                print(
+                    "\nNo input available to confirm a flagged plan -- refusing to "
+                    "auto-approve suspicious content. Aborting."
+                )
+                state["status"] = "failed"
+                dispatcher.save_run(state)
+                return
+            if confirm.lower() in CANCEL_WORDS:
+                state["status"] = "cancelled"
+                dispatcher.save_run(state)
+                log.info("[%s] Plan cancelled by user (after suspicious-content warning)", state["run_id"])
+                print("Cancelled.")
+                return
+            if confirm.lower() not in APPROVE_WORDS:
+                history.append({"user": message, "assistant": turn["text"]})
+                message = confirm
+                print()
+                continue
+            log.warning("[%s] Plan approved despite flagged concerns: %s", state["run_id"], concerns)
+            reply = confirm
 
         if reply.lower() in APPROVE_WORDS:
             state["plan_text"] = turn["text"]
