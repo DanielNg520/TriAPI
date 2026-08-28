@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260828-105000-week-audit-plus-live-scope-guard-catch.md",
+  "active": "20260828-053500-oh-my-llama-supervision-session-two-more-bugs-fixed.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -92,6 +92,12 @@
       "date": "2026-08-28",
       "status": "RESOLVED",
       "topic": "full 5-item queue drained (multi-turn statelessness, plan sanity check, py_compile fix, skip-grep guidance, scope_guard); dispatcher.py split to relieve file-size ceiling; docs caught up"
+    },
+    {
+      "file": "20260828-105000-week-audit-plus-live-scope-guard-catch.md",
+      "date": "2026-08-28",
+      "status": "RESOLVED",
+      "topic": "full-week audit (no regressions found); fixing 2 audit findings via supervised dispatch caught Tier 4 deleting a function out-of-scope; root-caused+fixed the scope_guard blind spot that missed it"
     }
   ]
 }
