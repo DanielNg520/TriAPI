@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260828-100000-queue-drained-5-items-plus-file-split.md",
+  "active": "20260828-105000-week-audit-plus-live-scope-guard-catch.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -86,6 +86,12 @@
       "date": "2026-08-28",
       "status": "RESOLVED",
       "topic": "agy argv crash fixed+committed; tier_1_planner moved off two hallucinating free OpenRouter models onto agy/Gemini 3.1 Pro; effort-forwarding bug and librarian fallback_openrouter endpoint bug found+fixed; multi-turn planner statelessness bug newly discovered, queued -- resolved in next file"
+    },
+    {
+      "file": "20260828-100000-queue-drained-5-items-plus-file-split.md",
+      "date": "2026-08-28",
+      "status": "RESOLVED",
+      "topic": "full 5-item queue drained (multi-turn statelessness, plan sanity check, py_compile fix, skip-grep guidance, scope_guard); dispatcher.py split to relieve file-size ceiling; docs caught up"
     }
   ]
 }
