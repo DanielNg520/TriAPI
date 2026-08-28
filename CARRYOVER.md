@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md`](docs/carryover/20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md) | **ACTIVE** — `_run_design_judge`/`critique.applies_to_tiers` bug fixed+committed (96e005e); `tier_5_librarian` primary swapped to `agy`/Gemini-3.7-Flash, live-verified, same commit; 4 new bugs found and queued (AGENTS.md hallucinated-block bloat, `agy` argument-too-long crash, `staleness_precheck` false-negative FRESH, dynamic-target-bypass in tier_5 routing); one run paused on a cosmetic item blocked by the AGENTS.md bloat; session paused for DeepSeek peak hours |
+| [`docs/carryover/20260828-082044-queue-cleared-tier1-planner-swapped.md`](docs/carryover/20260828-082044-queue-cleared-tier1-planner-swapped.md) | **ACTIVE** — 3 of the 4 previously-queued bugs resolved+committed (AGENTS.md bloat, `staleness_precheck` false-negative, dynamic-shell-expression-target bug); `agy` argument-length bug reopened with a corrected diagnosis (stdin approach disproven live, reverted cleanly); `tier_1_planner` swapped off a repeatedly-hallucinating free model to `dots-3-note-preview:free`, live-verified; 4 new gaps queued; working tree clean, nothing mid-flight |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -36,6 +36,7 @@ understanding why a past decision was made).
 | [`20260825-173000-tier-flip-complete-false-success-bug-fixed.md`](docs/carryover/20260825-173000-tier-flip-complete-false-success-bug-fixed.md) | 2026-08-25 | RESOLVED | False-success `dispatcher.py` bug fixed+committed (`5a6ae01`): `_run_design_judge`/`handle_fix_forward` outcome propagation; two 300s timeout root causes fixed; incidental `agy` `system_prompt` bug fixed; updated queue |
 | [`20260826-025500-paused-for-deepseek-offpeak-agy-fallback-queued.md`](docs/carryover/20260826-025500-paused-for-deepseek-offpeak-agy-fallback-queued.md) | 2026-08-26 | RESOLVED | Session paused mid-dispatch for DeepSeek peak hours (run `20260825-194415-b54313`); resumed and completed in the next file |
 | [`20260826-193000-tier3-timeout-softescalate-architecture-refresh-agentsmd-routing-bug.md`](docs/carryover/20260826-193000-tier3-timeout-softescalate-architecture-refresh-agentsmd-routing-bug.md) | 2026-08-26 | RESOLVED | Run `fa6eea` completed+committed (`60cd085`): Tier 3 CLI-timeout soft-escalation + `ARCHITECTURE.md` refresh; the doc-target routing-inconsistency theory queued here was a misdiagnosis, corrected in the next file; `git_ops.push()` `git add -A` scoping gap found, still unfixed |
+| [`20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md`](docs/carryover/20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md) | 2026-08-28 | RESOLVED | `_run_design_judge`/`critique.applies_to_tiers` bug fixed+committed (`96e005e`); `tier_5_librarian` primary swapped to `agy`/Gemini-3.7-Flash; 4 new bugs queued (AGENTS.md bloat, `agy` argv-too-long, `staleness_precheck` false-negative, dynamic-target-bypass); continuation resolved 3 of 4, reopened the 4th with a corrected diagnosis — see next file |
 
 ## Convention for adding a new entry (read once, then follow every session)
 

@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md",
+  "active": "20260828-082044-queue-cleared-tier1-planner-swapped.md",
   "history": [
     {
       "file": "20260823-210000-openrouter-merge-and-tier-swap.md",
@@ -66,8 +66,14 @@
     {
       "file": "20260828-012100-tier5-agy-swap-paused-4-new-bugs-queued.md",
       "date": "2026-08-28",
+      "status": "RESOLVED",
+      "topic": "Corrected prior misdiagnosis and fixed the real bug (dispatcher.py's _run_design_judge ignoring critique.applies_to_tiers), committed as 96e005e; tier_5_librarian primary swapped from slow local mistral-small to agy/Gemini-3.7-Flash, live-verified, committed same commit; a design-judge regression got silently reintroduced mid-session and was caught by its own test, hand-restored; 4 new real bugs found and queued (AGENTS.md hallucinated-block bloat, agy CLI argument-too-long crash, librarian_escalate.py staleness_precheck false-negative FRESH judgments, dynamic-shell-expression-target bypass in tier_5 routing); one dispatch run paused mid-flight on a single cosmetic item, blocked on the AGENTS.md bloat; session paused for DeepSeek peak hours per user instruction; continuation resolved 3 of the 4 queued bugs (see next file) and reopened the 4th with a corrected diagnosis"
+    },
+    {
+      "file": "20260828-082044-queue-cleared-tier1-planner-swapped.md",
+      "date": "2026-08-28",
       "status": "ACTIVE",
-      "topic": "Corrected prior misdiagnosis and fixed the real bug (dispatcher.py's _run_design_judge ignoring critique.applies_to_tiers), committed as 96e005e; tier_5_librarian primary swapped from slow local mistral-small to agy/Gemini-3.7-Flash, live-verified, committed same commit; a design-judge regression got silently reintroduced mid-session and was caught by its own test, hand-restored; 4 new real bugs found and queued (AGENTS.md hallucinated-block bloat, agy CLI argument-too-long crash, librarian_escalate.py staleness_precheck false-negative FRESH judgments, dynamic-shell-expression-target bypass in tier_5 routing); one dispatch run paused mid-flight on a single cosmetic item, blocked on the AGENTS.md bloat; session paused for DeepSeek peak hours per user instruction"
+      "topic": "AGENTS.md bloat, staleness_precheck false-negative, and dynamic-shell-expression-target bug all fixed and committed; agy argument-length bug reopened with a corrected diagnosis (stdin approach disproven live, reverted cleanly); tier_1_planner swapped off a repeatedly-hallucinating free Nemotron model to dots-3-note-preview:free, live-verified; 4 new gaps queued (py_compile-insufficient verify commands, bare-skip-substring false positives, Tier 3 out-of-scope-edit pattern, no sanity check on triapi plan's own output); working tree clean, nothing mid-flight"
     }
   ]
 }
