@@ -202,22 +202,36 @@ this session — see the prior file for the full accumulated list)
 
 ## Next up (priority order)
 
-1. Fix `AGENTS.md`'s hallucinated-block bloat (queue item 1) — via
-   `triapi plan`/`dispatch`, not a hand-edit, same as everything else;
-   this unblocks queue items 2 and the last cosmetic item on the paused
-   run.
-2. Fix the `agy` CLI argument-length crash (queue item 2).
-3. Fix `librarian_escalate.py`'s `staleness_precheck` false-negative
-   (queue item 3).
-4. Fix the dynamic-shell-expression-target bug in `dispatcher.py`'s
-   `tier_5` routing (queue item 4).
-5. Once 1-4 are clear, resume `20260827-132236-806da1` to pick up its
-   one remaining cosmetic `AGENTS.md` note (or just let it lapse — the
-   substance is already done).
-6. Then the older carried-forward items: `cost_log.jsonl` split,
-   `git_ops.push()` `git add -A` scoping, OpenRouter `[PHONE]` filter,
-   Groq provider, architecture items (backend registry / complexity
-   router / per-tier fallback toggles).
+1. **RESOLVED** — `AGENTS.md` bloat resolved (committed `d98de74`).
+2. Fix the `agy` CLI argument-length crash (queue item 2) — reopened with corrected understanding (prompt-size guard / fail-fast / fallback, not stdin).
+3. Fix `dispatcher.py` verify_command insufficiency for new test files (`py_compile` alone permits broken runtime/import references; require unittest import/collection verification).
+4. Fix `librarian_escalate.py`'s `staleness_precheck` false-negative (queue item 3).
+5. Fix the dynamic-shell-expression-target bug in `dispatcher.py`'s `tier_5` routing (queue item 4).
+6. Once above items are clear, resume `20260827-132236-806da1` to pick up its one remaining cosmetic `AGENTS.md` note (or just let it lapse — the substance is already done).
+7. Then the older carried-forward items: `cost_log.jsonl` split, `git_ops.push()` `git add -A` scoping, OpenRouter `[PHONE]` filter, Groq provider, architecture items (backend registry / complexity router / per-tier fallback toggles).
+
+## 2026-08-28 Progress Update (Session continuation)
+
+### 1. Queue item 1 (`AGENTS.md` bloat) — RESOLVED (`d98de74`)
+- Hand-edited directly per explicit user approval since `AGENTS.md`'s own size bloat was blocking the pipeline from editing `AGENTS.md` at all (the exact chicken-and-egg situation).
+- The fabricated ~71.6KB plan block from abandoned run `20260827-130810-27dd58` was deleted outright.
+- 5 completed historical plan blocks archived to `docs/agents/20260828-044229-agents-md-historical-plan-blocks-archive.md`.
+- `AGENTS.md` dropped from 161,878 to ~41,000 characters.
+
+### 2. Queue item 2 (`agy` CLI Argument list too long) — ATTEMPTED & REVERTED (OPEN)
+- Attempted via `triapi plan`/`dispatch` and failed, then correctly reverted.
+- **Critical finding**: `agy`'s `-p` flag does **not** support stdin input (unlike `claude -p`). It is a Go-style flag requiring an explicit argv value; omitting it while piping via stdin causes `agy` to exit with status 2 (confirmed live via `triapi`'s `probe_models()` crashing).
+- The stdin attempt regressed all `agy` calls across the board and was fully reverted: `scripts/llm_client.py`'s `_call_agy_cli()` and `_call_claude_cli()` are back to their byte-identical original forms; `tests.test_branch_features` and `tests.test_tier5_librarian` pass (93 tests OK).
+- Deleted hallucinated test file `tests/test_llm_client_agy_stdin.py` generated during the attempt (which referenced a nonexistent nvidia-docker-based `_run_llm` function).
+- Updated `AGENTS.md`'s `tier_5_librarian` bullet's 'Known open bug' note via librarian CLI to record this finding to prevent future stdin-based fix attempts.
+- Real fix needs to be designed (e.g. prompt-size guard in `_call_agy_cli` failing fast / falling through before hitting OS argv limit). Requeued for future session.
+
+### 3. New Systemic Gap Discovered & Queued
+- Dispatched items using only `python3 -m py_compile <new_test_file>` as `verify_command` can report false success on test files with hallucinated imports or nonexistent function calls, since `py_compile` only validates syntax, not name/import resolution.
+- `scripts/dispatcher.py` default verify-command logic for test files must include unittest import/collection checks. Queued as a priority item.
+
+### 4. Queue items 3 & 4 — UNTOUCHED (OPEN)
+- Item 3 (`staleness_precheck` false-negative FRESH) and Item 4 (dynamic-shell-expression-target routing bypass) were not started this continuation and remain open.
 
 **Separately, on hold for the user (unchanged from the prior file):**
 - **Virtual Codebase Plan** (`VIRTUAL_CODEBASE_PLAN.md`) — user wants to
