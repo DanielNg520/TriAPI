@@ -150,16 +150,11 @@ for full detail on each; this is a condensed pointer, not a duplicate)
    for 'skipped' across `unittest -v`, matching test method names rather
    than real skip markers; suite passed cleanly (re-verified). Follow-up
    queued: future plans should grep for anchored/word-bounded SKIP patterns.
-4. **Dynamic shell-expression targets bypass shell expansion in
-   `dispatcher.py`'s `tier_5_librarian` routing.** A breakdown-generated
-   item `target` like `docs/carryover/$(jq -r '.active' docs/carryover/index.json)`
-   resolves correctly only inside a real `build_cmd` shell command —
-   `dispatcher.py`'s dedicated Python-call routing path
-   (`dispatcher.py:1264-1272`) passes `item['target']` straight to
-   `librarian_escalate.run()` with no shell expansion, so it silently
-   operates against a literal nonexistent path (confirmed live, run
-   `20260827-132236-806da1` Phase 4 item 0). This combined with bug 3
-   above to produce a false "success" with zero real edit.
+4. **RESOLVED (2026-08-28)** — Dynamic shell-expression targets in
+   `dispatcher.py`'s `tier_5` routing. Added `_resolve_dynamic_target()`
+   and wired in `scripts/dispatcher.py`, covered by
+   `tests/test_dispatcher_dynamic_target_resolution.py` (4 tests, all
+   passing), full regression suite green (100 tests, OK).
 5. **RESOLVED, this session** — see point 1 above (`_run_design_judge`/
    `critique.applies_to_tiers`).
 6. `logs/cost_log.jsonl` size split (still ~858KB, carried forward,
@@ -205,9 +200,9 @@ this session — see the prior file for the full accumulated list)
 2. Fix the `agy` CLI argument-length crash (queue item 2) — reopened with corrected understanding (prompt-size guard / fail-fast / fallback, not stdin).
 3. Fix `dispatcher.py` verify_command insufficiency for new test files (`py_compile` alone permits broken runtime/import references; require unittest import/collection verification).
 4. **RESOLVED** — `librarian_escalate.py`'s `staleness_precheck` false-negative (queue item 3).
-5. Fix the dynamic-shell-expression-target bug in `dispatcher.py`'s `tier_5` routing (queue item 4).
+5. **RESOLVED** — Fix the dynamic-shell-expression-target bug in `dispatcher.py`'s `tier_5` routing (queue item 4).
 6. Fix test verification pattern: avoid bare `'skipped'` grep in verify commands that false-triggers on method names.
-6. Once above items are clear, resume `20260827-132236-806da1` to pick up its one remaining cosmetic `AGENTS.md` note (or just let it lapse — the substance is already done).
+7. Once above items are clear, resume `20260827-132236-806da1` to pick up its one remaining cosmetic `AGENTS.md` note (or just let it lapse — the substance is already done).
 7. Then the older carried-forward items: `cost_log.jsonl` split, `git_ops.push()` `git add -A` scoping, OpenRouter `[PHONE]` filter, Groq provider, architecture items (backend registry / complexity router / per-tier fallback toggles).
 
 ## 2026-08-28 Progress Update (Session continuation)
@@ -235,8 +230,18 @@ this session — see the prior file for the full accumulated list)
 - Regression tests added in `tests/test_tier5_librarian.py` (96 tests pass).
 - Note: run `20260827-222943-2c134b` had a false human_handoff due to `verify_cmd` case-insensitive grep for `'skipped'` matching method names. Follow-up queued for anchored SKIP pattern grepping.
 
-### 5. Queue item 4 — UNTOUCHED (OPEN)
-- Item 4 (dynamic-shell-expression-target routing bypass) remains open.
+### 5. Queue item 4 (Dynamic shell-expression target routing) — RESOLVED
+- Added and wired `_resolve_dynamic_target()` in `scripts/dispatcher.py`.
+- Covered by `tests/test_dispatcher_dynamic_target_resolution.py` (4 tests, all passing), full suite green (100 tests, OK).
+
+### 6. Model Swap & Pipeline Fix Notes (2026-08-28)
+- `tier_1_planner`'s model swapped from `nvidia/nemotron-3-ultra-550b-a55b:free` to `dots-studio/dots-3-note-preview:free` in `config/tiers.yaml`.
+- Reason: Nemotron repeatedly hallucinated during `triapi plan` calls (fabricated fake tool-call transcripts with nonexistent Dispatcher classes and fictional carryover files with invented queue items, truncated mid-response, and produced degenerate self-repeating non-plans roughly half the time).
+- Hand-edited directly (not via `triapi plan`/`dispatch`) with explicit user approval since `triapi plan` itself was using the broken model (live demonstration during the attempt produced another garbled, self-repeating non-plan).
+- Live-verified post-swap: `probe_models()` succeeds, direct `planner.plan_turn()` call returns a clean coherent response, full regression suite passes (96 tests, OK).
+- Two additional bugs found & fixed this session (both hand-edited after repeated pipeline failures on trivial fixes):
+  1. `tests/test_dispatcher_dynamic_target_resolution.py` had 3 fixture bugs (missing `mock_recheck_regression_flags.return_value=False` causing an early return, a missing phase `'name'` key, and a fixture file written in the wrong directory relative to its own shell expression) — fixed by hand after 5 consecutive pipeline dispatch attempts failed on this trivial test file.
+  2. `scripts/dispatcher.py`'s Tier 3 escalation twice made unauthorized out-of-scope edits during earlier pipeline dispatches (rewrote `_call_claude_cli` when only `_call_agy_cli` was in scope, and rewrote `handle_fix_forward`'s peak-hours logic when only item-target wiring was in scope) — caught via `git diff` review and reverted by hand to maintain surgical changes.
 
 **Separately, on hold for the user (unchanged from the prior file):**
 - **Virtual Codebase Plan** (`VIRTUAL_CODEBASE_PLAN.md`) — user wants to

@@ -1036,6 +1036,35 @@ def _normalize_build_cmd(build_cmd: str, project_dir: str) -> str:
     return _BARE_PYTHON_RE.sub(_sub, build_cmd)
 
 
+def _resolve_dynamic_target(target: str, project_dir: str) -> str:
+    """Dynamically resolves the target path by expanding any dynamic references.
+
+    Args:
+        target (str): The original target path which may contain dynamic references.
+        project_dir (str): The directory from which to run the expansion script.
+
+    Returns:
+        str: The resolved target path after expansion, or the original target if no expansion was needed.
+    """
+    if "$(" not in target and "`" not in target and "${" not in target:
+        return target
+
+    try:
+        completed_process = subprocess.run(
+            ["bash", "-c", f'printf %s "{target}"'],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if completed_process.returncode == 0:
+            return completed_process.stdout.strip()
+    except (subprocess.TimeoutExpired, Exception) as e:
+        log.warning("Dynamic target expansion failed for %r: %s", target, e)
+
+    return target
+
+
 def _git_diff_for(target: str, project_dir: str) -> str:
     res = subprocess.run(
         ["git", "-C", project_dir, "diff", "--", target],
@@ -1234,6 +1263,10 @@ def dispatch(state: dict) -> dict:
             attempts = 0
             while True:
                 attempts += 1
+                if item.get("target"):
+                    resolved_target = _resolve_dynamic_target(item["target"], state["project_dir"])
+                else:
+                    resolved_target = None
                 if "git" in item:
                     result = _dispatch_git_item(task_id, item["git"], state["project_dir"])
                 elif item.get("verify_only"):
@@ -1261,7 +1294,7 @@ def dispatch(state: dict) -> dict:
                     # existence says nothing about validity. _default_build_cmd()
                     # upgrades that floor to an actual syntax check for file
                     # types stdlib can check with zero extra dependencies.
-                    build_cmd = item.get("build_cmd") or _default_build_cmd(item["target"])
+                    build_cmd = item.get("build_cmd") or _default_build_cmd(resolved_target)
                     build_cmd = _normalize_build_cmd(build_cmd, state["project_dir"])
 
                     # Documentation targets (anything matching
@@ -1271,16 +1304,16 @@ def dispatch(state: dict) -> dict:
                     # enabled; a disabled block falls through to the existing
                     # path unchanged.
                     doc_target = is_doc_target(
-                        item["target"], tier_5.get("target_globs", [])
+                        resolved_target, tier_5.get("target_globs", [])
                     )
                     if tier_5.get("enabled", True) and doc_target:
                         from scripts import librarian_escalate
-                        log.info("[%s] [ROUTING] %s -> tier_5_librarian", task_id, item["target"])
+                        log.info("[%s] [ROUTING] %s -> tier_5_librarian", task_id, resolved_target)
                         try:
                             result = librarian_escalate.run(
                                 task_id=task_id,
                                 description=item["description"],
-                                target=item["target"],
+                                target=resolved_target,
                                 workdir=state["project_dir"],
                             )
                         except requests.exceptions.RequestException as e:
@@ -1290,7 +1323,7 @@ def dispatch(state: dict) -> dict:
                             result = run_task(
                                 task_id=task_id,
                                 description=item["description"],
-                                target=item["target"],
+                                target=resolved_target,
                                 workdir=state["project_dir"],
                                 build_cmd=build_cmd,
                                 context_files=item.get("context_files") or [],
@@ -1315,17 +1348,17 @@ def dispatch(state: dict) -> dict:
                 result = _run_design_judge(item, result, state, task_id)
 
             content_hash = (
-                regression_guard.hash_file(Path(state["project_dir"]) / item["target"])
+                regression_guard.hash_file(Path(state["project_dir"]) / resolved_target)
                 if is_regular_item and result["status"] == "success"
                 else None
             )
             if (
                 is_regular_item
                 and result["status"] == "success"
-                and _is_test_target(item["target"])
+                and _is_test_target(resolved_target)
             ):
                 lint_issues = mock_patch_lint.find_issues(
-                    Path(state["project_dir"]) / item["target"],
+                    Path(state["project_dir"]) / resolved_target,
                     Path(state["project_dir"]),
                 )
                 if lint_issues:
@@ -1333,7 +1366,7 @@ def dispatch(state: dict) -> dict:
                     log.warning(
                         "[%s] mock_patch_lint found issues in %s (override to build_failed):\n%s",
                         state["run_id"],
-                        item["target"],
+                        resolved_target,
                         reasons,
                     )
                     result = dict(result)
@@ -1350,7 +1383,7 @@ def dispatch(state: dict) -> dict:
                 "resolved_by": result["resolved_by"],
             }
             if is_regular_item:
-                entry["target"] = item["target"]
+                entry["target"] = resolved_target
                 entry["build_cmd"] = build_cmd
                 entry["content_hash"] = content_hash
             state["results"].append(entry)

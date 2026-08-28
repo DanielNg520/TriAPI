@@ -2,22 +2,33 @@
 # of hardcoding model names, endpoints, or escalation thresholds.
 
 tier_1_planner:
-  # Primary planner: OpenRouter's free Nemotron model. On any failure
-  # (content-filter 403, rate limit, connectivity), planner.py falls back to
-  # tier_1_manager's Claude CLI (Sonnet 5, high effort) instead of erroring
-  # out -- there is no separate fallback block here by design, it always
-  # falls back to tier_1_manager's config.
+  # Primary planner: OpenRouter's free "dots-3-note-preview" model. On any
+  # failure (content-filter 403, rate limit, connectivity), planner.py falls
+  # back to tier_1_manager's Claude CLI (Sonnet 5, high effort) instead of
+  # erroring out -- there is no separate fallback block here by design, it
+  # always falls back to tier_1_manager's config.
   # 2026-08-26: swapped from "stealth/ox-alpha" -- that stealth slug rotated
   # out of OpenRouter's catalog (confirmed via GET /api/v1/models, 404 on
   # probe), which hard-blocked the whole pipeline at the probe_models()
   # pre-flight stage. Replaced with the next already-user-approved free
   # model per the allowed-models list, not a newly-added one.
+  # 2026-08-28: swapped from "nvidia/nemotron-3-ultra-550b-a55b:free" --
+  # confirmed live, repeatedly, producing hallucinated planning output:
+  # fully fabricated tool-call transcripts inventing nonexistent code/files
+  # (a fictional Dispatcher class, a fake carryover file with made-up queue
+  # items), truncated mid-sentence responses auto-approved as complete
+  # plans, and degenerate self-repeating non-plans with zero real content --
+  # roughly half of one session's planning calls were unusable. Replaced
+  # with "dots-studio/dots-3-note-preview:free", an already-approved free
+  # model previously used as tier_4_worker's model before the 2026-08-25
+  # Phase 33 reassignment (see AGENTS.md/PLAN.md Phase 33 history) --
+  # not a newly-added model.
   provider: openrouter
   api_key_secret: open_router_api_key
   name: "OpenRouter"
   endpoint: "https://openrouter.ai/api/v1"
   models:
-    default: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    default: "dots-studio/dots-3-note-preview:free"
   default_model: "default"
   role: "strategic planning"
   automatable: true
