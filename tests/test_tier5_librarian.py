@@ -8,7 +8,7 @@ scripts/content_guard.py's own docstring for why that's a one-way door.
 
 Every test here patches strictly at the HTTP boundary (llm_client.requests)
 or at the module-function boundary already used elsewhere in this suite
-(mirrors LlmClientOpenAIErrorBodyTests / the tier1-3 escalate tests in
+(mirrors LlmClientOpenAIErrorBodyTests / the tier1/2 escalate tests in
 test_branch_features.py) -- zero real network calls, including to a local
 Ollama daemon or OpenRouter.
 """
@@ -33,7 +33,6 @@ from scripts import (
     orchestrator,
     tier1_escalate,
     tier2_escalate,
-    tier3_escalate,
 )
 
 
@@ -163,7 +162,6 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(llm_client, "_call_gemini_api") as gemini_api,
                 mock.patch.object(tier1_escalate, "escalate") as tier1_escalate_mock,
                 mock.patch.object(tier2_escalate, "escalate") as tier2_escalate_mock,
-                mock.patch.object(tier3_escalate, "escalate") as tier3_escalate_mock,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
@@ -181,13 +179,12 @@ class TestTier5Librarian(unittest.TestCase):
             # because primary succeeded on the first attempt.
             execute_llm.assert_not_called()
 
-            # The paid ladder (Claude CLI, Gemini API, Tier 1/2/3 escalate)
+            # The paid ladder (Claude CLI, Gemini API, Tier 1/2 escalate)
             # must never be touched by the librarian tier at all.
             claude_cli.assert_not_called()
             gemini_api.assert_not_called()
             tier1_escalate_mock.assert_not_called()
             tier2_escalate_mock.assert_not_called()
-            tier3_escalate_mock.assert_not_called()
 
             clear_state.assert_called_once_with("t-agy-primary")
             self.assertEqual(target.read_text(encoding="utf-8"), "# Guide\n\nNew sentence here.\n")
@@ -484,7 +481,32 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate.llm_client, "execute_llm") as execute_llm,
             ):
                 result = librarian_escalate.run(
-                    "t-stale-skip", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-skip", "is the documentation stale relative to the code", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_not_called()
+            self.assertEqual(result.get("via"), "staleness_precheck")
+
+    def test_staleness_precheck_skips_only_with_staleness_phrase_and_genuinely_fresh_doc(self) -> None:
+        """doc newer than code + clean tree + staleness phrase -> execute_llm NOT called."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            # Code committed first
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+            # Doc committed after code
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh content.\n", "add doc")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(librarian_escalate.llm_client, "execute_llm") as execute_llm,
+            ):
+                result = librarian_escalate.run(
+                    "t-precheck-staleness-phrase-fresh-doc", 
+                    "is this doc out of date", 
+                    str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
@@ -511,7 +533,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-dirty", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-dirty", "is the documentation up to date", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
@@ -537,7 +559,32 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-code-after", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-code-after", "is the documentation up to date with the code", str(workdir / "docs" / "GUIDE.md"),
+                    workdir=str(workdir),
+                )
+
+            execute_llm.assert_called_once()
+
+    def test_staleness_precheck_forces_call_for_non_staleness_description_even_when_fresh(self) -> None:
+        """Non-staleness description + doc newer than code + clean tree -> execute_llm called once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            self._init_git_repo(workdir)
+            # Code committed first
+            self._commit_file(workdir, "src/main.py", "print('hello')\n", "add code")
+            # Doc committed after code
+            self._commit_file(workdir, "docs/GUIDE.md", "# Guide\n\nFresh content.\n", "add doc")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+            ):
+                result = librarian_escalate.run(
+                    "t-non-staleness", "append a note recording that X changed", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
@@ -564,7 +611,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-untracked", "review documentation", str(target),
+                    "t-stale-untracked", "is the documentation out of date", str(target),
                     workdir=str(workdir),
                 )
 
@@ -589,7 +636,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-relpath", "update docs/GUIDE.md", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-relpath", "is docs/GUIDE.md stale or out of date", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
@@ -613,7 +660,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-basename", "update GUIDE.md", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-basename", "is GUIDE.md up to date", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
@@ -637,7 +684,7 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-stem", "update GUIDE to be current", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-stem", "is GUIDE stale", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
@@ -665,8 +712,20 @@ class TestTier5Librarian(unittest.TestCase):
                 ),
             ):
                 result = librarian_escalate.run(
-                    "t-stale-failopen", "review documentation", str(workdir / "docs" / "GUIDE.md"),
+                    "t-stale-failopen", "is the documentation up to date with the code", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
             execute_llm.assert_called_once()
+
+    def test_should_skip_model_call_returns_false_immediately_for_non_staleness_description(self) -> None:
+        from scripts import doc_staleness
+        with tempfile.TemporaryDirectory() as tmp:
+            doc_path = Path(tmp) / "dummy.md"
+            result = doc_staleness.should_skip_model_call(
+                str(doc_path), tmp, "append this note to the index"
+            )
+            self.assertEqual(
+                result,
+                (False, "task description is not a code-sync staleness check -- skipping the fast-path, forcing a real edit attempt")
+            )

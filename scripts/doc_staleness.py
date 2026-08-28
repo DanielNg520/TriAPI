@@ -37,6 +37,19 @@ def _get_is_doc_target():
 
 _is_doc_target = _get_is_doc_target()
 
+_STALENESS_QUESTION_PHRASES = [
+    "stale",
+    "out of date",
+    "outdated",
+    "up to date",
+    "up-to-date",
+    "reflect the current state",
+    "sync with",
+    "keep in sync",
+    "no longer accurate",
+    "is this doc accurate"
+]
+
 
 def should_skip_model_call(doc_path, workdir, task_description) -> tuple[bool, str]:
     """Return (True, reason) if model call should be skipped.
@@ -52,6 +65,10 @@ def should_skip_model_call(doc_path, workdir, task_description) -> tuple[bool, s
     Any failure returns (False, reason) (fail open).
     """
     try:
+        task_lower = task_description.lower()
+        if not any(phrase in task_lower for phrase in _STALENESS_QUESTION_PHRASES):
+            return (False, "task description is not a code-sync staleness check -- skipping the fast-path, forcing a real edit attempt")
+
         # Normalize paths
         doc_path = Path(doc_path)
         workdir = Path(workdir)
@@ -67,7 +84,6 @@ def should_skip_model_call(doc_path, workdir, task_description) -> tuple[bool, s
         stem = doc_path.stem
 
         # (1) Explicit mention override
-        task_lower = task_description.lower()
         if (
             relpath_str.lower() in task_lower
             or basename.lower() in task_lower

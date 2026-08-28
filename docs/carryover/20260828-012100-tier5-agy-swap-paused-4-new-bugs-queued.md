@@ -137,18 +137,19 @@ for full detail on each; this is a condensed pointer, not a duplicate)
    via stdin instead of argv, or a context-size cap before building the
    CLI command — will recur for any large doc target until fixed, not
    just `AGENTS.md`.
-3. **`scripts/librarian_escalate.py`'s `staleness_precheck` produces
-   false-negative FRESH judgments.** Root cause identified precisely: it
-   only forces a real model call when the task description explicitly
-   names the target file by basename/relpath/stem (see
-   `tests/test_tier5_librarian.py`'s
-   `test_staleness_precheck_explicit_mention_force_*` tests) — a
-   description that refers to the target generically (e.g. "the active
-   carryover file", "this file") gets silently short-circuited as FRESH
-   with zero model call and zero edit, while still reporting success.
-   Produced 5+ confirmed false negatives this session. Every caller
-   (including `dispatcher.py`'s own `tier_5` routing path) has to
-   remember this landmine today; it should not be possible to trip.
+3. **RESOLVED (2026-08-28)** — `scripts/librarian_escalate.py`'s
+   `staleness_precheck` false-negative FRESH bug. Fixed in
+   `scripts/doc_staleness.py` via a new `_STALENESS_QUESTION_PHRASES`
+   leading gate in `should_skip_model_call()`: the fast git-epoch skip
+   path now only runs when the task description contains a
+   code-sync-staleness phrase; any other description (e.g. a plain
+   append/index-update task) always forces a real model call. Covered by
+   new regression tests in `tests/test_tier5_librarian.py` (96 tests, full
+   suite OK). Note: dispatch run `20260827-222943-2c134b` recorded a false
+   human_handoff because its `verify_cmd` used a case-insensitive grep
+   for 'skipped' across `unittest -v`, matching test method names rather
+   than real skip markers; suite passed cleanly (re-verified). Follow-up
+   queued: future plans should grep for anchored/word-bounded SKIP patterns.
 4. **Dynamic shell-expression targets bypass shell expansion in
    `dispatcher.py`'s `tier_5_librarian` routing.** A breakdown-generated
    item `target` like `docs/carryover/$(jq -r '.active' docs/carryover/index.json)`
@@ -193,10 +194,8 @@ this session — see the prior file for the full accumulated list)
   `["tier_3", "tier_1", "tier_2", "tier_4"]` — verify this hasn't
   regressed again before trusting it (see point 4 above; it silently
   reverted once already this session from an unrelated Tier 3 rewrite).
-- When invoking `scripts/librarian_escalate.py` for any target, **always
-  literally name the target file by basename in the `--description`** —
-  see queue item 3. Until that's fixed, a generic description silently
-  no-ops as a false "success".
+- `scripts/doc_staleness.py` `should_skip_model_call()` now gates fast git-epoch skips on `_STALENESS_QUESTION_PHRASES`; generic append/update descriptions always force a real model call.
+- In test verify commands, grep for real skip markers (e.g. word-bounded `'SKIPPED'` or `'... skipped$'`) rather than bare substring `'skipped'` to avoid matching test method names.
 - DeepSeek peak-hours windows unchanged: `01:00-04:00` and
   `06:00-10:00 UTC`, weekdays.
 
@@ -205,8 +204,9 @@ this session — see the prior file for the full accumulated list)
 1. **RESOLVED** — `AGENTS.md` bloat resolved (committed `d98de74`).
 2. Fix the `agy` CLI argument-length crash (queue item 2) — reopened with corrected understanding (prompt-size guard / fail-fast / fallback, not stdin).
 3. Fix `dispatcher.py` verify_command insufficiency for new test files (`py_compile` alone permits broken runtime/import references; require unittest import/collection verification).
-4. Fix `librarian_escalate.py`'s `staleness_precheck` false-negative (queue item 3).
+4. **RESOLVED** — `librarian_escalate.py`'s `staleness_precheck` false-negative (queue item 3).
 5. Fix the dynamic-shell-expression-target bug in `dispatcher.py`'s `tier_5` routing (queue item 4).
+6. Fix test verification pattern: avoid bare `'skipped'` grep in verify commands that false-triggers on method names.
 6. Once above items are clear, resume `20260827-132236-806da1` to pick up its one remaining cosmetic `AGENTS.md` note (or just let it lapse — the substance is already done).
 7. Then the older carried-forward items: `cost_log.jsonl` split, `git_ops.push()` `git add -A` scoping, OpenRouter `[PHONE]` filter, Groq provider, architecture items (backend registry / complexity router / per-tier fallback toggles).
 
@@ -230,8 +230,13 @@ this session — see the prior file for the full accumulated list)
 - Dispatched items using only `python3 -m py_compile <new_test_file>` as `verify_command` can report false success on test files with hallucinated imports or nonexistent function calls, since `py_compile` only validates syntax, not name/import resolution.
 - `scripts/dispatcher.py` default verify-command logic for test files must include unittest import/collection checks. Queued as a priority item.
 
-### 4. Queue items 3 & 4 — UNTOUCHED (OPEN)
-- Item 3 (`staleness_precheck` false-negative FRESH) and Item 4 (dynamic-shell-expression-target routing bypass) were not started this continuation and remain open.
+### 4. Queue item 3 (`staleness_precheck` false-negative FRESH) — RESOLVED
+- Fixed in `scripts/doc_staleness.py` via `_STALENESS_QUESTION_PHRASES` leading gate in `should_skip_model_call()`: fast git-epoch skip only runs when description has code-sync-staleness phrases; all other tasks force a real model call.
+- Regression tests added in `tests/test_tier5_librarian.py` (96 tests pass).
+- Note: run `20260827-222943-2c134b` had a false human_handoff due to `verify_cmd` case-insensitive grep for `'skipped'` matching method names. Follow-up queued for anchored SKIP pattern grepping.
+
+### 5. Queue item 4 — UNTOUCHED (OPEN)
+- Item 4 (dynamic-shell-expression-target routing bypass) remains open.
 
 **Separately, on hold for the user (unchanged from the prior file):**
 - **Virtual Codebase Plan** (`VIRTUAL_CODEBASE_PLAN.md`) — user wants to

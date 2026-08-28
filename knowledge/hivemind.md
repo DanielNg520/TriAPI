@@ -772,3 +772,34 @@ providers = [
     }
 ]
 ```
+
+### Intent-Guarded Fast Paths (Fail-Open)
+
+**Context:** When implementing an optimization or "fast path" that skips expensive operations (such as a model call or complex computation), it can be risky if the optimization is applied to the wrong context. 
+
+**Pattern:** Use heuristic intent filtering—such as scanning unstructured input for a specific set of keywords or phrases—as an early-exit guard. If the input does not strongly match the expected heuristic, "fail open" by immediately falling back to the standard, unoptimized execution path.
+
+**Example:**
+```python
+_STALENESS_QUESTION_PHRASES = [
+    "stale",
+    "out of date",
+    "up to date",
+    # ...
+]
+
+def should_skip_expensive_call(task_description: str) -> tuple[bool, str]:
+    task_lower = task_description.lower()
+    
+    # 1. Intent Guard: If the intent doesn't match, fail open immediately.
+    if not any(phrase in task_lower for phrase in _STALENESS_QUESTION_PHRASES):
+        return (False, "Intent not matched -- skipping fast-path, falling back to standard execution")
+        
+    # 2. Proceed with fast-path optimization logic...
+    # ...
+```
+
+**Benefits:**
+*   **Safety:** Prevents aggressive optimizations from causing false positives and breaking unrelated tasks.
+*   **Performance:** Cheap substring checks effectively guard more complex or expensive logic from running unnecessarily.
+*   **Robustness:** The system degrades gracefully to the default, safe behavior whenever the user's intent is ambiguous.
