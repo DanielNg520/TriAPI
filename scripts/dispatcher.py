@@ -1245,6 +1245,26 @@ def dispatch(state: dict) -> dict:
                                 description=item["description"],
                                 target=resolved_target,
                                 workdir=state["project_dir"],
+                                # Without this, librarian_escalate.run()'s own
+                                # verify_cmd_resolved falls through to
+                                # tier_5_librarian.verify_command (null in
+                                # config/tiers.yaml) then the literal no-op
+                                # "true" -- meaning the item's real build_cmd
+                                # (this repo's own content-asserting check,
+                                # e.g. confirming a specific file actually
+                                # changed) was NEVER run for any tier_5-routed
+                                # item; "Verification succeeded" was logged
+                                # unconditionally regardless of what actually
+                                # happened on disk. Confirmed live 2026-08-28:
+                                # a MAPPING.md update reported success twice
+                                # while writing to a wrong resolved path
+                                # (itself caused by a separate project_dir
+                                # mistake, see triapi.py's cmd_plan() fix
+                                # earlier the same day) and the item's own
+                                # build_cmd -- which explicitly checked the
+                                # correct file via git -C <repo> diff -- would
+                                # have caught it immediately, had it run.
+                                verify_cmd=build_cmd,
                             )
                         except requests.exceptions.RequestException as e:
                             result = {"status": "error", "reason": str(e), "resolved_by": None}

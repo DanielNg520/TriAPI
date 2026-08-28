@@ -116,3 +116,64 @@ class DispatcherDynamicTargetResolutionTests(unittest.TestCase):
         expected_call_args = mock_librarian_run.call_args_list[0].kwargs
 
         self.assertEqual(expected_call_args["target"], "docs/carryover/expected_path")
+
+    @patch('scripts.dispatcher._recheck_regression_flags')
+    @patch('scripts.dispatcher.save_run')
+    @patch('scripts.dispatcher.regression_guard.hash_file')
+    @patch('scripts.dispatcher.librarian_escalate.run')
+    @patch('scripts.dispatcher.load_tiers')
+    def test_dispatch_passes_item_build_cmd_as_verify_cmd_for_doc_item(
+        self,
+        mock_load_tiers: Mock,
+        mock_librarian_run: Mock,
+        mock_hash_file: Mock,
+        mock_save_run: Mock,
+        mock_recheck_regression_flags: Mock
+    ) -> None:
+        """Regression for a real false-success bug (2026-08-28): dispatch()
+        called librarian_escalate.run() without verify_cmd=, so its own
+        verify_cmd_resolved fell through to tier_5_librarian.verify_command
+        (null in config) then the literal no-op "true" -- the item's real
+        build_cmd (e.g. a content-asserting check confirming the intended
+        file actually changed) was never run at all, and "success" was
+        reported unconditionally regardless of what actually landed on
+        disk. Confirmed live: a doc update reported success twice while
+        writing to a wrong resolved path; the item's own build_cmd would
+        have caught it immediately had it run."""
+        mock_recheck_regression_flags.return_value = False
+        expected_build_cmd = "test -f docs/notes.md && grep -q expected docs/notes.md"
+        state = {
+            "run_id": "test_run",
+            "project_dir": str(self.repo_root),
+            "breakdown": {
+                "phases": [
+                    {
+                        "name": "Phase 1",
+                        "items": [
+                            {
+                                "target": "docs/notes.md",
+                                "description": "Update document",
+                                "build_cmd": expected_build_cmd,
+                            }
+                        ]
+                    }
+                ]
+            },
+            "results": []
+        }
+        mock_load_tiers.return_value = {
+            "tier_5_librarian": {
+                "enabled": True,
+                "target_globs": ["*.md", "docs/**"]
+            }
+        }
+
+        mock_librarian_run.return_value = {
+            "status": "success",
+            "resolved_by": "tier_5"
+        }
+
+        dispatch(state)
+        call_kwargs = mock_librarian_run.call_args_list[0].kwargs
+
+        self.assertEqual(call_kwargs["verify_cmd"], expected_build_cmd)
