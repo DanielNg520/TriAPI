@@ -29,3 +29,5 @@
   as of 2026-08-25: not yet confirmed fixed — check
   `tests/test_ollama_service_lifecycle.py` directly if this test module
   is ever touched again before assuming it's still broken.**
+- **Correction (2026-08-28):** `test_cmd_dispatch_restores_ollama_state_on_exception`
+  is now confirmed passing with full mocking in place.

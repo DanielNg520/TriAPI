@@ -422,3 +422,13 @@ Now I have full grounding. Here's the plan:
 <!-- triapi:plan run_id=20260828-004343-de5ad2 end -->
 
 
+
+<!-- triapi:plan run_id=20260828-023258-1fe9e3 start -->
+## TriAPI Plan (run 20260828-023258-1fe9e3, appended 2026-08-28)
+
+1. Phase 1: Update Code Documentation
+   - [x] `scripts/dispatcher.py`: Update the docstring of `_is_deepseek_peak_hours()` to state that the weekend exception uses "Beijing time" instead of the "America/Los_Angeles timezone". This aligns the text with the actual logic in `budget_guard.py`. Do not change any implementation logic. Verify with `python3 -m py_compile scripts/dispatcher.py`.
+
+2. Phase 2: Update Carryover Documentation
+   - [x] `docs/carryover/20260824-235900-misc-resolved-fixes.md`: Append a brief dated correction note (2026-08-28) stating that the test `test_cmd_dispatch_restores_ollama_state_on_exception` is now confirmed passing with full mocking in place. Do not remove or rewrite the original text, only append the correction. This edit MUST be executed using the `scripts/librarian_escalate.py` CLI, not via manual file write/edit tools. Verify with `python3 -m unittest tests.test_branch_features -v`.
+<!-- triapi:plan run_id=20260828-023258-1fe9e3 end -->

@@ -1012,17 +1012,6 @@ def _run_design_judge(item: dict, result: dict, state: dict, task_id: str) -> di
     return result
 
 
-def _is_deepseek_peak_hours(now_utc: time.struct_time | None = None) -> bool:
-    """True when the given UTC time (default: now) is inside DeepSeek's peak
-    billing window (06:00-10:00 UTC). Used by handle_fix_forward to warn about
-    expensive Tier 3 escalations. Delegates to
-    budget_guard.check_tier3_peak_hours_ok(), which reads peak windows from
-    config/tiers.yaml and applies weekend (Sat/Sun) exceptions in the
-    America/Los_Angeles timezone -- on weekends the off-peak rate is in
-    effect and this returns False."""
-    return not check_tier3_peak_hours_ok()["ok"]
-
-
 def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_id: str) -> dict:
     """Invokes Tier 3 to apply the design judge's refactor instructions directly.
 
@@ -1031,11 +1020,12 @@ def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_
     judge's rejection path only, so the added cost is scoped to items that
     already failed design review.
     """
-    if _is_deepseek_peak_hours():
+    peak_guard = check_tier3_peak_hours_ok()
+    if not peak_guard["ok"]:
         log.warning(
-            "[%s] Tier 3 is in DeepSeek peak billing hours (06:00-10:00 UTC); "
-            "fix-forward escalation may be expensive",
+            "[%s] %s; fix-forward escalation may be expensive",
             task_id,
+            peak_guard["reason"],
         )
     log.info("[%s] Design check failed. Running fix-forward...", task_id)
     target_path = Path(state["project_dir"]) / item["target"]
