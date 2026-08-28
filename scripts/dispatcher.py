@@ -929,7 +929,20 @@ def _default_build_cmd(target: str) -> str:
     dependency risk against the target project's own environment, so it's
     safe to always apply to .py targets; other code extensions are left at
     the existence check for now rather than risk depending on a linter/
-    interpreter that may not be on PATH in the target project."""
+    interpreter that may not be on PATH in the target project.
+
+    A test file (`_is_test_target()`) gets a stronger default than plain
+    `py_compile`: `py_compile` only checks syntax, so a hallucinated test
+    file that imports a nonexistent symbol or calls a nonexistent function
+    still passes it cleanly -- confirmed live 2026-08-28, twice, once with
+    a fully fabricated test file. Running the test module via `unittest`
+    catches import-time and collection-time NameError/ImportError/
+    AttributeError as well as syntax errors, at the (small, since these
+    are already-fast unit tests by this repo's own convention) cost of
+    actually executing it."""
+    if _is_test_target(target):
+        module = target[:-3].replace("/", ".")
+        return f"PYTHONPATH=. python3 -m unittest {module} -v"
     if target.endswith(".py"):
         return f"python3 -m py_compile {shlex.quote(target)}"
     return f"test -f {shlex.quote(target)}"
