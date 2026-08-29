@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260829-000000-fact-proposal-port-plus-severe-daemon-blocker-found.md",
+  "active": "20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md",
   "history": [
+    {
+      "file": "20260829-000000-fact-proposal-port-plus-severe-daemon-blocker-found.md",
+      "date": "2026-08-29",
+      "status": "RESOLVED",
+      "topic": "fact-proposal port complete, severe daemon-shim blocker found and later resolved"
+    },
     {
       "file": "20260828-171500-ohmyllama-full-repo-audit-4-of-6-items-false-success.md",
       "date": "2026-08-28",
