@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260828-171500-ohmyllama-full-repo-audit-4-of-6-items-false-success.md",
+  "active": "20260829-000000-fact-proposal-port-plus-severe-daemon-blocker-found.md",
   "history": [
+    {
+      "file": "20260828-171500-ohmyllama-full-repo-audit-4-of-6-items-false-success.md",
+      "date": "2026-08-28",
+      "status": "RESOLVED",
+      "topic": "Full-repo audit via triapi plan/dispatch found+fixed 5 real bugs in oh-my-llama, most severe: agent_enabled=True silently swallowed every approval confirm/reject. 4 of 6 dispatched items initially came back tier-success but were actually broken on manual verification -- caught only via real-code verification, not the items' own narrow build_cmds. Commit fa76279, pushed clean."
+    },
     {
       "file": "20260828-131500-ohmyllama-phase5-resumed-recurring-buildcmd-gap-fixed.md",
       "date": "2026-08-28",
