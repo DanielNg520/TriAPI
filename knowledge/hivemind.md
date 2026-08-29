@@ -803,3 +803,103 @@ def should_skip_expensive_call(task_description: str) -> tuple[bool, str]:
 *   **Safety:** Prevents aggressive optimizations from causing false positives and breaking unrelated tasks.
 *   **Performance:** Cheap substring checks effectively guard more complex or expensive logic from running unnecessarily.
 *   **Robustness:** The system degrades gracefully to the default, safe behavior whenever the user's intent is ambiguous.
+
+### Adding to a Discriminated Union Registry
+
+When adding a new variant to a Pydantic discriminated union that also utilizes explicit registries for introspection, you must follow a strict registration checklist. Simply defining the new model class is insufficient.
+
+In this codebase pattern, adding a new type (e.g., a new `Intent`) requires exactly **four updates** in the same file:
+
+1.  **Define the Model Class:** Create the subclass with its specific `Literal` discriminator field (e.g., `kind: Literal["add_email_rule"]`).
+2.  **Update the Union Type:** Append the new class to the explicit `Union` definition (`_AnyIntent`) so Pydantic knows it is a valid resolution target for the discriminator.
+3.  **Update the Discriminator Tuple:** Add the string literal to the list of known keys (`INTENT_KINDS`).
+4.  **Update the Introspection Dictionary:** Map the string literal to the new class in the models registry (`INTENT_MODELS`).
+
+**Why this matters:** 
+While Pydantic uses the `Union` type for its own runtime validation and payload parsing, other parts of the system (such as LLM tool schema generators) often rely on the explicit dictionaries (`INTENT_MODELS`) to introspect available fields without having to deconstruct complex `Annotated` or `Union` typing internals. Missing any of these four steps will lead to either runtime validation crashes or silent parser omissions.
+
+### [Ensure Directory Existence Before File Operations]
+When dynamically creating or appending to files within a nested directory structure, always ensure the parent directories exist to prevent `FileNotFoundError`s. The standard library's `pathlib.Path` provides a concise and safe way to handle this using `.mkdir(parents=True, exist_ok=True)` immediately before opening the target file.
+
+**Example from code:**
+```python
+import pathlib
+
+# Safely create the target directory and any intermediate parent directories
+pathlib.Path("10-Memory/Rules/").mkdir(parents=True, exist_ok=True)
+
+# Confidently write or append to the file knowing the path exists
+with open("10-Memory/Rules/EmailRules.md", "a") as f:
+    f.write(intent.rule_text + "\n")
+```
+
+### Intent-Based Worker Execution (Command Pattern)
+
+**Pattern Description:**
+When triggering background tasks or workers from adapters (like UI callbacks or webhooks), avoid ad-hoc method invocations that require reflection (e.g., checking if a `run` method exists or if it's asynchronous). Instead, encapsulate the request data into a strongly-typed `Intent` (or Command) object and pass it to a callable worker with a unified interface.
+
+**Before:**
+```python
+# Ad-hoc, fragile invocation relying on reflection and specific method signatures
+worker = MarkMailReadWorker()
+if hasattr(worker, "run") and asyncio.iscoroutinefunction(worker.run):
+    await worker.run(msg_id)
+elif hasattr(worker, "run"):
+    await asyncio.to_thread(worker.run, msg_id)
+```
+
+**After:**
+```python
+# Clean, uniform invocation using the Command pattern
+from semai.core.intents import MarkMailRead
+
+worker = MarkMailReadWorker()
+intent = MarkMailRead(kind="mark_mail_read", msg_id=msg_id)
+await worker(intent)  # Worker implements __call__(self, intent: Intent)
+```
+
+**Key Benefits:**
+- **Uniform Interface:** All workers share a standard execution signature (e.g., `__call__`), completely eliminating the need for `hasattr` or `iscoroutinefunction` checks in the caller.
+- **Extensibility:** If a worker needs more context (e.g., user ID, timestamp), you simply add fields to the `Intent` object rather than mutating the method signatures across multiple worker classes.
+- **Decoupling:** The adapter (e.g., Telegram bot) is decoupled from the worker's implementation details. It only needs to know how to construct the intent.
+- **Type Safety & Validation:** `Intent` objects (especially if built with Dataclasses or Pydantic) validate their own state, keeping data validation logic out of the adapter layer.
+
+### Gate High-Impact Agent Actions Behind User Approval
+
+When building action registries for automated agents or workflows, strictly differentiate between safe (read-only or low-impact) actions and high-impact (destructive or mutating) actions. 
+
+Actions that modify external state, alter configurations, or perform destructive operations—such as adding email routing rules, trashing emails, running terminal commands, or modifying calendars—should be gated behind explicit user approval (e.g., using `register_approval_required`). Conversely, safe operations like fetching data, querying lists, or retrieving contexts can be registered to execute autonomously.
+
+**Example:**
+```python
+# Safe, read-only action: can execute autonomously
+registry.register("list_mail", ListMailWorker(settings))
+
+# High-impact, state-mutating action: must require user approval
+registry.register_approval_required("add_email_rule", AddEmailRuleWorker(settings))
+```
+
+### Dependency Injection for Protocol Adapters
+
+When building protocol adapters, webhooks, or event listeners (such as a Telegram or Slack bot adapter), avoid hardcoding or globally importing the central message dispatcher. Instead, inject the dispatcher as a dependency through the constructor.
+
+**Why it matters:**
+- **Separation of Concerns:** The adapter remains strictly focused on protocol-specific mechanics (parsing payloads, making API calls, handling retries) while delegating all core business logic and command routing to the dispatcher.
+- **Testability:** Injecting the dependency allows you to pass a mock or dummy dispatcher when unit testing the adapter. This makes it trivial to verify that the adapter correctly formats and forwards incoming messages without standing up the entire application core.
+- **Avoids Circular Imports:** Adapters often need to trigger core application logic, and the core application often needs to send outbound messages through the adapter. Injecting dependencies at initialization prevents import cycles.
+
+**Example:**
+```python
+class TelegramAdapter:
+    # Inject the dispatcher dependency alongside config and state storage
+    def __init__(self, cfg, store, dispatcher):
+        self.cfg = cfg
+        self.store = store
+        self._dispatcher = dispatcher  # <--- Injected dependency
+
+    async def _handle_message(self, upd: dict) -> None:
+        text = upd.get("message", {}).get("text", "")
+        # Delegate business logic to the injected dispatcher
+        result = await asyncio.to_thread(self._dispatcher.dispatch, text)
+        await self._send(chat_id, result.message)
+```

@@ -413,3 +413,11 @@ Ran 12 tests in 0.003s
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/scripts/dispatcher.py | HASH: 647c1bd397c231b80b85d6cc18905d81b6c50e08c38e61ea5bd2a3a737f3145f | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/ARCHITECTURE.md | HASH: b40996897b091db5156e8a4c572d1db0eb7f7383d66bd557523ba3b836c1f5b0 | REASON: Could not apply proposed edit: Block 3: SEARCH text not found verbatim in the current file.
 - [ ] FILE: /home/dyne/Documents/Coding/TriAPI/AGENTS.md | HASH: b1158360556b4ff325663030a00fc87c1e5cb597419e60b1ea95d808fefb6b02 | REASON: Rebuild failed after Tier 3 rewrite: Command timed out after 300s: python3 scripts/librarian_escalate.py --task-id update-agents-md-tier3-timeout-20260826 --description "Record two changes in AGENTS.md's index, following its existing style exactly (do not restructure or prune anything else): (1) add tests/test_orchestrator_tier3_timeout_skip.py to the ## tests/ section's file list, describing it as regression coverage proving a scripts/llm_client.py subprocess.TimeoutExpired from the agy CLI (Tier 3) is returned by scripts/tier3_escalate.py as status: 'timeout' and soft-escalates to Tier 2 (DeepSeek) in scripts/orchestrator.py's run_task(), rather than raising RuntimeError or falling through to human_handoff; (2) add a short note near the tiers.yaml/scripts description that ARCHITECTURE.md was refreshed on 2026-08-26 to describe the current 5-tier state (Tier 2=DeepSeek, Tier 3=agy/gemini-3.1-pro, Tier 4=local Ollama, Tier 5=librarian) replacing its previous stale 4-tier description." --target AGENTS.md --workdir .
+- [ ] FILE: /home/dyne/Documents/Coding/oh-my-llama/src/semai/core/daemon.py | HASH: b8a5796095737989e9de55e21c1f160979ba12291929e8f4b257ffa2c49d11e1 | REASON: Rebuild failed after Tier 3 rewrite: Traceback (most recent call last):
+  File "<stdin>", line 11, in <module>
+AssertionError: agent fallback routing must exclude both chat and confirm
+
+- [ ] FILE: /home/dyne/Documents/Coding/oh-my-llama/src/semai/adapters/telegram.py | HASH: 29055d78f4d66d10ecc3adc23b74c540a5498d439d6fc04e5fae8f0c392eb4d5 | REASON: Rebuild failed after Tier 3 rewrite: Traceback (most recent call last):
+  File "<stdin>", line 3, in <module>
+AssertionError
+
