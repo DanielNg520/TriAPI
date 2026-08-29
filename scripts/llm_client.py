@@ -191,8 +191,26 @@ def _call_claude_cli(
     model name like "claude-sonnet-5"); `effort` as `--effort` (low, medium,
     high, xhigh, max). Both are omitted from the invocation when falsy, in
     which case the CLI's own default applies.
+
+    `--tools ""` is mandatory, not optional: this tier is meant to be a pure
+    text-in/text-out completion backend, identical in contract to Tier 2/3's
+    plain HTTP calls -- every edit is supposed to come back as SEARCH/REPLACE
+    text that edit_blocks.py parses and applies, never as a direct filesystem
+    write. Without this flag, `claude -p` is a fully agentic CLI: run with no
+    cwd override, it inherits the caller's cwd (the real target repo, since
+    `triapi dispatch` is invoked from inside it) and, on a permission-mode
+    that allows tool use, can Read/Edit/Bash the live repo directly. Found
+    live 2026-08-29: Tier 1 was escalated for oh-my-llama's daemon.py port,
+    replied with no parseable SEARCH/REPLACE blocks (correctly logged as
+    "fix_rejected" -> human_handoff), and yet the real file on disk had
+    already been correctly edited and manually verified passing
+    `bash run_tests.sh` -- Claude Code had done the whole port itself via its
+    own tools instead of describing it, invisible to edit_blocks.py,
+    content_guard.py, scope_guard.py, and mock_patch_lint.py alike, and the
+    pipeline reported total failure for a task that had, in fact, already
+    silently succeeded outside its own safety net.
     """
-    cmd = ["claude", "-p", "--system-prompt", system_prompt]
+    cmd = ["claude", "-p", "--tools", "", "--system-prompt", system_prompt]
     if model:
         cmd.extend(["--model", model])
     if effort:
