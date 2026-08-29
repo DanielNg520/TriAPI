@@ -31,6 +31,28 @@ class Tier3EscalateTimeoutTests(unittest.TestCase):
         self.assertIn("timed out", reason)
 
 
+class Tier3EscalateCalledProcessErrorTests(unittest.TestCase):
+    def test_called_process_error_returns_fix_rejected_not_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.py"
+            target.write_text("original\n", encoding="utf-8")
+            with mock.patch.object(
+                tier3_escalate.llm_client,
+                "execute_llm",
+                side_effect=subprocess.CalledProcessError(
+                    0, ["agy", "-p"], "", "agy prompt too large for argv: 150000 chars (limit 100000)"
+                ),
+            ):
+                result = tier3_escalate.escalate(
+                    "task-1", str(target), context_blob="ctx", description="desc"
+                )
+        self.assertEqual(result["status"], "fix_rejected")
+        self.assertNotEqual(result["status"], "error")
+        reason = result.get("reason")
+        self.assertTrue(reason)
+        self.assertIn("Tier 3 CLI call failed", reason)
+
+
 class OrchestratorTier3TimeoutSoftEscalateTests(unittest.TestCase):
     def test_tier3_timeout_soft_escalates_to_tier2(self) -> None:
         config = {

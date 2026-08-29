@@ -218,6 +218,30 @@ def escalate(
             "output_tokens": 0,
             "cost_usd": 0.0,
         }
+    except subprocess.CalledProcessError as e:
+        # _call_agy_cli() raises this family for every CLI-level failure --
+        # a genuinely non-zero exit, a prompt too large for argv (guarded at
+        # _AGY_MAX_PROMPT_CHARS), malformed JSON stdout, or a non-SUCCESS
+        # status. All of these are content/CLI-shaped failures of the same
+        # kind edit-block-apply failures already get ("fix_rejected", which
+        # orchestrator.py logs and falls through to Tier 2) -- not an
+        # infra-level problem lower tiers can't route around. Found live
+        # 2026-08-29: an oversized-prompt CalledProcessError was previously
+        # caught by the generic `except Exception` below and returned as
+        # "error", which orchestrator.py treats as fatal and crashes the
+        # entire `triapi dispatch` process instead of soft-escalating, the
+        # same crash-vs-soft-escalate distinction the timeout branch above
+        # already gets right.
+        log.warning("[%s] Tier 3 CLI call failed (soft-escalating rather than crashing): %s", task_id, e)
+        return {
+            "status": "fix_rejected",
+            "reason": f"Tier 3 CLI call failed: {e}",
+            "model": model_name,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        }
     except Exception as e:
         log.error("[%s] Tier 3 request failed: %s", task_id, e)
         return {
