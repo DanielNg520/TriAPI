@@ -903,3 +903,97 @@ class TelegramAdapter:
         result = await asyncio.to_thread(self._dispatcher.dispatch, text)
         await self._send(chat_id, result.message)
 ```
+
+### Approval Gates for Mutating Agent Actions
+When designing worker architectures for AI agents, operations that produce side effects (like writing to a file, database, or memory vault) should use a two-step approval process rather than executing immediately. 
+
+By splitting the worker into `propose(intent)` and `execute(action)` phases:
+1. **Validation**: The `propose` phase can sanitize and validate inputs (e.g., bounds checking string lengths, ensuring data isn't empty) before asking for approval.
+2. **Safety**: A `ProposedAction` can be surfaced to the user or an automated policy gate for explicit approval, preventing malformed, hallucinated, or runaway writes.
+3. **Execution**: The `execute` phase operates only on pre-validated payloads, ensuring that when the side-effect finally occurs, the data is safe, approved, and correctly structured.
+
+### Explicit Approval for State-Mutating Workers
+
+When registering workers that perform state-mutating, destructive, or consequential actions (such as writing data, modifying files, or sending external requests), use `registry.register_approval_required()` instead of `registry.register()`. 
+
+This routes the intent through an authorization or human-in-the-loop approval gate, ensuring sensitive operations are not executed automatically without appropriate oversight. Conversely, use `registry.register()` only for read-only or harmless actions (e.g., `recall_memory`, `list_mail`).
+
+### Restrict Memorization of Retrieved Data (Prevent Tool-to-Memory Leakage)
+
+**Context:**  
+Agentic systems often feature both retrieval tools (e.g., reading emails, calendars, or documents) and long-term memory tools (e.g., saving facts or notes). A common failure mode occurs when an agent retrieves transient information using a read tool and then spontaneously decides to permanently store it using the memory tool. This creates redundant, duplicated, and potentially stale data in the user's long-term memory, or pollutes it with information that already belongs to another system of record.
+
+**Solution:**  
+Enforce mutual exclusivity between memory-writing tools and other data-gathering tools within a single agent invocation or reasoning loop. If the agent attempts to propose or write a fact to memory, verify that no other tools have been called during the current session. If other tools have been called, refuse the memorization request.
+
+**Example (Python):**
+```python
+if tool_kind == "remember_fact":
+    # Check if any other tools were called during this agent session
+    other_tools = [name for name in agent.called_tools if name != "propose_remember_fact"]
+    if other_tools:
+        return f"REFUSED: Cannot remember facts after calling other tools. (Tools called: {other_tools})"
+```
+
+**Benefits:**
+- **Prevents Stale Data:** Ensures transient states (like today's calendar events or emails) aren't saved as permanent facts.
+- **Reduces Duplication:** Prevents the agent from unnecessarily copying data from one system of record into its own memory bank.
+- **Enforces Explicit Intent:** Guarantees that memorization only happens when it is the primary and sole intent of the user's request, unprompted by other retrieved context.
+
+### Human-in-the-Loop Action Approval Workflow
+
+When integrating autonomous agents into an asynchronous task orchestration system, agents may propose actions (such as tool calls or system modifications) in addition to generating textual answers. To execute these safely, implement a suspension and approval pattern rather than ignoring the proposals or executing them blindly.
+
+**Pattern:**
+1. **Inspect the Full Result:** Rather than immediately extracting and returning an agent's string response, capture the entire result object.
+2. **Detect Proposed Actions:** Check if the agent's result contains actionable items (e.g., `result.proposals`).
+3. **Persist and Suspend:** If proposals are found:
+   - Register the proposed action in a stateful approval store to generate a tracking record with the action's payload and description.
+   - Transition the active task into an "awaiting approval" state, linked to the new approval record.
+   - Return early from the handler to suspend execution.
+4. **Defer Completion:** Allow an out-of-band process (like a human-in-the-loop confirmation UI) to review the payload, approve/reject it, and subsequently resume the orchestration flow.
+
+This ensures safe, trackable execution of agent-driven side effects while maintaining non-blocking asynchronous task progression.
+
+### Secure File Access via Root Narrowing
+
+When implementing file ingestion or document reading (e.g., for RAG systems or file uploads), avoid using general-purpose file readers that lack path restrictions. Instead, delegate file operations to dedicated workers or components that enforce "allowed-roots narrowing." 
+
+**Why it matters:**
+*   **Security:** Intrinsically prevents path traversal vulnerabilities (e.g., `../../../etc/passwd`) and unauthorized access to sensitive system files.
+*   **Isolation:** Ensures that operations on external files only occur within explicitly permitted sandbox directories.
+*   **Centralized Policy:** Moving access control into a dedicated worker ensures that all file ingestion flows abide by the same security boundaries, rather than relying on individual callers to remember to validate paths.
+
+**Implementation Pattern:**
+Instead of a generic file reader (`DocumentIngester.read(path)`), use a structured command or intent (`IngestDocument(path)`) processed by a worker that validates the path against a set of allowed roots before attempting to read or process the file.
+
+### Keep Handwritten Test Fakes Synchronized with Real Interfaces
+
+When you use handwritten fake classes (like `FakeAgentResult`) to simulate dependencies in unit tests, you create a maintenance burden: these fakes must be manually updated whenever the real interface changes or when the code under test starts accessing new attributes. 
+
+In this change, a `proposals = []` attribute had to be added to the `FakeAgentResult` mock because the production code started expecting that field on the result object, which would otherwise cause an `AttributeError` during the test run.
+
+**Best Practice:**
+To avoid the fragility of manually maintaining the shape of fake objects, prefer using Python's built-in mocking tools with strict interface enforcement, such as `unittest.mock.create_autospec` or `Mock(spec=RealClass)`. These tools automatically ensure your mock matches the real object's signature and attributes, preventing situations where your test suite's mocks drift from the actual production interfaces. If you must use handwritten fakes, ensure they are meticulously updated across the test suite whenever the underlying data models or return types are extended.
+
+### Programmatic Instantiation of Semantic Intents
+
+When manually constructing intent objects (such as `IngestDocument`) to bypass the NLP pipeline and invoke workers directly, you must ensure that standard base fields normally populated by the natural language router are provided. 
+
+When faking an intent hit programmatically:
+- Provide the required intent identifier (e.g., `kind="ingest_document"`).
+- Provide a synthetic confidence score (e.g., `confidence=1.0`).
+- Supply a fallback for the original query (e.g., using a filename or task description for `raw_utterance`) to prevent downstream validation errors.
+
+Additionally, always ensure you are accessing the standardized response fields (e.g., using `result.message` instead of `result.text`) when extracting data from the returned worker result object.
+
+### Actionable Error Messages for LLM Tool Calls
+
+When returning an error or refusing a tool call from an LLM, do not return brief, cryptic error codes (e.g., `REFUSED: [list]`). LLMs rely on text to understand their environment, so a short error often leads to confusion, repeated failed attempts, or hallucinations.
+
+Instead, return a highly descriptive, actionable error message that includes:
+1. **The Rule**: Explain the specific invariant or rule that was violated (e.g., "a fact may only be proposed from what the user said directly").
+2. **The Context**: Explain *how* the current state violates that rule (e.g., "you have already called [other tools] this turn").
+3. **The Corrective Action**: Tell the agent exactly what it should do next (e.g., "Answer the question instead.").
+
+By explaining *why* the action failed and *what* to do next, you steer the agent directly back onto the desired path without needing extra code to handle retry loops.
