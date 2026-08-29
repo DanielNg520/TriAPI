@@ -19,6 +19,7 @@ from scripts.tier4_worker import run
 from scripts.state import clear_state
 from scripts.dispatcher import (
     _enforce_file_size_ceiling,
+    _force_verify_only_for_pure_deletions,
     _item_deletes_target_file,
     _split_plan_by_phase,
     TIER4_MAX_CONTEXT_CHARS,
@@ -222,6 +223,64 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         self.assertTrue(_item_deletes_target_file(deletes))
         self.assertFalse(_item_deletes_target_file(edits))
         self.assertFalse(_item_deletes_target_file(far_mention))
+
+    def test_force_verify_only_sets_it_for_rm_shaped_deletion_item(self):
+        # Real incident 2026-08-29 (run 20260828-182931-264248): the
+        # planner left this exact item shape verify_only=false, so it went
+        # through the LLM SEARCH/REPLACE path and every tier failed with
+        # "SEARCH text not found verbatim" -- build_cmd already deletes the
+        # file directly, so this guard must force verify_only=True instead
+        # of trusting the planner's choice.
+        phases = [{
+            "name": "p",
+            "items": [{
+                "target": "ohmyllama/capabilities/search_router.py",
+                "description": "Delete ohmyllama/capabilities/search_router.py to remove the legacy search routing capability.",
+                "build_cmd": "rm ohmyllama/capabilities/search_router.py",
+                "verify_only": False,
+            }],
+        }]
+        _force_verify_only_for_pure_deletions(phases, str(self.repo_root))
+        self.assertTrue(phases[0]["items"][0]["verify_only"])
+
+    def test_force_verify_only_leaves_edit_items_alone(self):
+        phases = self._phases_with_desc("test_file.cpp", "Edit test_file.cpp to add a new method.")
+        phases[0]["items"][0]["build_cmd"] = "cmake --build build"
+        phases[0]["items"][0]["verify_only"] = False
+        _force_verify_only_for_pure_deletions(phases, str(self.repo_root))
+        self.assertFalse(phases[0]["items"][0]["verify_only"])
+
+    def test_force_verify_only_leaves_deletion_alone_when_build_cmd_has_no_rm(self):
+        # A deletion-shaped description whose build_cmd doesn't actually
+        # perform the rm (e.g. only a post-hoc grep check) must not be
+        # forced verify_only -- that would skip the file ever being
+        # deleted, since verify_only never invokes an LLM edit either.
+        phases = [{
+            "name": "p",
+            "items": [{
+                "target": "ohmyllama/capabilities/search_router.py",
+                "description": "Delete ohmyllama/capabilities/search_router.py to remove the legacy search routing capability.",
+                "build_cmd": 'grep -rn "from ohmyllama.capabilities.search_router" ohmyllama/ src/ tests/',
+                "verify_only": False,
+            }],
+        }]
+        _force_verify_only_for_pure_deletions(phases, str(self.repo_root))
+        self.assertFalse(phases[0]["items"][0]["verify_only"])
+
+    def test_force_verify_only_does_not_touch_already_true_or_git_items(self):
+        already_true = [{
+            "name": "p",
+            "items": [{
+                "target": "a.py", "description": "Delete a.py.",
+                "build_cmd": "rm a.py", "verify_only": True,
+            }],
+        }]
+        _force_verify_only_for_pure_deletions(already_true, str(self.repo_root))
+        self.assertTrue(already_true[0]["items"][0]["verify_only"])
+
+        git_item = [{"name": "p", "items": [{"git": "commit", "target": "a.py"}]}]
+        _force_verify_only_for_pure_deletions(git_item, str(self.repo_root))
+        self.assertNotIn("verify_only", git_item[0]["items"][0])
 
     def test_item_deletes_target_file_rejects_delete_of_content_within_file(self):
         """Real incident 2026-08-20: a plan item pruning stale sections OUT

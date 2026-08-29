@@ -343,6 +343,39 @@ def _item_deletes_target_file(item: dict) -> bool:
     return bool(pattern.search(desc))
 
 
+def _force_verify_only_for_pure_deletions(phases: list[dict], project_dir: str) -> None:
+    """Force verify_only=True on any item whose own description deletes its
+    target file wholesale (_item_deletes_target_file) and whose build_cmd
+    already performs that deletion via a shell `rm` of the target.
+
+    Found live 2026-08-29 (run 20260828-182931-264248, oh-my-llama Phase
+    5G): the planner marked one deletion item verify_only=true (worked --
+    direct `rm`, no LLM involved) and an identically-shaped deletion item
+    verify_only=false in the SAME breakdown -- every tier then failed it
+    with "SEARCH text not found verbatim", human_handoff, because a
+    non-verify_only item is routed through the LLM SEARCH/REPLACE
+    edit-block path, which for a whole-file deletion means asking a model
+    to reproduce the entire current file content verbatim in a SEARCH
+    block just to replace it with nothing -- fragile for no reason, since
+    build_cmd already contains the real `rm`. The planner's own
+    verify_only choice for this item shape isn't reliable, so enforce it
+    here (same pattern as _enforce_file_size_ceiling, _item_deletes_target_file
+    above) rather than trusting the LLM breakdown. Mutates items in place;
+    leaves alone any deletion item whose build_cmd does NOT already
+    contain an `rm` of the target, since forcing verify_only there would
+    skip the file actually being deleted."""
+    for phase in phases:
+        for item in phase["items"]:
+            if "git" in item or item.get("verify_only") or not item.get("target"):
+                continue
+            if not _item_deletes_target_file(item):
+                continue
+            build_cmd = item.get("build_cmd") or ""
+            target_name = Path(item["target"]).name
+            if re.search(rf"\brm\b[^&|;]*\b{re.escape(target_name)}\b", build_cmd):
+                item["verify_only"] = True
+
+
 def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | None:
     """Post-breakdown guard for a file item whose target is already at/over
     the Tier 4 context ceiling before any new content is added (see
@@ -639,6 +672,8 @@ def breakdown_plan(state: dict) -> dict:
         if size_error is not None:
             log.error("File size ceiling guard failed: %s", size_error)
             return {"status": "error", "reason": size_error}
+
+        _force_verify_only_for_pure_deletions(state["breakdown"]["phases"], state["project_dir"])
 
         encrypted_edit_error = _enforce_no_raw_edits_to_encrypted_files(
             state["breakdown"]["phases"], state["project_dir"])
