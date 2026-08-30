@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md",
+  "active": "20260829-210000-phase5g7-web-cut-plus-three-triapi-bugs-fixed.md",
   "history": [
+    {
+      "file": "20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md",
+      "date": "2026-08-29",
+      "status": "RESOLVED",
+      "topic": "daemon.py orchestrator port complete (Phase 5G's daemon-shim blocker resolved); tier3_escalate.py CalledProcessError crash-vs-soft-escalate and Tier 1 claude-CLI --tools \"\" fixes; queued the librarian FRESH-false-negative recurrence and oh-my-llama AGENTS.md over-ceiling items resolved/carried in the next file"
+    },
     {
       "file": "20260829-000000-fact-proposal-port-plus-severe-daemon-blocker-found.md",
       "date": "2026-08-29",

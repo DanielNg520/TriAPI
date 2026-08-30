@@ -1068,3 +1068,30 @@ Instead of relying solely on comments or static documentation to explain why a d
 
 **Why this matters:**
 As the codebase evolves—such as removing a module that directly imported a library—these tests act as a regression check. They will fail when usage changes, forcing developers to consciously re-evaluate the dependency's status and explicitly update its justification. This prevents silent drift where unused dependencies are left orphaned ("someone will figure it out later") or kept around for outdated reasons.
+
+### Sync Wrapper for Async CLI Entry Points
+
+When writing CLI applications in Python that use `asyncio`, you should expose a synchronous `main()` function that delegates to `asyncio.run()`, rather than making `main()` itself an `async` function. 
+
+**Why?**
+Python packaging tools (such as those resolving `[project.scripts]` in `pyproject.toml`) generate console script wrappers that expect a synchronous callable. If `main` is an `async def`, the generated entry script simply calls `main()` and passes its return value to `sys.exit()`. This returns an unawaited coroutine object rather than executing the application, leading to a silent failure or an `Unclosed coroutine` warning.
+
+**The Pattern:**
+Rename your primary async logic to an internal function (like `_amain` or `async_main`), and provide a synchronous wrapper named `main` to serve as the project's entry point.
+
+```python
+import asyncio
+import sys
+
+async def _amain() -> int:
+    # Your async CLI logic here
+    await asyncio.sleep(0.1)
+    return 0
+
+def main() -> int:
+    """Synchronous entry point for packaging console_scripts."""
+    return asyncio.run(_amain())
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
