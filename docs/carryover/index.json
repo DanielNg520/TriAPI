@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md",
+  "active": "20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md",
   "history": [
+    {
+      "file": "20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md",
+      "date": "2026-08-30",
+      "status": "RESOLVED",
+      "topic": "oh-my-llama docs refreshed for a new session (stale CARRYOVER.md corrected, 4 more plan blocks confirmed resolved and archived); caught+fixed a real content-loss regression from my own plan's tautological verify_cmd deleting a block it was told to preserve"
+    },
     {
       "file": "20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md",
       "date": "2026-08-30",
