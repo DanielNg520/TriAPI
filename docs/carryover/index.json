@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md",
+  "active": "20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md",
   "history": [
+    {
+      "file": "20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md",
+      "date": "2026-08-30",
+      "status": "RESOLVED",
+      "topic": "oh-my-llama AGENTS.md cleanup attempted, blocked on discovering MAPPING.md (375,554 chars) needed its own overflow split first; nothing changed, resolved in the next file"
+    },
     {
       "file": "20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md",
       "date": "2026-08-29",
