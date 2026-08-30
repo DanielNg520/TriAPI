@@ -389,23 +389,38 @@ def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | No
       _item_deletes_target_file) is exempt outright -- otherwise a package
       split could never dispatch the retirement step for the very file
       it's splitting.
-    - Any other item on an oversized target is marked skip_tier4=True (in
-      place, mutating the item) instead of failing: Tier 4's small local
-      context window can never hold it, but Tier 3/2's cloud context
-      windows are far larger, so orchestrator.run_task() routes straight
-      to Tier 3 for that one item rather than refusing the entire plan.
-      This is a one-time unblock for the CURRENT oversized file, not a
-      standing way to keep patching it in place -- so the item's
-      description also gets an explicit instruction appended: reduce the
-      file's size (split it into cohesive smaller files/modules, per the
-      ohmyllama/state/ package precedent) as part of this fix, not just
-      edit its content while leaving it oversized. A future item that
-      still targets the same file after that should find it under the
-      ceiling and go through Tier 4 normally again.
+    - A doc target (matches tier_5_librarian.target_globs, with that tier
+      enabled) never actually reaches Tier 4 -- dispatch_plan()'s per-item
+      loop routes it to tier_5_librarian (agy/gemini-3.7-flash, a large
+      cloud context) regardless of this guard, so skip_tier4=True would be
+      a no-op and the Tier-4-context wording below would be actively false
+      for it. Still flagged (docs benefit from staying small for a
+      different reason -- token economy for any agent, human or Claude,
+      that reads the file directly -- see feedback_docs_are_index_files),
+      but with wording naming that reason instead of Tier 4, and without
+      setting skip_tier4.
+    - Any other (code) item on an oversized target is marked
+      skip_tier4=True (in place, mutating the item) instead of failing:
+      Tier 4's small local context window can never hold it, but Tier
+      3/2's cloud context windows are far larger, so
+      orchestrator.run_task() routes straight to Tier 3 for that one item
+      rather than refusing the entire plan. This is a one-time unblock for
+      the CURRENT oversized file, not a standing way to keep patching it
+      in place -- so the item's description also gets an explicit
+      instruction appended: reduce the file's size (split it into
+      cohesive smaller files/modules, per the ohmyllama/state/ package
+      precedent) as part of this fix, not just edit its content while
+      leaving it oversized. A future item that still targets the same
+      file after that should find it under the ceiling and go through
+      Tier 4 normally again.
       Only returns an error for a genuinely unrecoverable case (there is
       none left today, but the return type stays str | None for callers
       that still branch on failure).
     """
+    tier_5 = (load_tiers().get("tier_5_librarian") or {})
+    tier_5_enabled = tier_5.get("enabled", True)
+    tier_5_globs = tier_5.get("target_globs", [])
+
     for phase in phases:
         for item in phase["items"]:
             if "git" in item:
@@ -416,6 +431,18 @@ def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | No
             existing_chars = len(target_path.read_text())
             if existing_chars > TIER4_MAX_CONTEXT_CHARS:
                 if _item_deletes_target_file(item):
+                    continue
+                if tier_5_enabled and is_doc_target(item["target"], tier_5_globs):
+                    item["description"] = (
+                        item["description"]
+                        + f"\n\nNOTE: {item['target']} is already {existing_chars} chars, over "
+                        f"this repo's {TIER4_MAX_CONTEXT_CHARS}-char size ceiling. This target "
+                        "routes to tier_5_librarian, not Tier 4, so this isn't a context-window "
+                        "block -- but as part of this fix, reduce the file's size (split it into "
+                        "smaller, topic-scoped files per the docs/carryover and docs/agents "
+                        "overflow convention) anyway, since a doc this large is costly for any "
+                        "agent that has to read it directly."
+                    )
                     continue
                 item["skip_tier4"] = True
                 item["description"] = (

@@ -204,6 +204,41 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         self.assertIsNone(result)
         self.assertNotIn("skip_tier4", phases[0]["items"][0])
 
+    def test_enforce_file_size_ceiling_does_not_skip_tier4_for_oversized_doc_target(self):
+        # Doc targets never reach Tier 4 in the first place (dispatch_plan's
+        # per-item loop routes them to tier_5_librarian, a large-context
+        # cloud model), so this guard must not set skip_tier4 for one, and
+        # must not claim the file "cannot be used" on Tier 4 -- that framing
+        # is false once tier_5_librarian owns the file regardless of size.
+        doc_path = self.repo_root / "NOTES.md"
+        self._write_large_file(doc_path, TIER4_MAX_CONTEXT_CHARS + 1000)
+        phases = self._phases_with_desc("NOTES.md", "Append a note to NOTES.md.")
+        tiers_config = {"tier_5_librarian": {"enabled": True, "target_globs": ["*.md"]}}
+        with mock.patch("scripts.dispatcher.load_tiers", return_value=tiers_config):
+            result = _enforce_file_size_ceiling(phases, str(self.repo_root))
+        self.assertIsNone(result)
+        item = phases[0]["items"][0]
+        self.assertNotIn("skip_tier4", item)
+        self.assertIn("NOTES.md", item["description"])
+        self.assertIn(str(TIER4_MAX_CONTEXT_CHARS + 1000), item["description"])
+        self.assertNotIn("Tier 4 context ceiling", item["description"])
+        self.assertIn("tier_5_librarian, not Tier 4", item["description"])
+
+    def test_enforce_file_size_ceiling_still_skips_tier4_when_librarian_disabled(self):
+        # With tier_5_librarian disabled, a doc-shaped target falls back to
+        # the ordinary Tier 4/3 path, so the guard's normal skip_tier4
+        # behavior must still apply.
+        doc_path = self.repo_root / "NOTES.md"
+        self._write_large_file(doc_path, TIER4_MAX_CONTEXT_CHARS + 1000)
+        phases = self._phases_with_desc("NOTES.md", "Append a note to NOTES.md.")
+        tiers_config = {"tier_5_librarian": {"enabled": False, "target_globs": ["*.md"]}}
+        with mock.patch("scripts.dispatcher.load_tiers", return_value=tiers_config):
+            result = _enforce_file_size_ceiling(phases, str(self.repo_root))
+        self.assertIsNone(result)
+        item = phases[0]["items"][0]
+        self.assertTrue(item["skip_tier4"])
+        self.assertIn("Tier 4 context ceiling", item["description"])
+
     def test_item_deletes_target_file_requires_verb_near_filename(self):
         deletes = {
             "target": "ohmyllama/state.py",
