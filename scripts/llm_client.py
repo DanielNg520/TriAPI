@@ -245,8 +245,31 @@ def _call_agy_cli(
     """Run the local `agy` CLI with JSON output format.
 
     `model` is passed as `--model`; `effort` as `--effort`. Both are omitted
-    when falsy. The `--dangerously-skip-permissions` and
+    when falsy. The `--dangerously-skip-permissions`, `--mode plan`, and
     `--output-format json` flags are always set.
+
+    `--mode plan` is mandatory, not optional: every caller of this function
+    (tier_1_planner, tier_5_librarian's primary/fallback_agy legs) treats
+    `agy` as a pure text-in/text-out completion backend, identical in
+    contract to `_call_claude_cli` (which uses `--tools ""` for the same
+    reason). Without it, `--dangerously-skip-permissions` alone makes `agy`
+    a fully agentic CLI that can Read/Edit/Bash the live target repo
+    directly via its own tools instead of returning the edit as text.
+    Found live 2026-08-30: two `tier_5_librarian` items on oh-my-llama's
+    `MAPPING.md` split had their target file written correctly by `agy`
+    itself mid-call, then escalated to `human_handoff` anyway because the
+    *separate* `"response"` text `agy` returned (an unrelated summary, not
+    the file content) failed `content_guard`'s write check -- the same
+    "tier reports failure/silently succeeded outside the safety net"
+    failure mode `_call_claude_cli`'s own docstring describes for Claude,
+    now confirmed for `agy` too. `--mode plan` was verified live (see
+    `docs/carryover/` for this date) to suppress the direct write in both
+    response shapes this function's callers rely on -- a brand-new file's
+    complete contents in a fenced code block, and an existing file's
+    SEARCH/REPLACE blocks -- without changing the returned text at all,
+    because the librarian's own prompt already explicitly instructs "reply
+    with ... no other text" strongly enough to override plan mode's default
+    propose-and-ask-for-approval framing.
 
     Success requires returncode 0, valid JSON stdout with
     `"status" == "SUCCESS"` and a string `"response"`; the response is
@@ -272,7 +295,7 @@ def _call_agy_cli(
         cmd.extend(["--model", model])
     if effort:
         cmd.extend(["--effort", effort])
-    cmd.extend(["--dangerously-skip-permissions", "--output-format", "json"])
+    cmd.extend(["--dangerously-skip-permissions", "--mode", "plan", "--output-format", "json"])
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=_CLI_TIMEOUT
     )

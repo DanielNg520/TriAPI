@@ -56,7 +56,7 @@ class TestAgyProviderSuccess(unittest.TestCase):
             "agy", "-p", prompt,
             "--model", "m",
             "--effort", "high",
-            "--dangerously-skip-permissions",
+            "--dangerously-skip-permissions", "--mode", "plan",
             "--output-format", "json",
         ]
         stdout_json = json.dumps({"status": "SUCCESS", "response": "pong\n"})
