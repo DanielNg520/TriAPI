@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md",
+  "active": "20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md",
   "history": [
+    {
+      "file": "20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md",
+      "date": "2026-08-29",
+      "status": "RESOLVED",
+      "topic": "Three real oh-my-llama runtime bugs found+fixed live (WorkingDirectory= missing, MailWatcher init_db() never called, Telegram env-var-name mismatch); one dispatch regression caught (misleading same-file comment led a tier to revert the correct ExecStart back to a stale form, crash-looping the service) and reverted by hand; AGENTS.md over-ceiling item deliberately deferred to a fresh session"
+    },
     {
       "file": "20260829-210000-phase5g7-web-cut-plus-three-triapi-bugs-fixed.md",
       "date": "2026-08-29",

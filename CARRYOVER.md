@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md`](docs/carryover/20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md) | **ACTIVE** — three real oh-my-llama runtime bugs found+fixed live this session (WorkingDirectory= fix, MailWatcher init_db() fix commit 155603b, Telegram env-var-name fix commit 1a55065); one dispatch attempt regressed oh-my-llama.service into a crash loop, caught by manual diff review and reverted by hand; oh-my-llama's own AGENTS.md over-ceiling item still queued, deliberately not started this session |
+| [`docs/carryover/20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md`](docs/carryover/20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md) | **ACTIVE** — oh-my-llama `AGENTS.md` (91,354 chars) cleanup attempted, blocked: its `MAPPING.md` is 375,554 chars, itself over 5x this repo's ceiling — needs its own index/overflow split before the `AGENTS.md` plan-block folding can land; nothing changed in either file, working tree clean |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md`](docs/carryover/20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md) | 2026-08-29 | RESOLVED | Three real oh-my-llama runtime bugs found+fixed live (WorkingDirectory= missing, MailWatcher init_db() never called, Telegram env-var-name mismatch); one dispatch regression caught (misleading same-file comment led a tier to revert the correct ExecStart back to a stale form) and reverted by hand; AGENTS.md over-ceiling item deliberately deferred to a fresh session |
 | [`20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md`](docs/carryover/20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md) | 2026-08-29 | RESOLVED | daemon.py orchestrator port for oh-my-llama completed (Phase 5G's daemon-shim blocker resolved, commits `31a43cf`/`967236b`); `tier3_escalate.py` `CalledProcessError` crash-vs-soft-escalate (`a8638ee`) and Tier 1 claude-CLI `--tools ""` direct-mutation-hole fixes (`3dbbbc7`); queued the librarian FRESH-false-negative recurrence and oh-my-llama `AGENTS.md` over-ceiling items, both carried into the next file (the first resolved there, the second still open) |
 | [`20260829-210000-phase5g7-web-cut-plus-three-triapi-bugs-fixed.md`](docs/carryover/20260829-210000-phase5g7-web-cut-plus-three-triapi-bugs-fixed.md) | 2026-08-29 | RESOLVED | Phase 5G/7 web-frontend cut executed via triapi plan/dispatch, three real TriAPI pipeline bugs fixed (librarian FRESH-verify_cmd trust gap, doc-target ceiling wording, dispatch-summary KeyError) |
 | [`20260829-000000-fact-proposal-port-plus-severe-daemon-blocker-found.md`](docs/carryover/20260829-000000-fact-proposal-port-plus-severe-daemon-blocker-found.md) | 2026-08-29 | RESOLVED | Resumed oh-my-llama's Phase 5G; fact-proposal port completed and verified; surfaced daemon orchestrator blocker; TriAPI whole-file-deletion bypass fixed (`99df062`) |
