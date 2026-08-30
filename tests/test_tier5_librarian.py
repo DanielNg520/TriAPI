@@ -315,6 +315,80 @@ class TestTier5Librarian(unittest.TestCase):
             self.assertEqual(result["status"], "success")
             self.assertFalse(result["changed"])
 
+    # -- (9b) FRESH claim contradicted by verify_cmd is rejected, not trusted --
+
+    def test_fresh_verdict_rejected_when_verify_cmd_contradicts_it(self) -> None:
+        # Recurring bug (4+ confirmed live instances): the model claims FRESH
+        # even though the file still needs the described edit. A caller who
+        # supplies a real (non-trivial) verify_cmd must have that claim
+        # checked against the file on disk, not trusted unconditionally --
+        # every provider in the chain returns FRESH here, verify_cmd ("false")
+        # contradicts every one of them, so the run must exhaust to
+        # human_handoff rather than falsely reporting success.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "STILL_STALE.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            original = "# Doc\n\nversion 1.0.0\n"
+            target.write_text(original, encoding="utf-8")
+
+            agy_sentinel = mock.Mock(return_value=('FRESH\n', "subscription", 4, 2))
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
+                mock.patch.object(librarian_escalate, "_escalate_to_human") as escalate_to_human,
+                mock.patch.object(librarian_escalate, "clear_state") as clear_state,
+            ):
+                result = librarian_escalate.run(
+                    "t-fresh-rejected", "update the version number to 2.0.0", str(target),
+                    workdir=tmp, verify_cmd="false",
+                )
+
+            # 3 ollama-provider slots (primary, fallback_local, fallback_openrouter)
+            self.assertEqual(execute_llm.call_count, 3)
+            agy_sentinel.assert_called_once()
+            clear_state.assert_not_called()
+            escalate_to_human.assert_called_once()
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+            self.assertEqual(result["status"], "human_handoff")
+            self.assertIsNone(result["resolved_by"])
+
+    def test_fresh_verdict_trusted_when_verify_cmd_confirms_it(self) -> None:
+        # Same shape as the rejection test above, but verify_cmd ("true")
+        # doesn't contradict the claim -- FRESH must still be trusted and
+        # return success on the very first (primary) attempt, same as the
+        # no-verify_cmd case.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "ACTUALLY_FRESH.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            original = "# Doc\n\nversion 2.0.0\n"
+            target.write_text(original, encoding="utf-8")
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(
+                    librarian_escalate.llm_client, "execute_llm",
+                    return_value=('FRESH\n', "ollama", 4, 2),
+                ) as execute_llm,
+                mock.patch.object(librarian_escalate, "clear_state") as clear_state,
+            ):
+                result = librarian_escalate.run(
+                    "t-fresh-confirmed", "update the version number to 2.0.0", str(target),
+                    workdir=tmp, verify_cmd="true",
+                )
+
+            execute_llm.assert_called_once()
+            clear_state.assert_called_once_with("t-fresh-confirmed")
+            self.assertEqual(target.read_text(encoding="utf-8"), original)
+            self.assertEqual(result["status"], "success")
+            self.assertFalse(result["changed"])
+
     # -- (10) single-call-flow: SEARCH/REPLACE block ------------------------
 
     def test_search_replace_block_single_call_updates_target(self) -> None:

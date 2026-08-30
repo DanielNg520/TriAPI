@@ -287,7 +287,32 @@ def run(
 
         # FRESH escape hatch: the model reports the document is already
         # accurate for the described change, so there is nothing to write.
+        # Recurring bug (4+ confirmed instances, e.g. AGENTS.md/ARCHITECTURE.md
+        # updates): the model claims FRESH even when the file demonstrably
+        # still needs the described edit -- this used to be trusted
+        # unconditionally, the exact "trust the status, not the diff"
+        # mistake this repo's own convention warns against. When the caller
+        # supplied a real verify_cmd (one that actually asserts something
+        # about content, not the trivial existence-only default used for doc
+        # targets with no explicit build_cmd), run it against the file as it
+        # sits on disk before trusting the claim -- a verify_cmd written to
+        # confirm a specific edit landed will fail if it didn't, contradicting
+        # a false FRESH. No verify_cmd means nothing to check the claim
+        # against, so it's trusted as before.
         if stripped_response == "FRESH":
+            verify_cmd_resolved = verify_cmd or lib_config.get("verify_command")
+            if verify_cmd_resolved:
+                ok, verify_output = run_command(verify_cmd_resolved, workdir)
+                if not ok:
+                    log.warning(
+                        "[%s] Model claimed FRESH but verify_cmd contradicted it -- "
+                        "rejecting the claim: %s", task_id, verify_output,
+                    )
+                    last_stderr = (
+                        f"Model claimed the document was already FRESH, but verify_cmd "
+                        f"contradicted that: {verify_output}"
+                    )
+                    continue
             log.info("[%s] Library is not stale (FRESH)", task_id)
             clear_state(task_id)
             return {
