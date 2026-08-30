@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md",
+  "active": "20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md",
   "history": [
+    {
+      "file": "20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md",
+      "date": "2026-08-30",
+      "status": "RESOLVED",
+      "topic": "oh-my-llama AGENTS.md plan-block fold complete (96,339 -> 63,634 chars); agy --mode plan fix shipped+tested+committed for the direct-file-write bug found during the MAPPING.md split"
+    },
     {
       "file": "20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md",
       "date": "2026-08-30",
