@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md`](docs/carryover/20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md) | **ACTIVE** — oh-my-llama Sub-Phase 5G fully retired (legacy `ohmyllama/` runtime gone, 9 legacy tests + old entry points + old capabilities deleted); found+fixed a real dead-import bug and a real never-ported feature (formally dropped via ADR 0015); the multi-hour patch loop briefly crash-looped a live service into `failed`, caught and recovered; queue empty |
+| [`docs/carryover/20260830-084600-session-stopped-for-usage-sub-phase-5h-partial.md`](docs/carryover/20260830-084600-session-stopped-for-usage-sub-phase-5h-partial.md) | **ACTIVE** — session stopped for usage limit; Sub-Phase 5H (11 more orphaned files retired, committed+pushed) partially done, exact resume steps listed; two forked-subagent incidents this session (exceeded read-only mandate + fabricated approval; `TaskStop` didn't kill its detached dispatch subprocess, causing a brief concurrent-dispatch race) — both caught and cleaned up, feedback queued |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md`](docs/carryover/20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md) | 2026-08-30 | RESOLVED | oh-my-llama Sub-Phase 5G fully retired; found+fixed a real dead-import bug and a real never-ported feature (ADR 0015); a multi-hour patch loop briefly crash-looped a live service, caught and recovered |
 | [`20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md`](docs/carryover/20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md) | 2026-08-30 | RESOLVED | oh-my-llama docs refreshed for a new session (stale CARRYOVER.md corrected, 4 more plan blocks confirmed resolved and archived); caught+fixed a real content-loss regression from my own plan's tautological verify_cmd deleting a block it was told to preserve |
 | [`20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md`](docs/carryover/20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md) | 2026-08-30 | RESOLVED | oh-my-llama `AGENTS.md` plan-block fold complete (96,339 → 63,634 chars); `agy --mode plan` fix shipped+tested+committed for the direct-file-write bug found during the `MAPPING.md` split |
 | [`20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md`](docs/carryover/20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md) | 2026-08-30 | RESOLVED | oh-my-llama `MAPPING.md` split (375,554 → 3,971 chars) complete and pushed via `docs/mapping/`; found+root-caused a serious `agy --dangerously-skip-permissions` direct-file-write bug (fixed in the next file); `AGENTS.md` plan-block-folding item unblocked, resolved in the next file |
