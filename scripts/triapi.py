@@ -241,7 +241,7 @@ def _breakdown_and_dispatch(state: dict) -> None:
     for r in state["results"]:
         rep = cost_report(r["task_id"])
         total_actual += rep["total_actual_usd"]
-        print(f"  [{r['phase']}] {r['item']}: {r['status']} ({r['resolved_by']})")
+        print(f"  [{r.get('phase', '?')}] {r.get('item', r.get('task_id', '?'))}: {r['status']} ({r.get('resolved_by')})")
     print(f"\nTotal actual spend across this run: ${total_actual:.6f}")
 
     print()
@@ -454,7 +454,7 @@ def cmd_status(run_id: str) -> None:
         total_items = sum(len(p["items"]) for p in state["breakdown"]["phases"])
         print(f"Progress: {len(state['results'])}/{total_items} step(s) completed")
     for r in state["results"]:
-        print(f"  [{r['phase']}] {r['item']}: {r['status']} ({r['resolved_by']})")
+        print(f"  [{r.get('phase', '?')}] {r.get('item', r.get('task_id', '?'))}: {r['status']} ({r.get('resolved_by')})")
     unresolved = [f for f in state.get("regression_flags", []) if not f["resolved"]]
     if unresolved:
         print(f"\n{len(unresolved)} unresolved regression flag(s):")

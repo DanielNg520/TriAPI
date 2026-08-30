@@ -142,6 +142,25 @@ question for whoever picks up Phase 5G — see oh-my-llama's own
    2 edits directly this session (oh-my-llama commit `05d1762`) rather than
    fighting the bug a third time. Root cause not investigated — needs its
    own session.
+   - *Update (2026-08-29):* **RESOLVED**, commit `bdf58a9`. Root cause:
+     the FRESH escape hatch in `librarian_escalate.py`'s `run()` returned
+     `status:success` unconditionally whenever the model replied FRESH, never
+     running the caller's `verify_cmd` against the file — so a false FRESH claim
+     was never caught even when the caller supplied a real content-asserting
+     `verify_cmd`. Fixed: when a real `verify_cmd` is supplied (not the
+     trivial default), it is now run against the file before trusting a FRESH
+     claim; a contradiction rejects the claim and falls through to the next
+     provider in the chain instead of reporting a false success. Covered by
+     two new regression tests in `tests/test_tier5_librarian.py`
+     (`test_fresh_verdict_rejected_when_verify_cmd_contradicts_it`,
+     `test_fresh_verdict_trusted_when_verify_cmd_confirms_it`). Caveat still
+     open: `dispatcher.py`'s plan-dispatch routing path only passes a real
+     `verify_cmd` when the plan item has an explicit content-checking
+     `build_cmd` — the `_default_build_cmd()` fallback for doc targets with no
+     explicit `build_cmd` is still a trivial `test -f` existence check, which
+     cannot contradict a false FRESH claim; this fix protects direct CLI/manual
+     invocations with a real `--verify-cmd` (the majority of past incidents)
+     but not plan items that rely on the trivial default.
 2. **oh-my-llama's own `AGENTS.md` is over this repo's 73,728-char file-size
    ceiling** — pre-existing (79,677 chars before this session's edits,
    80,313 after), not caused by this session but made slightly worse by

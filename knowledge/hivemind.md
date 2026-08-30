@@ -997,3 +997,74 @@ Instead, return a highly descriptive, actionable error message that includes:
 3. **The Corrective Action**: Tell the agent exactly what it should do next (e.g., "Answer the question instead.").
 
 By explaining *why* the action failed and *what* to do next, you steer the agent directly back onto the desired path without needing extra code to handle retry loops.
+
+### Update Deployment Configurations When Extracting or Renaming Entrypoints
+
+When refactoring a command-line application—such as extracting a subcommand (e.g., `omll telegram`) into a standalone binary (e.g., `semai-telegram`) or simply renaming an executable—it is critical to update all related deployment artifacts. 
+
+**Best Practices:**
+1. **Update Execution Paths:** Ensure directives like `ExecStart` in systemd unit files, entrypoints in Dockerfiles, or script invocations point to the new binary path.
+2. **Update Inline Documentation:** Synchronize comments, descriptions, and manual installation instructions within the configuration files to reflect the new nomenclature. Leaving stale names in comments can cause confusion for operators or developers during future maintenance.
+
+### Fast CLI Subcommand Dispatch with Lazy Imports
+
+When building Python CLIs with multiple subcommands using `argparse`, you can keep startup times fast and dispatch logic clean by combining `set_defaults` with lazy imports. This is especially important for tools where some commands load heavy dependencies (like web frameworks, ML models, or UI libraries).
+
+**1. Bind handler functions directly to subcommands:**
+Use `.set_defaults(fn=handler)` when registering each subparser. This allows you to dispatch the command in a single line after parsing, completely avoiding long `if/elif` chains based on the command name.
+
+```python
+p = argparse.ArgumentParser()
+sub = p.add_subparsers(dest="cmd", required=True)
+
+# Register subcommands and bind their specific handler functions
+sub.add_parser("telegram", help="run telegram bot").set_defaults(fn=_cmd_telegram)
+sub.add_parser("panel", help="run TUI").set_defaults(fn=_cmd_panel)
+
+# Parse and dispatch dynamically
+args = p.parse_args(argv)
+return args.fn(cfg, args)
+```
+
+**2. Lazy-import heavy dependencies inside the handler:**
+Avoid importing heavy modules at the top of your CLI entrypoint file. Instead, import them inside the specific command handler that needs them. This ensures that running `app --help` or executing a simple, fast command doesn't incur the startup penalty of unrelated heavy dependencies.
+
+```python
+def _cmd_telegram(cfg: Config, _args) -> int:
+    # Lazy import: only loaded if the 'telegram' command is actually invoked
+    from .telegram import TelegramBot 
+    
+    TelegramBot(cfg).run()
+    return 0
+```
+
+### Immutable, Environment-Driven Dataclass Configuration
+
+When building application configuration in Python, define the configuration object as a `dataclass(frozen=True, slots=True)` to enforce immutability and minimize memory footprint. 
+
+1. **Dedicated Factory Method**: Isolate environment variable parsing, defaulting, and type-casting inside a dedicated factory method (e.g., `@staticmethod def load()`). This keeps the dataclass definition clean and ensures the system fails fast if the environment is misconfigured.
+2. **Immutable Collections**: Always cast iterable configuration values to their immutable counterparts (e.g., using `frozenset` instead of `set`, and `tuple` instead of `list`) to guarantee that the configuration remains strictly read-only throughout the application lifecycle.
+3. **Rich Types**: Parse primitive environment strings into semantic types (like `pathlib.Path` for filesystem paths or `float` for timeouts) immediately in the factory method, rather than forcing downstream consumers to cast values or handle strings.
+4. **Fail-Closed Security**: When configuring inbound entry points, default to restrictive states. If an access token or allowlist is missing or empty, the application should either refuse to start or deny all requests, rather than defaulting to an open state.
+
+### Explicit Triage for Non-Imported Dependencies
+
+When auditing project dependencies via static import scanning, finding zero direct imports does not always mean a package can be safely removed. Dependencies are sometimes explicitly declared in a manifest (e.g., `pyproject.toml`) for structural reasons that are invisible to source code import scanners:
+
+1. **Transitive Version Pinning:** A package might be explicitly declared solely to enforce a version constraint on a transitive dependency that would otherwise break the environment (e.g., forcing `fastapi<0.140` because another required tool relies on an internal API removed in newer versions). 
+2. **Subprocess CLI Tools:** A package might be installed entirely for its command-line binary rather than its Python modules (e.g., invoking a tool via `subprocess`).
+
+**Best Practice:** 
+When automating dependency triage, do not rely on static analysis alone. Always back your automation with an explicit, manual classification mapping (or override list). This ensures that when a package transitions from being directly imported to being strictly a transitive pin (e.g., removing the only file that imported it), the automation knows to retain it for its structural role rather than purging it as dead weight.
+
+### Enforcing Dependency Triage Decisions through Tests
+
+When auditing or cleaning up project dependencies, create tests that explicitly lock in your usage assumptions and findings against the real codebase and configuration (e.g., `pyproject.toml`). 
+
+Instead of relying solely on comments or static documentation to explain why a dependency exists, write assertions that verify:
+1. **Direct Usage:** Whether the dependency is actively imported in the source tree (and exactly where).
+2. **Classification:** Whether the dependency is considered "core", "dev", or slated for a "drop".
+3. **Justification:** Why a seemingly unused dependency might still be kept (e.g., as an internal pinned requirement for another tool).
+
+**Why this matters:**
+As the codebase evolves—such as removing a module that directly imported a library—these tests act as a regression check. They will fail when usage changes, forcing developers to consciously re-evaluate the dependency's status and explicitly update its justification. This prevents silent drift where unused dependencies are left orphaned ("someone will figure it out later") or kept around for outdated reasons.
