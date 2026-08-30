@@ -129,3 +129,24 @@ Whether those old entry points can now be safely deleted (since native
 replacements exist) or need an explicit cutover step first is the next
 question for whoever picks up Phase 5G — see oh-my-llama's own
 `docs/Agent/CARRYOVER.md` for the target-repo-side detail, not here.
+
+## Two follow-ups queued, not fixed this session
+
+1. **`librarian_escalate.py`'s FRESH false-negative bug recurred** — first
+   flagged in the 2026-08-27 carryover history (3 confirmed instances at
+   the time), still open. Hit a 4th time this session: retrying a
+   3-part `AGENTS.md` living-index update against oh-my-llama returned
+   `{"changed": false, "via": "model_fresh"}` even though the file
+   demonstrably still needed 2 of the 3 described edits (confirmed by
+   `grep` immediately after). Worked around by hand-editing the remaining
+   2 edits directly this session (oh-my-llama commit `05d1762`) rather than
+   fighting the bug a third time. Root cause not investigated — needs its
+   own session.
+2. **oh-my-llama's own `AGENTS.md` is over this repo's 73,728-char file-size
+   ceiling** — pre-existing (79,677 chars before this session's edits,
+   80,313 after), not caused by this session but made slightly worse by
+   it. Per this repo's own "no files at ceiling" convention, its living
+   file/dir index or historical `triapi:plan` blocks need the same
+   overflow-to-`docs/agents/`-style treatment this repo already gave
+   itself (see this file's own `## scripts/` section for the pattern) —
+   not attempted this session, flagging for whoever next has bandwidth.
