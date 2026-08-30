@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md`](docs/carryover/20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md) | **ACTIVE** — oh-my-llama `MAPPING.md` split (375,554 → 3,971 chars) complete and pushed via `docs/mapping/`; found+root-caused (not yet fixed) a serious `agy --dangerously-skip-permissions` direct-file-write bug, same class as the already-fixed Claude CLI hole; `AGENTS.md` plan-block-folding item now unblocked, still queued |
+| [`docs/carryover/20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md`](docs/carryover/20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md) | **ACTIVE** — oh-my-llama `AGENTS.md` plan-block fold complete (96,339 → 63,634 chars); `agy --mode plan` fix shipped+tested+committed for the direct-file-write bug found during the `MAPPING.md` split; queue empty |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md`](docs/carryover/20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md) | 2026-08-30 | RESOLVED | oh-my-llama `MAPPING.md` split (375,554 → 3,971 chars) complete and pushed via `docs/mapping/`; found+root-caused a serious `agy --dangerously-skip-permissions` direct-file-write bug (fixed in the next file); `AGENTS.md` plan-block-folding item unblocked, resolved in the next file |
 | [`20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md`](docs/carryover/20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md) | 2026-08-30 | RESOLVED | oh-my-llama `AGENTS.md` cleanup attempted, blocked on discovering `MAPPING.md` (375,554 chars) needed its own overflow split first; nothing changed, resolved in the next file |
 | [`20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md`](docs/carryover/20260829-235200-three-mailwatcher-telegram-bugs-fixed-live.md) | 2026-08-29 | RESOLVED | Three real oh-my-llama runtime bugs found+fixed live (WorkingDirectory= missing, MailWatcher init_db() never called, Telegram env-var-name mismatch); one dispatch regression caught (misleading same-file comment led a tier to revert the correct ExecStart back to a stale form) and reverted by hand; AGENTS.md over-ceiling item deliberately deferred to a fresh session |
 | [`20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md`](docs/carryover/20260829-233950-daemon-orchestrator-port-complete-two-real-triapi-bugs-fixed.md) | 2026-08-29 | RESOLVED | daemon.py orchestrator port for oh-my-llama completed (Phase 5G's daemon-shim blocker resolved, commits `31a43cf`/`967236b`); `tier3_escalate.py` `CalledProcessError` crash-vs-soft-escalate (`a8638ee`) and Tier 1 claude-CLI `--tools ""` direct-mutation-hole fixes (`3dbbbc7`); queued the librarian FRESH-false-negative recurrence and oh-my-llama `AGENTS.md` over-ceiling items, both carried into the next file (the first resolved there, the second still open) |

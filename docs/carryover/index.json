@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md",
+  "active": "20260830-012500-agentsmd-fold-complete-agy-mode-plan-fix-shipped.md",
   "history": [
+    {
+      "file": "20260830-005500-mappingmd-split-complete-agy-direct-write-bug-found.md",
+      "date": "2026-08-30",
+      "status": "RESOLVED",
+      "topic": "oh-my-llama MAPPING.md split (375,554 -> 3,971 chars) complete and pushed via docs/mapping/; found+root-caused a serious agy --dangerously-skip-permissions direct-file-write bug (fixed in the next file); AGENTS.md plan-block-folding item unblocked, resolved in the next file"
+    },
     {
       "file": "20260830-001500-agentsmd-cleanup-blocked-on-oversized-mappingmd.md",
       "date": "2026-08-30",
