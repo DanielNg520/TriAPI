@@ -189,7 +189,7 @@ def run(
 
     # Single execution of the primary model using the `agy` provider
     models_cfg = lib_config.get("models", {})
-    model = models_cfg.get("primary")
+    model = model_override or models_cfg.get("primary")
     last_stderr = ""
     prompt = build_prompt(description, target_path, current_contents, last_stderr)
 

@@ -189,6 +189,43 @@ class TestTier5Librarian(unittest.TestCase):
             self.assertEqual(result["status"], "success")
             self.assertTrue(result["changed"])
 
+    def test_model_override_is_honored_over_config_primary(self) -> None:
+        """run()'s model_override parameter (wired to the CLI's --model
+        flag, documented as 'overrides config default model') must
+        actually be used -- previously silently ignored, model was always
+        resolved from config regardless of what was passed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "docs" / "GUIDE.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Guide\n\nOld sentence here.\n", encoding="utf-8")
+
+            config = self._tier5_config()
+            config["tier_5_librarian"]["provider"] = "agy"
+            config["tier_5_librarian"]["models"]["primary"] = "gemini-3.7-flash"
+
+            response = (
+                "<<<<<<< SEARCH\n"
+                "Old sentence here.\n"
+                "=======\n"
+                "New sentence here.\n"
+                ">>>>>>> REPLACE\n"
+            )
+            agy_sentinel = mock.Mock(return_value=(response, "subscription", 12, 7))
+
+            with (
+                mock.patch.object(librarian_escalate, "load_tiers", return_value=config),
+                mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
+                mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
+                mock.patch.object(librarian_escalate, "clear_state"),
+            ):
+                librarian_escalate.run(
+                    "t-model-override", "keep guide fresh", str(target), workdir=tmp,
+                    model_override="custom-override-model",
+                )
+
+            agy_sentinel.assert_called_once()
+            self.assertEqual(agy_sentinel.call_args.kwargs["model"], "custom-override-model")
+
     # -- (6) chain exhaustion ---------------------------------------------
 
     def test_chain_exhaustion_writes_escalation_file_and_hands_off(self) -> None:
