@@ -1,6 +1,6 @@
 # TriAPI
 
-A 4-tier AI coding pipeline orchestrator: local Ollama → DeepSeek → Gemini API → Claude Code CLI → human review, cheapest first, so Claude's subscription quota is reserved as the strongest, last-resort automated attempt for genuinely hard problems.
+A 4-tier AI coding pipeline orchestrator: tiers 2/3/4 each swap between a DeepSeek-off-peak provider and a peak-hours alternate provider, escalating Tier4 -> Tier3 -> Tier2 -> Tier1 -> human review, cheapest first, so Claude's subscription quota is reserved as the strongest, last-resort automated attempt for genuinely hard problems.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the design, and [PLAN.md](PLAN.md) for the full build history and decisions.
 
@@ -35,9 +35,9 @@ python3 scripts/orchestrator.py \
 
 You'll see this play out roughly as described in [ARCHITECTURE.md](ARCHITECTURE.md)'s escalation diagram:
 
-1. **Tier 4 (local, free)** asks Ollama to draft/fix the file, then actually runs your build command. If the build passes, you're done — nothing else happens, nothing gets billed.
-2. If the build fails **twice in a row**, it escalates to **Tier 3 (DeepSeek)**: DeepSeek gets the file + the error and writes a fix, which gets rebuilt (not redrafted — Tier 3's fix isn't overwritten).
-3. If that still doesn't build, it tries **Tier 2 (Gemini API)** — only after confirming you're within the free tier.
+1. **Tier 4 (Worker)** (OpenRouter nvidia/nemotron-3.5-lightning:free off-peak, local Ollama during DeepSeek's peak-billing hours) drafts/fixes the file, then actually runs your build command. If the build passes, you're done — nothing else happens, nothing gets billed.
+2. If the build fails **twice in a row**, it escalates to **Tier 3 (Debugger)** (agy/gemini-3.1-pro (effort high) off-peak, OpenRouter nvidia/nemotron-3.5-lightning:free during peak): gets the file + the error and writes a fix, which gets rebuilt (not redrafted — Tier 3's fix isn't overwritten).
+3. If that still doesn't build, it tries **Tier 2 (Manager)** (DeepSeek v4 Pro off-peak, agy/gemini-3.1-pro (effort high) during peak).
 4. If that still doesn't build, it tries **Tier 1 (Claude Code CLI)** — Claude is the last automated attempt, tried only after confirming your subscription billing is safe (see the budget guard note below).
 5. If nothing worked, it stops and writes a **human handoff** instead of guessing further — see step 6.
 
@@ -79,7 +79,7 @@ python3 scripts/cost_report.py --task-id fix-simd-crash
 
 - **Re-running the same `--task-id`** picks up wherever the failure count left off (`logs/state/<task_id>.json`). If you want a clean slate, either pick a new task-id or delete that state file.
 - **The budget guard can silently skip a tier** — if `ANTHROPIC_API_KEY` is set in your environment, Tier 1 is skipped entirely (printed as `[BUDGET GUARD] Tier 1 skipped: ...`) rather than risk metered billing. Unset it if you want Tier 1 available.
-- **Tier 1 has its own on/off switch, separate from the budget guard.** Set `tier_1_manager.enabled: false` in `config/tiers.yaml` (default `true`) to disable Tier 1 (Claude Code CLI) permanently for the repair/escalation chain, or pass `triapi dispatch --no-tier1` (or set `TRIAPI_NO_TIER1=1` yourself) to force it off for a single run without editing the yaml. When off, `run_task()` skips straight from Tier 2 (Gemini) to human handoff, printed the same way as a budget-guard skip. This does **not** affect `triapi plan`'s interactive planning step (`scripts/planner.py`), which is a separate Claude Code CLI code path controlled by the unrelated `tier_1_planner` config block.
+- **Tier 1 has its own on/off switch, separate from the budget guard.** Set `tier_1_manager.enabled: false` in `config/tiers.yaml` (default `true`) to disable Tier 1 (Claude Code CLI) permanently for the repair/escalation chain, or pass `triapi dispatch --no-tier1` (or set `TRIAPI_NO_TIER1=1` yourself) to force it off for a single run without editing the yaml. When off, `run_task()` skips straight from Tier 2 (DeepSeek v4 Pro off-peak / agy off-peak-alt during DeepSeek peak) to human handoff, printed the same way as a budget-guard skip. This does **not** affect `triapi plan`'s interactive planning step (`scripts/planner.py`), which is a separate Claude Code CLI code path controlled by the unrelated `tier_1_planner` config block.
 - **Tier 4's model matters for speed.** The configured default (`qwen2.5-coder:14b-instruct-q8_0`) is slow if it's not actually running on your GPU — see the hardware notes at the bottom of this file. `--tier4-model <name>` lets you override it per-run (e.g. a smaller/faster model while iterating).
 
 ## Multi-file projects: `triapi plan` / `triapi dispatch`
@@ -110,7 +110,7 @@ A successful dispatch (`state["status"] == "completed"`) checks off every step i
 triapi dispatch <run_id>
 ```
 
-Gemini breaks the approved plan into phases of concrete steps (one file + one verification command each), then each step runs through the same Tier4→3→1→2→handoff pipeline as the standalone workflow above, one at a time, in order. If a step can't be resolved, dispatch stops there (rather than building on top of a broken step) and tells you how to resume once you've looked at it: `triapi dispatch <run_id>` again — the failed step gets retried, not skipped.
+Tier 2's resolved model (DeepSeek v4 Pro off-peak, agy/Gemini 3.1 Pro during DeepSeek peak hours) breaks the approved plan into phases of concrete steps (one file + one verification command each), then each step runs through the same Tier4->Tier3->Tier2->Tier1->handoff pipeline as the standalone workflow above, one at a time, in order. If a step can't be resolved, dispatch stops there (rather than building on top of a broken step) and tells you how to resume once you've looked at it: `triapi dispatch <run_id>` again — the failed step gets retried, not skipped.
 
 For a long dispatch over a flaky SSH connection (e.g. via Tailscale), add `--background`:
 
