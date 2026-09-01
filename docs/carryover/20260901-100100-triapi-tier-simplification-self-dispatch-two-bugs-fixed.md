@@ -174,3 +174,36 @@ placeholders) were left alone as non-functional. Full test suite green
 throughout (98 unittest tests). All three commits pushed to `origin/main`.
 Queue is now empty -- nothing outstanding except the still-deferred
 Gemini free API key placement.
+
+## Recovered: two on-hold items that had silently fallen out of tracking
+
+At the user's request, walked the git diff tree from before the
+2026-08-25 AGENTS.md/CARRYOVER.md index split, since the user said future
+plans were missing from what had been reported. Found two real,
+substantive, still-committed files that had zero index pointer anywhere:
+
+1. **`VIRTUAL_CODEBASE_PLAN.md`** (repo root, written 2026-08-19) -- a
+   queued Tiered Planner-Materializer design for Tier 4 edits on oversized
+   files. The user explicitly said 'work on this one together,
+   personally -- hold off starting it solo' (commit `4a2c609`); this was
+   correctly carried through several sessions' active carryover files
+   through 2026-08-28
+   (`docs/carryover/20260828-105000-week-audit-plus-live-scope-guard-catch.md`
+   is the last file that has it) then silently stopped being re-carried
+   into the next active file. STILL ON HOLD, do not start solo, wait for
+   the user.
+2. **`docs/TUI_plan.md`** (2026-08-25) -- a confirmed triapi tui
+   interactive-subcommand spec, blocked at the time on the tier-flip
+   dispatch draining; that dispatch completed the same day (commit
+   `762ff81`) so the blocker is long gone, but the file was never
+   revisited. Has open design questions (curses vs textual/rich,
+   per-session vs per-prompt carryover file granularity,
+   dispatch-conflict handling) that need the user's input before a triapi
+   plan session, not yet dispatched.
+
+Both added to AGENTS.md's Root file index (commit `4396ecc`) so they
+cannot silently vanish from tracking again; durable memory saved for both
+plus a new process-lesson memory (`feedback_recarry_on_hold_items`) about
+re-carrying on-hold items into every new active carryover file going
+forward. Neither item was started or acted on this session -- both
+explicitly need the user before any next step.
