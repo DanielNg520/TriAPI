@@ -69,6 +69,34 @@ pytest tests, zero skipped).
   oversized-file cases, since Tier 5's whole-file-context design means it will
   keep hard-failing this way on any doc that's over the ceiling, in ANY
   target repo, not just this one instance.
+- **`dispatcher.breakdown_phase()` silent detail drop on dense plan steps** (found live 2026-09-01, same oh-my-llama Phase 7 prep session) —
+  `dispatcher.breakdown_phase()` (the Tier 2/Gemini call that compresses
+  one markdown plan phase into per-item JSON task descriptions) silently
+  dropped most of the technical detail from one unusually long, dense
+  plan step (`task_store.py`'s method list, ~2000+ chars in a single
+  checklist bullet after a hand-correction added `facts`/`put_fact`/`forget_fact`
+  requirements) despite `breakdown_prompts.py`'s `BREAKDOWN_SYSTEM_INSTRUCTION`
+  already explicitly warning against this ('Carry forward every concrete
+  technical requirement... verbatim... Summarizing away a specific
+  requirement... is a failure'). The resulting per-item description was
+  missing most of the required method list (`facts`/`put_fact`/`forget_fact`,
+  `fail`, `enqueue`, `telegram_set_topic`, `set_awaiting_approval`, `close`,
+  correct `claim_next`/`requeue_stale` signatures), and Tier 4 built exactly
+  what it was told, producing a materially incomplete file that still
+  reported `status:success` since its narrow `build_cmd` only checked
+  `py_compile` + 3 basic methods. Worked around this one time by
+  hand-correcting the file directly after independently verifying the real
+  requirement against `ohmyllama/state.py` and the real caller
+  (`src/semai/adapters/daemon.py`) -- see that repo's own commit for detail.
+  Real follow-up this surfaces: `breakdown_phase()` has no length-based
+  safeguard for an unusually dense single bullet -- worth considering either
+  (a) a length-based warning/split heuristic in `_split_plan_by_phase` or
+  `breakdown_phase()` when a single checklist item is unusually long relative
+  to the rest of its phase, or (b) a stronger `verify_cmd` convention
+  encouraged by the planning prompt itself (e.g. asserting specific required
+  method/symbol names exist, not just that the file compiles) so a lossy
+  breakdown gets caught by its own `build_cmd` instead of silently reporting
+  success.
 
 ## Session state
 
