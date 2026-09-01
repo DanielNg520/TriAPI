@@ -1,9 +1,13 @@
 """Librarian: escalates stale library detection and update.
 
-Asks an Ollama model to determine if a library file is stale based on a
-task description, writes the updated file if stale, runs a verification
-command, and falls back through local Ollama, OpenRouter, and human
-handoff if verification fails. Designed to be invoked once per attempt.
+Asks agy/Gemini 3.7 Flash (config/tiers.yaml's tier_5_librarian) to
+determine if a library file is stale based on a task description, writes
+the updated file if stale, and runs a verification command. Fails fast to
+human_handoff on any failure -- no multi-provider fallback chain (removed
+2026-09-01: previously fell through local Ollama -> agy -> OpenRouter in
+sequence). Designed to be invoked once per attempt; `consecutive_failures`
+persists across external retries (dispatcher.py re-invoking run() for the
+same item) so a verify-failure threshold is still enforced across calls.
 
 Usage:
     python3 scripts/librarian_escalate.py --task-id t1 \
@@ -183,204 +187,197 @@ def run(
     editing = target_path.exists()
     current_contents = target_path.read_text() if editing else None
 
-    # Escalation chain per config/tiers.yaml: primary (config-driven provider)
-    # -> fallback_local (Ollama, ollama_fallback's model) -> fallback_agy
-    # (agy CLI) -> fallback_openrouter (OpenRouter, via openrouter_defaults'
-    # shared endpoint/api_key_secret -- not tier_1_planner's, see that
-    # block's config comment for why).
-    # DeepSeek/Claude/Gemini are strictly forbidden anywhere in this chain.
+    # Single attempt, no fallback chain (2026-09-01): primary is agy/Gemini
+    # 3.7 Flash, config-driven via tier_5_librarian.models.primary. Any
+    # failure (LLM request, empty response, edit-apply, content guard,
+    # verify) fails fast to human_handoff instead of trying an alternate
+    # provider -- see this module's docstring.
     models_cfg = lib_config.get("models", {})
-    fallback_local_block = config.get(models_cfg.get("fallback_local", "ollama_fallback"), {})
-    providers = [
-        {
-            "name": lib_config.get("provider", "ollama"),
-            "model": model_override or models_cfg.get("primary", "mistral-small:latest"),
-            "effort": lib_config.get("effort"),
-        },
-        {"name": "ollama", "model": model_override or fallback_local_block.get("models", {}).get("default")},
-        {"name": "agy", "model": models_cfg.get("fallback_agy")},
-        {"name": "openrouter", "model": model_override or models_cfg.get("fallback_openrouter")},
-    ]
-
-    secrets = load_secrets()
+    model = models_cfg.get("primary")
     last_stderr = ""
-    state = {"consecutive_failures": 0}
-    for attempt_idx, provider_info in enumerate(providers):
-        provider = provider_info["name"]
-        model = provider_info["model"]
+    prompt = build_prompt(description, target_path, current_contents, last_stderr)
 
-        # Enforce zero DeepSeek/Claude/Gemini calls
-        if provider in ("deepseek", "claude", "gemini") or not model:
-            log.warning("Skipping disallowed/unresolved provider: %s/%s", provider, model)
-            continue
+    log.info("[%s] Librarian attempt via agy/%s", task_id, model)
 
-        prompt = build_prompt(description, target_path, current_contents, last_stderr)
-
-        if provider == "openrouter":
-            openrouter_defaults = config.get("openrouter_defaults", {})
-            endpoint = openrouter_defaults.get("endpoint")
-            api_key_secret = lib_config.get(
-                "api_key_secret", openrouter_defaults.get("api_key_secret", "open_router_api_key")
-            )
-            api_key = secrets.get(api_key_secret)
-        elif provider == "agy":
-            endpoint = None
-            api_key = None
-        else:
-            endpoint = secrets.get("ollama_host")
-            api_key = None
-
-        log.info("[%s] Librarian attempt %d via %s/%s", task_id, attempt_idx + 1, provider, model)
-
-        try:
-            if provider == "agy":
-                response_text, billing_type, input_tokens, output_tokens = llm_client.execute_agy(
-                    model=model,
-                    prompt=prompt,
-                    system_prompt="",
-                    effort=provider_info.get("effort"),
-                )
-            else:
-                response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
-                    provider=provider,
-                    endpoint=endpoint,
-                    api_key=api_key,
-                    model=model,
-                    prompt=prompt,
-                    system_prompt="",
-                    is_tier4=False,
-                )
-        except Exception as e:
-            log.error("[%s] Librarian %s request failed: %s", task_id, provider, e, exc_info=True)
-            last_stderr = f"LLM request failed: {e}"
-            continue
-
-        # Both "ollama"-provider slots (primary + fallback_local) run on local
-        # hardware at zero cost; tag them "local" for cost_report.py. The agy
-        # leg is a subscription CLI, so tag it "subscription" ($0 marginal).
-        # The openrouter fallback remains distinguishable via billing_type.
-        if provider == "ollama":
-            billing_label = "local"
-        elif provider == "agy":
-            billing_label = "subscription"
-        else:
-            billing_label = billing_type
-        log_cost(
-            {
-                "timestamp": time.time(),
-                "tier": "librarian",
-                "model": model,
-                "task_id": task_id,
-                "prompt_eval_count": input_tokens,
-                "eval_count": output_tokens,
-                "cost_usd": 0.0,
-                "billing": billing_label,
-            }
+    try:
+        response_text, billing_type, input_tokens, output_tokens = llm_client.execute_agy(
+            model=model,
+            prompt=prompt,
+            system_prompt="",
+            effort=lib_config.get("effort"),
         )
+    except Exception as e:
+        log.error("[%s] Librarian agy request failed: %s", task_id, e, exc_info=True)
+        last_stderr = f"LLM request failed: {e}"
+        _escalate_to_human(
+            task_id, target_path,
+            "tier_5_librarian agy request failed",
+            f"**LLM request failed:**\n```\n{e}\n```",
+        )
+        return {
+            "status": "human_handoff",
+            "resolved_by": None,
+            "consecutive_failures": 1,
+            "stderr": last_stderr,
+        }
 
-        # Strip the response and guard against None/empty.
-        if not isinstance(response_text, str) or not response_text.strip():
-            log.warning("[%s] Model returned no usable text (None or empty)", task_id)
-            last_stderr = "Model returned no usable text (None or empty)"
-            continue
-        stripped_response = response_text.strip()
+    # Strip the response and guard against None/empty.
+    if not isinstance(response_text, str) or not response_text.strip():
+        last_stderr = "Model returned no usable text (None or empty)"
+        _escalate_to_human(
+            task_id, target_path,
+            "tier_5_librarian model returned no usable text",
+            f"**Error:** Model returned no usable text",
+        )
+        return {
+            "status": "human_handoff",
+            "resolved_by": None,
+            "consecutive_failures": 1,
+            "stderr": last_stderr,
+        }
+    stripped_response = response_text.strip()
 
-        # FRESH escape hatch: the model reports the document is already
-        # accurate for the described change, so there is nothing to write.
-        # Recurring bug (4+ confirmed instances, e.g. AGENTS.md/ARCHITECTURE.md
-        # updates): the model claims FRESH even when the file demonstrably
-        # still needs the described edit -- this used to be trusted
-        # unconditionally, the exact "trust the status, not the diff"
-        # mistake this repo's own convention warns against. When the caller
-        # supplied a real verify_cmd (one that actually asserts something
-        # about content, not the trivial existence-only default used for doc
-        # targets with no explicit build_cmd), run it against the file as it
-        # sits on disk before trusting the claim -- a verify_cmd written to
-        # confirm a specific edit landed will fail if it didn't, contradicting
-        # a false FRESH. No verify_cmd means nothing to check the claim
-        # against, so it's trusted as before.
-        if stripped_response == "FRESH":
-            verify_cmd_resolved = verify_cmd or lib_config.get("verify_command")
-            if verify_cmd_resolved:
-                ok, verify_output = run_command(verify_cmd_resolved, workdir)
-                if not ok:
-                    log.warning(
-                        "[%s] Model claimed FRESH but verify_cmd contradicted it -- "
-                        "rejecting the claim: %s", task_id, verify_output,
-                    )
-                    last_stderr = (
-                        f"Model claimed the document was already FRESH, but verify_cmd "
-                        f"contradicted that: {verify_output}"
-                    )
-                    continue
-            log.info("[%s] Library is not stale (FRESH)", task_id)
-            clear_state(task_id)
-            return {
-                "status": "success", "resolved_by": "tier_5", "consecutive_failures": 0,
-                "stderr": "", "changed": False, "via": "model_fresh",
-            }
+    # FRESH escape hatch: the model reports the document is already
+    # accurate for the described change, so there is nothing to write.
+    # Recurring bug (4+ confirmed instances, e.g. AGENTS.md/ARCHITECTURE.md
+    # updates): the model claims FRESH even when the file demonstrably
+    # still needs the described edit -- this used to be trusted
+    # unconditionally, the exact "trust the status, not the diff"
+    # mistake this repo's own convention warns against. When the caller
+    # supplied a real verify_cmd (one that actually asserts something
+    # about content, not the trivial existence-only default used for doc
+    # targets with no explicit build_cmd), run it against the file as it
+    # sits on disk before trusting the claim -- a verify_cmd written to
+    # confirm a specific edit landed will fail if it didn't, contradicting
+    # a false FRESH. No verify_cmd means nothing to check the claim
+    # against, so it's trusted as before.
+    if stripped_response == "FRESH":
+        verify_cmd_resolved = verify_cmd or lib_config.get("verify_command")
+        if verify_cmd_resolved:
+            ok, verify_output = run_command(verify_cmd_resolved, workdir)
+            if not ok:
+                log.warning(
+                    "[%s] Model claimed FRESH but verify_cmd contradicted it -- "
+                    "rejecting the claim: %s", task_id, verify_output,
+                )
+                last_stderr = (
+                    f"Model claimed the document was already FRESH, but verify_cmd "
+                    f"contradicted that: {verify_output}"
+                )
+                _escalate_to_human(
+                    task_id, target_path,
+                    "tier_5_librarian FRESH claim contradicted by verify_cmd",
+                    f"**Verification output:**\n```\n{verify_output}\n```",
+                )
+                return {
+                    "status": "human_handoff",
+                    "resolved_by": None,
+                    "consecutive_failures": 1,
+                    "stderr": verify_output,
+                }
+        log.info("[%s] Library is not stale (FRESH)", task_id)
+        clear_state(task_id)
+        return {
+            "status": "success", "resolved_by": "tier_5", "consecutive_failures": 0,
+            "stderr": "", "changed": False, "via": "model_fresh",
+        }
 
-        # Write path handling: edit_blocks for existing files, extract_code for new files.
-        # The response is the raw edit blocks / complete file contents directly --
-        # there is no JSON envelope to parse; the FRESH line above is the "not
-        # stale" signal.
-        if editing:
-            new_content, err = edit_blocks.apply_edit_blocks(current_contents, stripped_response)
-            if new_content is None:
-                log.warning("[%s] Edit-block apply failed: %s", task_id, err)
-                last_stderr = f"Could not apply proposed edit: {err}"
-                continue
-            code = new_content
-        else:
-            code = extract_code(stripped_response)
-            if code is None:
-                log.warning("[%s] Response truncated mid-generation", task_id)
-                last_stderr = "Response truncated mid-generation (unterminated code fence); refusing to write incomplete file."
-                continue
-
-        guard = content_guard.check_write(task_id, target_path, code)
-        if not guard["ok"]:
-            log.warning("[%s] Content guard rejected: %s", task_id, guard["reason"])
-            last_stderr = guard["reason"]
-            continue
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(code)
-
-        # Verification: built-in or custom verify_cmd
-        verify_cmd_resolved = verify_cmd or lib_config.get("verify_command") or "true"
-        ok, verify_output = run_command(verify_cmd_resolved, workdir)
-
-        if ok:
-            log.info("[%s] Verification succeeded", task_id)
-            clear_state(task_id)
-            return {
-                "status": "success", "resolved_by": "tier_5", "consecutive_failures": 0,
-                "stderr": "", "changed": True,
-            }
-
-        log.warning("[%s] Verification failed: %s", task_id, verify_output)
-        last_stderr = verify_output
-        state = record_failure(task_id, verify_output)
-        if state["consecutive_failures"] >= threshold:
-            log.error("[%s] Max failures reached, escalating to human handoff", task_id)
+    # Write path handling: edit_blocks for existing files, extract_code for new files.
+    # The response is the raw edit blocks / complete file contents directly --
+    # there is no JSON envelope to parse; the FRESH line above is the "not
+    # stale" signal.
+    if editing:
+        new_content, err = edit_blocks.apply_edit_blocks(current_contents, stripped_response)
+        if new_content is None:
+            log.warning("[%s] Edit-block apply failed: %s", task_id, err)
+            last_stderr = f"Could not apply proposed edit: {err}"
             _escalate_to_human(
                 task_id, target_path,
-                f"tier_5_librarian verification failed {state['consecutive_failures']}x (threshold {threshold})",
-                f"**Verification output:**\n```\n{verify_output}\n```",
+                "tier_5_librarian edit block apply failed",
+                f"**Edit error:**\n```\n{err}\n```",
             )
             return {
                 "status": "human_handoff",
                 "resolved_by": None,
-                "consecutive_failures": state["consecutive_failures"],
-                "stderr": verify_output,
+                "consecutive_failures": 1,
+                "stderr": err,
+            }
+        code = new_content
+    else:
+        code = extract_code(stripped_response)
+        if code is None:
+            log.warning("[%s] Response truncated mid-generation", task_id)
+            last_stderr = "Response truncated mid-generation (unterminated code fence); refusing to write incomplete file."
+            _escalate_to_human(
+                task_id, target_path,
+                "tier_5_librarian response truncated",
+                f"**Error:** Response truncated mid-generation",
+            )
+            return {
+                "status": "human_handoff",
+                "resolved_by": None,
+                "consecutive_failures": 1,
+                "stderr": "Response truncated mid-generation",
             }
 
-    # All providers exhausted
-    log.error("[%s] All librarian attempts failed, escalating to human handoff", task_id)
+    guard = content_guard.check_write(task_id, target_path, code)
+    if not guard["ok"]:
+        log.warning("[%s] Content guard rejected: %s", task_id, guard["reason"])
+        last_stderr = guard["reason"]
+        _escalate_to_human(
+            task_id, target_path,
+            "tier_5_librarian content guard rejected",
+            f"**Guard rejected:** {guard['reason']}",
+        )
+        return {
+            "status": "human_handoff",
+            "resolved_by": None,
+            "consecutive_failures": 1,
+            "stderr": guard["reason"],
+        }
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(code)
+
+    # Verification: built-in or custom verify_cmd
+    verify_cmd_resolved = verify_cmd or lib_config.get("verify_command") or "true"
+    ok, verify_output = run_command(verify_cmd_resolved, workdir)
+
+    if ok:
+        log.info("[%s] Verification succeeded", task_id)
+        clear_state(task_id)
+        return {
+            "status": "success", "resolved_by": "tier_5", "consecutive_failures": 0,
+            "stderr": "", "changed": True,
+        }
+
+    log.warning("[%s] Verification failed: %s", task_id, verify_output)
+    last_stderr = verify_output
+    state = record_failure(task_id, verify_output)
+    if state["consecutive_failures"] >= threshold:
+        log.error("[%s] Max failures reached, escalating to human handoff", task_id)
+        _escalate_to_human(
+            task_id, target_path,
+            f"tier_5_librarian verification failed {state['consecutive_failures']}x (threshold {threshold})",
+            f"**Verification output:**\n```\n{verify_output}\n```",
+        )
+        return {
+            "status": "human_handoff",
+            "resolved_by": None,
+            "consecutive_failures": state["consecutive_failures"],
+            "stderr": verify_output,
+        }
+
+    # No fallback chain anymore (2026-09-01): a verify failure below
+    # threshold still returns human_handoff on THIS call, but the
+    # `consecutive_failures` state is persisted across external retries
+    # (dispatcher.py re-invoking run() for the same item on the next
+    # attempt) via record_failure() above, so threshold is enforced across
+    # calls, not via an internal per-call loop.
+    log.error("[%s] Librarian attempt failed, escalating to human handoff", task_id)
     _escalate_to_human(
         task_id, target_path,
-        "tier_5_librarian exhausted primary -> fallback_local -> fallback_agy -> fallback_openrouter",
+        "tier_5_librarian primary attempt failed",
         f"**Last error:**\n```\n{last_stderr}\n```",
     )
     return {
