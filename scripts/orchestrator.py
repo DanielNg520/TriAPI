@@ -424,6 +424,8 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
             )
             if result2.get("status") == "error":
                 raise RuntimeError(f"Tier 2 failed: {result2.get('reason')}")
+            if result2.get("status") == "skipped":
+                log.info("[%s] Tier 2 skipped: %s", task_id, result2.get("reason"))
             if result2.get("status") == "fix_rejected":
                 log.warning("[%s] Tier 2 fix rejected: %s", task_id, result2.get("reason"))
             if result2.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
