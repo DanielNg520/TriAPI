@@ -389,6 +389,23 @@ def _call_openai_api(
             message = f"{provider} API ({model}) returned an unexpected response shape (no 'choices'): {json.dumps(data)[:500]}"
         raise requests.exceptions.HTTPError(message, response=synthetic_resp)
     response_text = choices[0]["message"]["content"]
+    if response_text is None:
+        # A free/overloaded model can return a 200 with a non-empty
+        # `choices` array but `message.content: null` (e.g. a finish_reason
+        # like "content_filter" or a tool-call-only turn with no text) --
+        # this slips past the `if not choices` guard above and previously
+        # propagated None as response_text, crashing later with an
+        # unrelated-looking TypeError in tier4_worker.extract_code() instead
+        # of failing here with a clear, retriable error (found live
+        # 2026-09-01, run 20260901-135001-dd5f98, oh-my-llama dispatch).
+        synthetic_resp = requests.Response()
+        synthetic_resp.status_code = resp.status_code
+        synthetic_resp._content = resp.content
+        raise requests.exceptions.HTTPError(
+            f"{provider} API ({model}) returned choices with null message content "
+            f"(finish_reason={choices[0].get('finish_reason')!r}): {json.dumps(data)[:500]}",
+            response=synthetic_resp,
+        )
     usage = data.get("usage", {})
     input_tokens = usage.get("prompt_tokens", 0)
     output_tokens = usage.get("completion_tokens", 0)

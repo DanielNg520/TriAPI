@@ -726,6 +726,29 @@ class LlmClientOpenAIErrorBodyTests(unittest.TestCase):
             )
         self.assertEqual(result, ("ok", "openrouter", 1, 2))
 
+    def test_null_message_content_raises_instead_of_returning_none(self):
+        # A non-empty `choices` array with `message.content: null` slips
+        # past the `if not choices` guard -- must raise a clear error here,
+        # not silently return None as response_text (which previously
+        # crashed later, unrelatedly, in tier4_worker.extract_code()).
+        data = {
+            "choices": [{"message": {"content": None}, "finish_reason": "content_filter"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0},
+        }
+        fake = self._fake_response(200, data)
+        with mock.patch.object(llm_client.requests, "post", return_value=fake):
+            with self.assertRaises(Exception) as ctx:
+                llm_client._call_openai_api(
+                    "https://openrouter.ai/api/v1",
+                    "key",
+                    "nvidia/nemotron-3-ultra-550b-a55b:free",
+                    "prompt",
+                    "system",
+                    "openrouter",
+                )
+        self.assertIn("null message content", str(ctx.exception))
+        self.assertIn("content_filter", str(ctx.exception))
+
 
 class SkipTier4Tests(unittest.TestCase):
     """run_task(skip_tier4=True) -- the file-size-ceiling escape hatch
