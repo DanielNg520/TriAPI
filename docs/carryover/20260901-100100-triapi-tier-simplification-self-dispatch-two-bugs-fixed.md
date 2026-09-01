@@ -141,3 +141,36 @@ files (`logs/runs/20260901-010921-44756b.json`,
 `20260901-014403-436f41.json`, `20260901-020635-a29940.json`) were left
 in place per user instruction -- gitignored local state, not tracked
 history, now superseded by this real fix.
+
+## Queue drained: cmd_tech_debt bug fixed, TECH_DEBT.md pruned, PLAN.md split
+
+Continued auditing TriAPI's own implementation per user request and
+cleared both remaining queue items from the prior session.
+
+1. **`scripts/triapi.py`'s `cmd_tech_debt()` had three real defects**,
+   none caught by its existing test: the `tech_debt` module was never
+   imported at all (`NameError` on any real invocation), each synthetic
+   item's `build_cmd` was a literal unfilled placeholder comment (a no-op
+   that would trivially 'pass'), and each item's description dropped the
+   original failure reason. Fixed all three (commit `8f24844`) plus
+   extended the regression test to assert on the dispatched item's actual
+   description/build_cmd content.
+2. **`knowledge/TECH_DEBT.md` had 37 logged entries**; a hash-verified
+   sweep (`python3 scripts/tech_debt.py`) confirmed 33 were stale per the
+   file's own staleness rule and pruned them, keeping the 4 genuinely
+   fresh ones (commit `6fa47ce`).
+3. **`PLAN.md` was ~205,040 chars**, 2.7x this repo's 73,728-char
+   ceiling, a queued cleanup item since 2026-08-25 -- split into a short
+   index plus four dated files under new `docs/plan/` (mirroring the
+   existing `docs/agents/` and `docs/carryover/` convention), verified
+   byte-exact via a reconstruction diff before writing, `AGENTS.md`'s
+   `PLAN.md` description updated to match (commit `8ab09b1`).
+
+A pyflakes sweep across `scripts/` afterward found no other undefined-name
+bugs of the same shape as the `cmd_tech_debt` one; a few unrelated
+dead-code/cosmetic findings (a redundant local re-import in
+`dispatcher.py`, two unused local variables, some f-strings without
+placeholders) were left alone as non-functional. Full test suite green
+throughout (98 unittest tests). All three commits pushed to `origin/main`.
+Queue is now empty -- nothing outstanding except the still-deferred
+Gemini free API key placement.
