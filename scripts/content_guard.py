@@ -50,6 +50,9 @@ def _nonblank_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+_EDIT_BLOCK_MARKERS = ("<<<<<<< SEARCH", ">>>>>>> REPLACE")
+
+
 def check_write(task_id: str, target_path: Path, new_content: str) -> dict:
     """Returns {"ok": True} to allow the write. Returns {"ok": False, "reason":
     ...} to refuse it -- the caller must NOT write new_content to target_path
@@ -57,6 +60,34 @@ def check_write(task_id: str, target_path: Path, new_content: str) -> dict:
     never created). The refused content is saved to
     logs/rejected_writes/<task_id>.txt so a human can still see what the
     model proposed."""
+    if any(marker in new_content for marker in _EDIT_BLOCK_MARKERS):
+        # A model can respond with a SEARCH/REPLACE attempt that isn't
+        # wrapped in a code fence -- edit_blocks.apply_edit_blocks() then
+        # correctly fails to parse it, but the caller's own fallback path
+        # (extract_code() on the same raw, fenceless response, meant for a
+        # genuine no-fence full-file reply) has no way to tell that apart
+        # from literal, unprocessed diff markup, and returns the raw text
+        # verbatim -- which previously sailed straight through this
+        # function with no check at all and landed on disk as the file's
+        # real content. Found for real 2026-09-01 (run
+        # 20260901-135001-dd5f98, oh-my-llama Phase 4.1): a trivial new
+        # empty __init__.py ended up containing the literal 4-line
+        # "<<<<<<< SEARCH / ======= / >>>>>>> REPLACE" markup verbatim
+        # after Tier 4/3/2/1 all failed to apply a proper edit against it.
+        REJECTED_DIR.mkdir(parents=True, exist_ok=True)
+        rejected_path = REJECTED_DIR / f"{task_id}.txt"
+        rejected_path.write_text(new_content)
+        reason = (
+            f"Refused write to {target_path}: proposed content contains a "
+            f"literal, unprocessed SEARCH/REPLACE edit-block marker -- this "
+            f"means a fenceless malformed edit response leaked through a "
+            f"full-file-replacement fallback instead of real file content. "
+            f"Original left untouched (or file not created); proposed "
+            f"content saved to {rejected_path} for review."
+        )
+        log.warning("[%s] %s", task_id, reason)
+        return {"ok": False, "reason": reason}
+
     if len(new_content) > MAX_WRITE_CHARS:
         # An edit that SHRINKS an already-oversized file is progress toward
         # compliance, not a new violation -- refusing it deadlocks the exact

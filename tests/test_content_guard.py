@@ -64,5 +64,43 @@ class TestContentGuardSizeCeiling(unittest.TestCase):
         self.assertFalse(result["ok"])
 
 
+class TestContentGuardEditBlockMarkerLeak(unittest.TestCase):
+    """Real incident 2026-09-01 (run 20260901-135001-dd5f98, oh-my-llama
+    Phase 4.1): a fenceless, malformed SEARCH/REPLACE response failed
+    edit_blocks.apply_edit_blocks(), the caller's full-file-replacement
+    fallback (extract_code() on the same raw response) had no way to
+    distinguish that from a genuine fenceless full-file reply, and the
+    literal "<<<<<<< SEARCH / ======= / >>>>>>> REPLACE" markup sailed
+    through check_write() with no guard at all and landed on disk as a
+    trivial new __init__.py's real content."""
+
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self.repo_root = Path(self.temp_dir.name)
+        self.target_path = self.repo_root / "__init__.py"
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_refuses_write_containing_raw_search_marker(self) -> None:
+        result = check_write(
+            "task6", self.target_path,
+            "<<<<<<< SEARCH\n\n=======\n>>>>>>> REPLACE\n",
+        )
+        self.assertFalse(result["ok"])
+        self.assertFalse(self.target_path.exists())
+
+    def test_refuses_even_on_a_tiny_new_file_below_the_retention_check_floor(self) -> None:
+        # The bug this guards required a target with too few lines to ever
+        # reach the retention-ratio check below (MIN_LINES_TO_CHECK) -- an
+        # empty/near-empty new file, exactly this shape.
+        result = check_write("task7", self.target_path, ">>>>>>> REPLACE\n")
+        self.assertFalse(result["ok"])
+
+    def test_ordinary_new_empty_file_still_allowed(self) -> None:
+        result = check_write("task8", self.target_path, "")
+        self.assertTrue(result["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()
