@@ -1683,6 +1683,11 @@ class TechDebtTests(unittest.TestCase):
             self.assertIn(str(Path(fresh).resolve()), targets)
             self.assertNotIn(str(Path(stale).resolve()), targets)
 
+            fresh_item = next(item for item in items if item["target"] == str(fresh))
+            self.assertIn("retry me", fresh_item["description"])
+            self.assertNotIn("# Add your build command here", fresh_item["build_cmd"])
+            self.assertTrue(fresh_item["build_cmd"].strip())
+
 
 class ApplyEditBlocksTests(unittest.TestCase):
     def test_apply_edit_blocks_with_none_returns_none_string(self) -> None:

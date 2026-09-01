@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, llm_client, planner, resource_guard, self_fix
+from scripts import agents_md_gate, budget_guard, dispatcher, git_ops, jules_client, llm_client, planner, resource_guard, self_fix, tech_debt
 from scripts.config_loader import load_resource_guard_services, load_tiers, load_unload_ollama_models_flag
 from scripts.cost_report import (
     DEFAULT_ELECTRICITY_USD_PER_KWH,
@@ -624,9 +624,9 @@ def cmd_tech_debt(project_dir: str) -> None:
                     "name": "Tech Debt",
                     "items": [
                         {
-                            "description": f"Fix {entry['filepath']}",
+                            "description": f"Fix {entry['filepath']}: {entry['reason']}",
                             "target": entry["filepath"],
-                            "build_cmd": f"# Add your build command here to fix {entry['filepath']}",
+                            "build_cmd": "PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v",
                             "verify_only": False,
                             "context_files": []
                         }
