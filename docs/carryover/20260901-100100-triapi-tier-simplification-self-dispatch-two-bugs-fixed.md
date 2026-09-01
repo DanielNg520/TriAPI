@@ -207,3 +207,49 @@ plus a new process-lesson memory (`feedback_recarry_on_hold_items`) about
 re-carrying on-hold items into every new active carryover file going
 forward. Neither item was started or acted on this session -- both
 explicitly need the user before any next step.
+
+## Self-audit dispatched through triapi, two more real bugs found and fixed
+
+At the user's request, dispatched a correctness audit of TriAPI's own
+pipeline through `triapi plan` (twice -- both plan sessions produced real
+proposals but aborted at the approval prompt for lack of a TTY under this
+backgrounded environment, a known limitation, not a bug). Each proposal
+was independently verified against the real code before acting on it, not
+trusted blindly.
+
+First proposal (run `20260901-125013-cadc68`) contained three findings:
+two real, one fabricated. The fabricated one claimed
+`scripts/tier4_worker.py` swallows `execute_llm()` failures in a
+try/except -- checked against the real code and found false: no such
+try/except exists, the code deliberately raises on any exception by
+design, with an explicit comment saying not to add one. Not touched.
+
+The two real findings, independently re-verified and then fixed by hand
+after a second `triapi plan` attempt (run `20260901-125621-2772ea`) also
+could not get past the same TTY-less approval prompt:
+
+1. **`scripts/dispatcher.py`'s `breakdown_phase()`** read
+   `tier2 = config['tier_2_manager']` directly instead of calling
+   `budget_guard.resolve_peak_conditional()` on it like every other real
+   Tier 2 call site does -- meant `triapi plan`'s phase-breakdown step
+   always used DeepSeek's off-peak config even during its peak billing
+   window, missing the `peak_alt` promotion to `agy` the rest of the
+   pipeline correctly applies. Fixed, with new
+   `tests/test_dispatcher_peak_hours.py` coverage proving the resolved
+   block differs between off-peak and peak-hours mocked windows (commit
+   `aa43f75`).
+2. **`scripts/librarian_escalate.py`'s `run()`** accepted a
+   `model_override` parameter (wired to the `--model` CLI flag, documented
+   as 'overrides config default model') but never read it anywhere --
+   always used the config's primary model regardless. Fixed:
+   `model = model_override or models_cfg.get('primary')`, with a new
+   regression test in `tests/test_tier5_librarian.py` proving an override
+   reaches `execute_agy` (commit `c50af7a`).
+
+Full test suite green throughout (104 unittest tests + 7 pytest tests).
+Both commits pushed to `origin/main`.
+
+Lesson: even a plan session that gets through real code exploration can
+still fabricate a finding alongside real ones -- verify every individual
+claim against the actual code before dispatching or hand-applying a fix,
+never trust a proposal's findings as a batch.
