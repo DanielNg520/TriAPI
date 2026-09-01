@@ -147,24 +147,18 @@ def escalate(
             is_tier4=False,
         )
     except Exception as e:
-        # agy's argv-size guard (llm_client._call_agy_cli) raises a
-        # synthetic CalledProcessError(0, ...) for a too-large prompt --
-        # not a real request failure, and orchestrator.run_task treats
-        # any Tier 2 "error" status as fatal (raises RuntimeError,
-        # crashing the whole dispatch). Found for real 2026-09-01: an
-        # item editing a large file escalated Tier4->Tier3->Tier2 (agy,
-        # during peak hours) and its prompt (system prompt + full file
-        # contents) exceeded agy's 100k-char argv limit, crashing an
-        # otherwise-recoverable dispatch instead of gracefully falling
-        # through to Tier 1 (Claude, stdin-based, no argv limit). Return
-        # "skipped" instead of "error" for this specific case so
+        # agy's llm_client._call_agy_cli raises synthetic
+        # CalledProcessError(0, ...) instances for recoverable failures
+        # (argv too large, json decode error, status != SUCCESS) --
+        # not real subprocess request failures, and orchestrator.run_task
+        # treats any Tier 2 "error" status as fatal (raises RuntimeError).
+        # Return "skipped" instead of "error" for all these cases so
         # orchestrator.py's Tier 2 block just falls through.
         if (
             isinstance(e, subprocess.CalledProcessError)
             and e.returncode == 0
-            and "prompt too large for argv" in (e.stderr or "")
         ):
-            log.warning("[%s] Tier 2 (%s) prompt too large for agy's argv limit, skipping to Tier 1: %s", task_id, model_name, e)
+            log.warning("[%s] Tier 2 (%s) agy provider raised synthetic recoverable error, skipping to Tier 1: %s", task_id, model_name, e)
             return {"status": "skipped", "reason": str(e)}
         log.error("[%s] Tier 2 request failed on %s: %s", task_id, model_name, e, exc_info=True)
         return {"status": "error", "reason": f"Tier 2 request failed on {model_name}: {e}"}

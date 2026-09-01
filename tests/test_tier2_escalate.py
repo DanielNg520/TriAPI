@@ -90,3 +90,63 @@ class TestEscalate:
             assert target.read_text(encoding="utf-8") == "def fixed():\n    pass\n"
         finally:
             target.unlink(missing_ok=True)
+
+    def test_escalate_skipped_on_synthetic_called_process_error_argv_limit(self) -> None:
+        import subprocess
+        target = Path("/tmp/test_synthetic_error.py")
+        target.write_text("def broken():\n    pass\n", encoding="utf-8")
+        try:
+            with mock.patch("scripts.tier2_escalate.check_tier2_ok", return_value={"ok": True, "reason": ""}):
+                with mock.patch("scripts.tier2_escalate.llm_client.execute_llm") as mock_exec:
+                    mock_exec.side_effect = subprocess.CalledProcessError(
+                        0, ["agy", "-p", "<omitted>"], "", "agy prompt too large for argv"
+                    )
+                    result = escalate("task-5", str(target), model="pro")
+            assert result["status"] == "skipped"
+        finally:
+            target.unlink(missing_ok=True)
+
+    def test_escalate_skipped_on_synthetic_called_process_error_json_decode(self) -> None:
+        import subprocess
+        target = Path("/tmp/test_synthetic_error2.py")
+        target.write_text("def broken():\n    pass\n", encoding="utf-8")
+        try:
+            with mock.patch("scripts.tier2_escalate.check_tier2_ok", return_value={"ok": True, "reason": ""}):
+                with mock.patch("scripts.tier2_escalate.llm_client.execute_llm") as mock_exec:
+                    mock_exec.side_effect = subprocess.CalledProcessError(
+                        0, ["agy", "-p", "prompt"], "invalid json", "stderr passthrough"
+                    )
+                    result = escalate("task-6", str(target), model="pro")
+            assert result["status"] == "skipped"
+        finally:
+            target.unlink(missing_ok=True)
+
+    def test_escalate_skipped_on_synthetic_called_process_error_status_not_success(self) -> None:
+        import subprocess
+        target = Path("/tmp/test_synthetic_error3.py")
+        target.write_text("def broken():\n    pass\n", encoding="utf-8")
+        try:
+            with mock.patch("scripts.tier2_escalate.check_tier2_ok", return_value={"ok": True, "reason": ""}):
+                with mock.patch("scripts.tier2_escalate.llm_client.execute_llm") as mock_exec:
+                    mock_exec.side_effect = subprocess.CalledProcessError(
+                        0, ["agy", "-p", "prompt"], '{"status": "ERROR"}', "agy status='ERROR' stderr_tail='some error'"
+                    )
+                    result = escalate("task-7", str(target), model="pro")
+            assert result["status"] == "skipped"
+        finally:
+            target.unlink(missing_ok=True)
+
+    def test_escalate_error_on_genuine_called_process_error(self) -> None:
+        import subprocess
+        target = Path("/tmp/test_genuine_error.py")
+        target.write_text("def broken():\n    pass\n", encoding="utf-8")
+        try:
+            with mock.patch("scripts.tier2_escalate.check_tier2_ok", return_value={"ok": True, "reason": ""}):
+                with mock.patch("scripts.tier2_escalate.llm_client.execute_llm") as mock_exec:
+                    mock_exec.side_effect = subprocess.CalledProcessError(
+                        1, ["agy", "-p", "prompt"], "", "real failure"
+                    )
+                    result = escalate("task-8", str(target), model="pro")
+            assert result["status"] == "error"
+        finally:
+            target.unlink(missing_ok=True)
