@@ -173,6 +173,27 @@ def _split_plan_by_phase(plan_text: str) -> list[str]:
             current.append(line)
     if current:
         chunks.append("".join(current))
+    # Drop a leading single-'#' (H1) title/rationale block that precedes a
+    # real, "Phase"-named section -- e.g. a plan's own
+    # "# Execution Plan -- ..." header followed by prose "Key decisions"
+    # bullets before the first "## Phase 1 -- ..." section. Position- and
+    # header-level-based, not content-based: the loose bullet check below
+    # cannot tell a rationale bullet ("- `X` -> ported to Y because...")
+    # apart from a real actionable item, and requiring '- [ ]' checkbox
+    # syntax was already tried and reverted (2026-08-13: a real plan using
+    # plain, checkbox-less numbered items got silently dropped entirely).
+    # An H1 opening a document is reliably a title, never itself a phase in
+    # this repo's own convention (every real phase chunk seen is '##' or
+    # deeper and named "Phase") -- found live 2026-09-01, run
+    # 20260901-135001-dd5f98: this exact block's rationale bullets matched
+    # the loose checklist filter and were dispatched as 9 bogus duplicate
+    # items before the real phases even started.
+    if (
+        len(chunks) > 1
+        and re.match(r"^#(?!#)\s+", chunks[0])
+        and not re.search(r"\bphase\b", chunks[0].splitlines()[0], re.IGNORECASE)
+    ):
+        chunks = chunks[1:]
     # Drop chunks with no checklist items (e.g. a leading title/context
     # block before the first phase header) -- nothing to break down.
     return [c for c in chunks if _CHECKLIST_ITEM_RE.search(c)]

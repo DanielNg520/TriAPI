@@ -85,6 +85,47 @@ class PlanSplitAndCompletionGuardTests(unittest.TestCase):
         chunks = _split_plan_by_phase(plan_text)
         self.assertEqual(len(chunks), 2)
 
+    def test_h1_title_with_rationale_bullets_dropped_before_real_phases(self) -> None:
+        # Real incident, 2026-09-01 (run 20260901-135001-dd5f98): a plan's
+        # own "# Execution Plan -- ..." H1 title followed by prose "Key
+        # decisions" bullets (not real checklist items) matched the loose
+        # bullet-based checklist filter and got dispatched as a bogus extra
+        # phase, duplicating the real Phase 1 work before it even ran.
+        plan_text = (
+            "# Execution Plan — Retire `ohmyllama` imports\n"
+            "\n"
+            "Grounded by reading the current on-disk source.\n"
+            "\n"
+            "**Key decisions made while reading the code:**\n"
+            "- `resolve_secret` -> new standalone `src/semai/security/secrets.py`.\n"
+            "- `BrowserCapability` -> wholesale port to `src/semai/capabilities/browser.py`.\n"
+            "\n"
+            "## Phase 1 — Foundational ports\n"
+            "- [ ] Create `src/semai/security/secrets.py`\n"
+            "\n"
+            "## Phase 2 — Repoint call sites\n"
+            "- [ ] Edit `src/semai/google_auth.py`\n"
+        )
+        chunks = _split_plan_by_phase(plan_text)
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(chunks[0].lstrip().startswith("## Phase 1"))
+        self.assertNotIn("Key decisions", "".join(chunks))
+
+    def test_h1_named_phase_is_not_dropped(self) -> None:
+        # An H1 that IS itself named "Phase" (this repo's existing
+        # numbered-marker convention, see test_atx_header_only_plan_unchanged
+        # above) must still be kept -- the new drop rule only targets an H1
+        # that does NOT mention "Phase" at all.
+        plan_text = (
+            "# Phase 1\n"
+            "- [ ] Task one\n"
+            "\n"
+            "# Phase 2\n"
+            "- [ ] Task two\n"
+        )
+        chunks = _split_plan_by_phase(plan_text)
+        self.assertEqual(len(chunks), 2)
+
     def test_mark_plan_complete_checks_boxes_when_counts_match(self) -> None:
         plan_text = (
             "<!-- triapi:plan run_id=run1 start -->\n"
