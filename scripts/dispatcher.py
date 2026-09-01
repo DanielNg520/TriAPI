@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scripts import git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
-from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok
+from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok, resolve_peak_conditional
 from scripts.config_loader import load_tiers
 from scripts.orchestrator import human_handoff, run_task, verify_task
 from scripts.secrets_loader import load_secrets
@@ -618,7 +618,11 @@ def breakdown_phase(phase_text: str, model: str | None = None, max_attempts: int
     under a minute. An RPD refusal is NOT retried -- it won't clear until
     the next day, so this case still returns immediately."""
     config = load_tiers()
-    tier2 = config["tier_2_manager"]
+    # Resolve peak_alt like every other real Tier 2 call site (e.g.
+    # tier2_escalate.py) does -- without this, phase-breakdown calls kept
+    # hitting DeepSeek's raw off-peak config even during its peak billing
+    # window, instead of promoting to the configured peak_alt provider.
+    tier2 = resolve_peak_conditional(config["tier_2_manager"])
     secrets = load_secrets()
     default_model = tier2["models"][tier2["default_model"]]
     # An explicit model override is honored exactly, no fallback -- the
