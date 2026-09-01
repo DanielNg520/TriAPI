@@ -117,3 +117,27 @@ User said: a refreshed Gemini free API key lands with the new month
 slot — wait for explicit instruction.
 
 No other TriAPI work is queued or mid-flight.
+
+## Follow-up: agy-crash fix was incomplete (found+fixed same day)
+
+Last night's `tier2_escalate.py` fix (commit `de00fe9`) only handled one
+of three synthetic `CalledProcessError(0, ...)` shapes that
+`scripts/llm_client.py`'s `_call_agy_cli` raises (argv-too-large,
+JSON-decode-error, status-not-SUCCESS) -- the other two still crashed
+`orchestrator.run_task` via `RuntimeError`. Confirmed still live via a
+post-fix `self_fix_drafted` crash capture
+(`logs/runs/20260901-020635-a29940.json`, 02:06:35, after `de00fe9` at
+01:46:25). Fixed by broadening the except-handler to treat ANY
+`CalledProcessError` with `returncode==0` as the synthetic/recoverable
+case (since a real subprocess failure never returns exit code 0),
+dropping the narrow stderr substring match. Dispatched via `triapi plan`
+(run `20260901-104617-748613`); the interactive approval prompt had no
+TTY under a backgrounded shell so the plan run itself aborted, and the
+produced diff was reviewed and committed by hand as the approval step.
+Commit `454cbf8`, pushed. Full suite green (98 unittest tests + 7 pytest
+tests including 4 new regression tests in
+`tests/test_tier2_escalate.py`). Three stale `self_fix_drafted` run
+files (`logs/runs/20260901-010921-44756b.json`,
+`20260901-014403-436f41.json`, `20260901-020635-a29940.json`) were left
+in place per user instruction -- gitignored local state, not tracked
+history, now superseded by this real fix.
