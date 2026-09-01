@@ -22,6 +22,7 @@ from scripts import content_guard, edit_blocks
 from scripts import lessons
 from scripts import llm_client
 from scripts.config_loader import load_tiers
+from scripts.budget_guard import resolve_peak_conditional
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
 from scripts.tri_logging import get_logger
@@ -160,7 +161,7 @@ def escalate(
     description: str = "",
 ) -> dict:
     config = load_tiers()
-    tier3 = config["tier_3_debugger"]
+    tier3 = resolve_peak_conditional(config["tier_3_debugger"])
     secrets = load_secrets()
 
     model_key = model or tier3["default_model"]
@@ -175,7 +176,7 @@ def escalate(
     state = read_state(task_id)
     stderr = state.get("last_stderr", "")
 
-    log.info("[%s] Tier 3 (DeepSeek/%s) escalating for %s", task_id, model_name, target_path)
+    log.info("[%s] Tier 3 (%s/%s) escalating for %s", task_id, tier3.get("provider", "deepseek"), model_name, target_path)
 
     # Snapshot the file once and reuse the same bytes for the prompt and the
     # later edit-block application. Re-checking existence or re-reading after

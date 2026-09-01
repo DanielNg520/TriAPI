@@ -50,6 +50,15 @@ tier_1_manager:
   effort: "high"
 
 tier_2_manager:
+  # 2026-09-01: off-peak/peak now swap PROVIDER (via peak_alt, resolved by
+  # budget_guard.resolve_peak_conditional), not skip-the-tier like before --
+  # off-peak stays DeepSeek v4 Pro (cheap window), peak switches to agy/
+  # Gemini 3.7 Flash instead of DeepSeek's 2x-billed window. peak_hours_utc
+  # stays here (not on tier_3_debugger, which now also has provider:
+  # deepseek) because budget_guard.resolve_deepseek_tier() scans
+  # TIER_SCAN_ORDER and returns the FIRST tier with provider==deepseek --
+  # that's this block -- so this is the one whose peak_hours_utc actually
+  # gets read.
   provider: deepseek
   api_key_secret: deepseek_api_key
   name: "DeepSeek API"
@@ -67,6 +76,12 @@ tier_2_manager:
     cache_hit_per_mtok_usd: 0.003625
     cache_miss_per_mtok_usd: null
     output_per_mtok_usd: null
+  peak_alt:
+    provider: agy
+    models:
+      default: gemini-3.7-flash
+    default_model: default
+    effort: high
 
 gemini_fallback:
   endpoint: "https://generativelanguage.googleapis.com"
@@ -103,34 +118,56 @@ deepseek_reference_pricing:
   output_per_mtok_usd: null
 
 tier_3_debugger:
-  provider: agy
+  # 2026-09-01: moved off agy/Gemini 3.1 Pro (see tier_1_planner's own
+  # history comment -- gemini-3.1-pro now lives there instead) onto
+  # DeepSeek v4 Flash off-peak, with a peak_alt swap to OpenRouter's free
+  # Nemotron model during DeepSeek's peak-billing window (see
+  # budget_guard.resolve_peak_conditional). Previously this tier was
+  # skipped outright during peak hours; it now stays live year-round, just
+  # on a different backend when DeepSeek is expensive.
+  provider: deepseek
+  api_key_secret: deepseek_api_key
+  endpoint: "https://api.deepseek.com"
   models:
-    default: gemini-3.1-pro
-    # 2026-08-28: demoted here from tier_1_planner (see tier_1_planner's
-    # history comment) after hallucinating fake tool-call markup twice on
-    # two different free OpenRouter models. Recorded as an available model
-    # id, NOT auto-selected -- tier3_escalate.py only ever reads
-    # `models[default_model]` and has no per-tier model-fallback wiring
-    # (unlike tier_5_librarian's fallback_local/fallback_agy/
-    # fallback_openrouter chain), so this key is inert until that wiring
-    # exists. Queued as a follow-up if live fallback here is wanted.
-    secondary: "dots-studio/dots-3-note-preview:free"
+    default: "deepseek-v4-flash"
   default_model: default
   effort: high
-  role: "complex C++ logic, hard SIMD fixes, algorithmic diffs (Gemini 3.1 Pro via Antigravity CLI)"
+  role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
+  peak_alt:
+    provider: openrouter
+    endpoint: "https://openrouter.ai/api/v1"
+    api_key_secret: open_router_api_key
+    models:
+      default: "nvidia/nemotron-3.5-lightning:free"
+    default_model: default
 
 tier_4_worker:
-  provider: ollama
-  endpoint: "http://localhost:11434"
+  # 2026-09-01: inverted relative to tiers 2/3 -- Tier 4 is the
+  # highest-VOLUME tier, so it defaults to the free OpenRouter Nemotron
+  # model off-peak (when cloud calls are "cheap", reusing DeepSeek's
+  # window purely as a shared clock -- Tier 4 itself never calls
+  # DeepSeek) and falls back to the local Ollama model during DeepSeek's
+  # peak window, when leaning on local/free-forever compute is safer than
+  # hammering a shared free-tier cloud endpoint at its busiest time. See
+  # budget_guard.resolve_peak_conditional.
+  provider: openrouter
+  endpoint: "https://openrouter.ai/api/v1"
+  api_key_secret: open_router_api_key
   models:
-    default: "qwen2.5-coder:14b-instruct-q6_K"
+    default: "nvidia/nemotron-3.5-lightning:free"
   default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
   automatable: true
   # Project-specific; callers may override per invocation.
   build_commands:
     - "cmake --build build"
+  peak_alt:
+    provider: ollama
+    endpoint: "http://localhost:11434"
+    models:
+      default: "qwen2.5-coder:14b-instruct-q6_K"
+    default_model: default
 
 tier_5_librarian:
   enabled: true

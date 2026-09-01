@@ -449,8 +449,14 @@ def probe_models():
         is_tier4=False,
         effort=tier_config.get('effort'),
     ))
+    # tier_2_manager/tier_3_debugger/tier_4_worker each swap their whole
+    # provider between DeepSeek off-peak/peak (config's peak_alt block,
+    # resolved by budget_guard.resolve_peak_conditional) -- probe whichever
+    # one is actually live right now, not always the primary/off-peak
+    # block, or a peak-hours misconfig in peak_alt would sail through this
+    # pre-flight check undetected during exactly the window it'd matter.
     for tier in ['tier_4_worker', 'tier_3_debugger', 'tier_2_manager', 'tier_1_planner', 'tier_1_manager']:
-        tier_config = config[tier]
+        tier_config = budget_guard.resolve_peak_conditional(config[tier])
         provider = tier_config['provider']
         endpoint = tier_config.get('endpoint')
         default_model = tier_config['default_model']

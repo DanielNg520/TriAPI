@@ -20,7 +20,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, llm_client
-from scripts.budget_guard import check_tier2_ok
+from scripts.budget_guard import check_tier2_ok, resolve_peak_conditional
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
@@ -89,7 +89,7 @@ def escalate(
         return {"status": "skipped", "reason": guard["reason"]}
 
     config = load_tiers()
-    tier2 = config["tier_2_manager"]
+    tier2 = resolve_peak_conditional(config["tier_2_manager"])
     secrets = load_secrets()
 
     default_model = tier2["models"][tier2["default_model"]]

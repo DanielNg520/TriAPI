@@ -14,6 +14,7 @@ disconnect -- resume by re-reading the same run_id.
 Must only be called after budget_guard.check_tier2_ok().
 """
 
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -43,6 +44,81 @@ from scripts.tri_logging import get_logger
 log = get_logger("dispatcher")
 
 RUNS_DIR = Path(__file__).resolve().parent.parent / "logs" / "runs"
+
+
+class RunAlreadyDispatchingError(RuntimeError):
+    """Raised when dispatch(state) is called for a run_id another live
+    process is already dispatching.
+
+    Found for real 2026-08-31: a `triapi dispatch <run_id>` invocation that
+    appeared to produce no running process (a bare `nohup ... &` at the
+    shell, silently killed by the harness's own process-group cleanup when
+    the tool call returned -- indistinguishable from a genuine launch
+    failure from the caller's side) was retried with `triapi dispatch
+    --background <run_id>`. The first invocation had, in fact, kept
+    running. Both then dispatched the SAME run_id concurrently against the
+    same git working tree, each working from its own independently-fetched
+    (and non-deterministically worded, since the Tier 2/Gemini phase
+    breakdown is not deterministic) checklist for the same items. One
+    process cleanly `git rm`-deleted several files via its checklist's
+    fast verify_task path; the other, given differently-worded items for
+    the same targets, ran them through Tier 4 content-generation instead
+    and overwrote the already-deleted files with fresh (garbage) content.
+    Caught only by hand review of `git status` after the run finished, not
+    by anything in the pipeline itself -- there was no lock preventing two
+    dispatch() calls for one run_id from running at once."""
+
+
+def _lock_path(run_id: str) -> Path:
+    return RUNS_DIR / f"{run_id}.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just owned by someone else
+    return True
+
+
+@contextlib.contextmanager
+def _run_lock(run_id: str):
+    """Exclusive lock for the duration of dispatch(state) against run_id.
+
+    A pidfile, not flock: the lock must be independently checkable (and
+    stale-clearable after a SIGKILL/crash) from any process, including one
+    just checking status, and must span the actual background dispatch
+    child -- not just the short-lived parent that spawns it -- which rules
+    out anything tied to a single process's file descriptor lifetime. See
+    RunAlreadyDispatchingError's docstring for the incident this guards
+    against.
+    """
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = _lock_path(run_id)
+    if lock_path.exists():
+        try:
+            other_pid = int(lock_path.read_text().strip())
+        except (ValueError, OSError):
+            other_pid = None
+        if other_pid is not None and _pid_alive(other_pid):
+            raise RunAlreadyDispatchingError(
+                f"Run {run_id} is already being dispatched by pid {other_pid}. "
+                "Wait for it to finish (see `triapi status`), or confirm that "
+                "process is really dead before retrying -- do not start a "
+                "second dispatch for the same run_id."
+            )
+        log.warning("[%s] Clearing stale dispatch lock (pid %s no longer alive)", run_id, other_pid)
+    lock_path.write_text(str(os.getpid()))
+    try:
+        yield
+    finally:
+        try:
+            if lock_path.exists() and lock_path.read_text().strip() == str(os.getpid()):
+                lock_path.unlink()
+        except OSError:
+            pass
 
 # BREAKDOWN_SYSTEM_INSTRUCTION itself lives in breakdown_prompts.py (split
 # out 2026-08-28 to stay under this repo's file-size ceiling); re-exported
@@ -1227,7 +1303,15 @@ def _is_transient_timeout_failure(result: dict, remaining: int) -> bool:
 def dispatch(state: dict) -> dict:
     """Walks state['breakdown']['phases'] sequentially, one item at a time,
     resuming from wherever state['results'] left off (so re-entering an
-    already-partially-dispatched run doesn't redo completed items)."""
+    already-partially-dispatched run doesn't redo completed items).
+
+    Wrapped in _run_lock() so two processes can never dispatch the same
+    run_id concurrently -- see RunAlreadyDispatchingError's docstring."""
+    with _run_lock(state["run_id"]):
+        return _dispatch_locked(state)
+
+
+def _dispatch_locked(state: dict) -> dict:
     phases = state["breakdown"]["phases"]
     state["status"] = "dispatching"
     state.setdefault("regression_flags", [])

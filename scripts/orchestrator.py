@@ -386,38 +386,38 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
                 break
 
     if resolved_by is None:
-        # Tier 3: DeepSeek (peak billing hours 06:00-10:00 UTC — skipped during
-        # that window since DeepSeek is billed at a premium then; see
-        # scripts/budget_guard.py for the exact window definition)
-        guard3 = _peak_hour_guard(task_id, "tier_3_debugger", deepseek_tier)
-        if guard3 and not guard3["ok"]:
-            log.info("[%s] Tier 3 skipped: %s", task_id, guard3["reason"])
-        else:
-            before_content = _read_target_text(resolved_target)
-            result3 = tier3_escalate(
-                task_id, resolved_target, context_blob=context_blob, description=description
-            )
-            if result3.get("status") == "timeout":
-                log.warning("[%s] Tier 3 timed out; soft-escalating to Tier 2: %s", task_id, result3.get("reason"))
-            if result3.get("status") == "error":
-                raise RuntimeError(f"Tier 3 failed: {result3.get('reason')}")
-            if result3.get("status") == "fix_rejected":
-                log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
-            if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
-                resolved_by = "tier_3"
-                _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
-                                            tier3_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
+        # Tier 3: DeepSeek v4 Flash off-peak; OpenRouter's free Nemotron
+        # model during DeepSeek's peak-billing window instead of being
+        # skipped outright -- tier3_escalate.escalate() resolves which one
+        # via budget_guard.resolve_peak_conditional(tiers_config[
+        # "tier_3_debugger"]) internally, so this tier now runs every item
+        # regardless of time of day.
+        before_content = _read_target_text(resolved_target)
+        result3 = tier3_escalate(
+            task_id, resolved_target, context_blob=context_blob, description=description
+        )
+        if result3.get("status") == "timeout":
+            log.warning("[%s] Tier 3 timed out; soft-escalating to Tier 2: %s", task_id, result3.get("reason"))
+        if result3.get("status") == "error":
+            raise RuntimeError(f"Tier 3 failed: {result3.get('reason')}")
+        if result3.get("status") == "fix_rejected":
+            log.warning("[%s] Tier 3 fix rejected: %s", task_id, result3.get("reason"))
+        if result3.get("status") == "fix_applied" and _rebuild_after_patch(task_id, build_cmd, workdir):
+            resolved_by = "tier_3"
+            _critique_and_maybe_revise(task_id, resolved_target, description, "tier_3",
+                                        tier3_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
 
     if resolved_by is None:
-        # Tier 2: Gemini API (budget-guarded). Tried before Tier 1 so that
-        # Claude (subscription-backed, and the strongest automated repair
-        # tier) stays reserved as the last automated attempt before human
-        # handoff, not spent on problems Gemini might still resolve.
+        # Tier 2: DeepSeek v4 Pro off-peak; agy/Gemini 3.7 Flash during
+        # DeepSeek's peak-billing window instead of being skipped outright --
+        # tier2_escalate.escalate() resolves which one via
+        # budget_guard.resolve_peak_conditional(tiers_config[
+        # "tier_2_manager"]) internally. Tried before Tier 1 so that Claude
+        # (subscription-backed, and the strongest automated repair tier)
+        # stays reserved as the last automated attempt before human handoff,
+        # not spent on problems Tier 2 might still resolve.
         guard2 = check_tier2_ok()
-        peak2 = _peak_hour_guard(task_id, "tier_2_manager", deepseek_tier)
-        if peak2 and not peak2["ok"]:
-            log.info("[%s] Tier 2 skipped: %s", task_id, peak2["reason"])
-        elif guard2["ok"]:
+        if guard2["ok"]:
             before_content = _read_target_text(resolved_target)
             result2 = tier2_escalate(
                 task_id, resolved_target, context_blob=context_blob, description=description

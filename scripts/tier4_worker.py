@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, hivemind_util, lessons, llm_client
 from scripts.config_loader import load_tiers
+from scripts.budget_guard import resolve_peak_conditional
 from scripts.secrets_loader import load_secrets
 from scripts.state import clear_state, read_state, record_failure
 from scripts.tri_logging import get_logger
@@ -154,11 +155,16 @@ def _tier4_fail(task_id: str, threshold: int, reason: str, is_oversize_failure: 
 
 def run(task_id: str, description: str, target: str, workdir: str = ".", build_cmd: str | None = None, model: str | None = None, context_blob: str = "") -> dict:
     config = load_tiers()
-    tier4 = config["tier_4_worker"]
+    tier4_raw = config["tier_4_worker"]
+    # build_commands is project config, not provider config -- read from the
+    # raw (never peak-swapped) block, since peak_alt only carries
+    # provider/endpoint/models/default_model and would KeyError here during
+    # DeepSeek's peak window otherwise.
+    build_cmd = build_cmd or " && ".join(tier4_raw["build_commands"])
+    tier4 = resolve_peak_conditional(tier4_raw)
     threshold = config["escalation_rules"]["tier4_to_tier3"]["threshold"]
 
     model = model or tier4["models"][tier4["default_model"]]
-    build_cmd = build_cmd or " && ".join(tier4["build_commands"])
 
     target_arg = Path(target)
     target_path = target_arg if target_arg.is_absolute() else Path(workdir) / target_arg

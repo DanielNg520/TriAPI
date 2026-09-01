@@ -421,3 +421,4 @@ AssertionError: agent fallback routing must exclude both chat and confirm
   File "<stdin>", line 3, in <module>
 AssertionError
 
+- [ ] FILE: /home/dyne/Documents/Coding/oh-my-llama/tests/test_injection_scan.py | HASH: 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b | REASON: Could not apply proposed edit: Block 1: SEARCH text matches 2 locations in the file -- ambiguous, needs more surrounding context to be unique.

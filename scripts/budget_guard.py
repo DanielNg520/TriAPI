@@ -189,6 +189,35 @@ def check_tier3_peak_hours_ok() -> dict:
     }
 
 
+def resolve_peak_conditional(tier_block: dict) -> dict:
+    """Returns the tier config block that should actually be used right
+    now: ``tier_block`` itself off-peak, or its ``peak_alt`` sub-block
+    during DeepSeek's peak-billing window, when present.
+
+    2026-09-01: tiers 2/3/4 were reassigned to each swap their whole
+    provider (not just skip the call) between DeepSeek peak and off-peak
+    hours -- e.g. tier_4_worker runs OpenRouter's free Nemotron model
+    off-peak and falls back to the local Ollama model during DeepSeek's
+    peak window (reusing that window purely as a shared "is this a cheap
+    time to lean on cloud calls" clock, unrelated to whether the tier
+    itself calls DeepSeek). A tier with no ``peak_alt`` key (Tier 1, Tier
+    5) is returned unchanged -- this is opt-in per tier, not a global
+    behavior change.
+
+    ``peak_alt`` fully REPLACES the block (provider/endpoint/models/
+    default_model/api_key_secret/effort/...), never merges with it -- a
+    partial override would silently leave stale primary fields (e.g.
+    DeepSeek's api_key_secret leaking into an OpenRouter peak_alt) that
+    happen to be absent from peak_alt itself.
+    """
+    peak_alt = tier_block.get("peak_alt")
+    if not peak_alt:
+        return tier_block
+    if check_tier3_peak_hours_ok()["ok"]:
+        return tier_block  # off-peak: primary block applies
+    return peak_alt
+
+
 JULES_USAGE_LOG = Path(__file__).resolve().parent.parent / "logs" / "jules_usage.jsonl"
 
 DEFAULT_JULES_DAILY_TASK_LIMIT = 15
