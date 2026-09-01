@@ -51,6 +51,24 @@ pytest tests, zero skipped).
   [[project_triapi_tui_plan]] (memory) / `AGENTS.md`'s Root index.
 - **Gemini free API key placement** — lands with the new month (2026-09);
   user will specify where it goes. Don't assume its slot.
+- **oh-my-llama `AGENTS.md` over ceiling / `tier_5_librarian` prompt-size-guard bug** (found live 2026-09-01) —
+  oh-my-llama's own `AGENTS.md` is now 93,852 chars, over this repo's 73,728-char
+  per-file ceiling convention (which oh-my-llama's docs also follow); a
+  `librarian_escalate.py` call against it (adding a plan-correction note to
+  a specific `triapi:plan` block) failed at the primary `agy` attempt with a
+  prompt-size-guard `CalledProcessError`, and since `tier_5_librarian`'s
+  fallback chain was retired in yesterday's (2026-09-01) tier-simplification
+  work, there was no fallback leg to catch it -- straight to `human_handoff`.
+  Worked around by hand-editing the specific block directly this one time
+  (documented exception). Two real follow-ups this surfaces:
+  (1) oh-my-llama's `AGENTS.md` needs the same `docs/agents/`-style overflow
+  split TriAPI's own `AGENTS.md` already got, to get back under the ceiling;
+  (2) reconsider whether `tier_5_librarian` having zero fallback
+  (post-simplification) is an acceptable tradeoff, or whether at least one
+  fallback leg (e.g. `fallback_local`) should be restored specifically for
+  oversized-file cases, since Tier 5's whole-file-context design means it will
+  keep hard-failing this way on any doc that's over the ceiling, in ANY
+  target repo, not just this one instance.
 
 ## Session state
 
