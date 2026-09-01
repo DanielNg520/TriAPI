@@ -1,0 +1,30 @@
+{
+  "$schema": "plan-index-v1",
+  "instructions": "Machine-readable index of docs/plan/ -- historical PLAN.md content moved out once PLAN.md's own size (~205,040 chars) would otherwise exceed the 73728-char ceiling. PLAN.md's 'This file's own index' section has one row per entry here. Read an entry only when your task needs that specific historical 'why' detail -- ARCHITECTURE.md/AGENTS.md cover live current state.",
+  "entries": [
+    {
+      "file": "20260810-000000-phase0-through-phase9-scaffolding-through-git-authority.md",
+      "date": "2026-09-01",
+      "topic": "Phase 0 (scaffolding/secrets) through Phase 9 (git clone/pull/push authority), all complete (✅)",
+      "moved_from": "PLAN.md's inline ## Phase 0 through ## Phase 9 sections"
+    },
+    {
+      "file": "20260813-000000-phase10-through-phase22-breakdown-retries-through-hardening.md",
+      "date": "2026-09-01",
+      "topic": "Phase 10 (per-phase breakdown/retries) through Phase 22 (worked-case implementation audit/hardening), all complete (✅)",
+      "moved_from": "PLAN.md's inline ## Phase 10 through ## Phase 22 sections"
+    },
+    {
+      "file": "20260818-000000-carryover-log-tier4-routing-through-queue-drain.md",
+      "date": "2026-09-01",
+      "topic": "Former '## Session Carryover Log' section, first half: dated entries 2026-08-18 through 2026-08-20's queue drain",
+      "moved_from": "PLAN.md's inline ## Session Carryover Log section (first half)"
+    },
+    {
+      "file": "20260822-000000-carryover-log-phase17-through-phase33-provider-decoupling-tier-reassignment.md",
+      "date": "2026-09-01",
+      "topic": "Former '## Session Carryover Log' section, second half: reused 'Phase N' numbering, 2026-08-22 through the 2026-08-25 tier reassignment",
+      "moved_from": "PLAN.md's inline ## Session Carryover Log section (second half, colliding Phase-N numbering)"
+    }
+  ]
+}

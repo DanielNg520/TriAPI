@@ -84,7 +84,7 @@ and that section is the largest/lowest-churn one, not preemptively.
 - **Architecture:** full detail in `ARCHITECTURE.md` (5-tier escalation state machine — Tier 5, the doc librarian, added 2026-08-24 — budget guard rationale, DeepSeek cache-hit economics).
 
 ## Root
-- `PLAN.md` — phase-by-phase implementation plan with checklists and end-of-phase tests. The permanent record of TriAPI's own build — read here for *why*, not `CARRYOVER.md`.
+- `PLAN.md` — phase-by-phase implementation plan with checklists and end-of-phase tests. The permanent record of TriAPI's own build — read here for *why*, not `CARRYOVER.md`. Split 2026-09-01 (was ~205,040 chars, ~2.7x this repo's 73,728-char ceiling): now a short index with pointers into `docs/plan/` (own `index.json`, same convention as `docs/agents/`) — see PLAN.md's own "This file's own index" section for the row-by-row map. Nothing after the 2026-08-25 tier reassignment should be appended here as new inline Phase blocks; use `CARRYOVER.md`/`docs/carryover/` for session work, and add a new `docs/plan/` entry only for durable build-rationale record.
 - `AGENTS.md` — this file (formerly `mapping.md`).
 - `ARCHITECTURE.md` — system design: the 4-tier escalation state machine, DeepSeek cache-hit economics, budget guard rationale, and what changed during the build (Tier 2 redesign, MCP server dropped, Jules deferred).
 - `README.md` — step-by-step walkthrough (first-time run, reading output/cost report, human-handoff files, common gotchas) plus setup (Python deps, sops/age, Ollama systemd service, Claude Code subscription login) and command reference (standalone task, smoke test, cost report).
