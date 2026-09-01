@@ -21,7 +21,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks, llm_client
-from scripts.budget_guard import check_tier2_ok, resolve_peak_conditional
+from scripts import budget_guard
 from scripts.config_loader import load_tiers
 from scripts.secrets_loader import load_secrets
 from scripts.state import read_state
@@ -30,6 +30,15 @@ from scripts.tri_logging import get_logger
 from scripts import lessons
 
 log = get_logger("tier2")
+
+
+def check_tier2_ok():
+    return budget_guard.check_tier2_ok()
+
+
+def resolve_peak_conditional(config):
+    return budget_guard.resolve_peak_conditional(config)
+
 
 COST_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "cost_log.jsonl"
 
@@ -94,18 +103,11 @@ def escalate(
     secrets = load_secrets()
 
     default_model = tier2["models"][tier2["default_model"]]
-    # default_model (Nemotron) must be tried first -- fallback_chain exists
-    # only for when its free-tier quota is exhausted for the day (each
-    # model buckets its quota separately, see tiers.yaml's comment on
-    # tier_2_manager.fallback_chain). Previously this used fallback_chain
-    # unconditionally whenever no explicit --model was passed, which meant
-    # every normal Tier 2 call silently used Gemini flash instead of
-    # Nemotron -- found via oh-my-llama's docs/Agent/CARRYOVER.md 2026-08-23.
-    if model:
-        models = [tier2["models"][model]]
-    else:
-        chain = tier2.get("fallback_chain") or []
-        models = [default_model] + [m for m in chain if m != default_model]
+    # Fail fast on any request error instead of hopping through a
+    # fallback_chain: a fallback list previously masked real failures
+    # (auth, 5xx, network) behind a synthetic "all candidates failed"
+    # result and silently swapped models on transient 429/403s.
+    model_name = model or default_model
 
     target_path = Path(target)
     current_contents = target_path.read_text() if target_path.exists() else None
@@ -133,58 +135,39 @@ def escalate(
         "plain text/markdown) -- no explanation."
     )
 
-    response_text = None
-    model_name = models[0]
-    last_error = None
-    for candidate in models:
-        log.info("[%s] Tier 2 (%s) escalating for %s", task_id, candidate, target_path)
-        try:
-            response_text, billing_type, prompt_tokens, output_tokens = llm_client.execute_llm(
-                provider=tier2.get("provider", "openrouter"),
-                endpoint=tier2.get("endpoint"),
-                api_key=secrets.get(tier2.get("api_key_secret", "open_router_api_key")),
-                model=candidate,
-                prompt=user_content,
-                system_prompt=system_instruction,
-                is_tier4=False,
-            )
-            model_name = candidate
-            break
-        except Exception as e:
-            last_error = e
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            # Only a quota/rate-limit response justifies moving to the next
-            # candidate in fallback_chain -- any other error (auth, 5xx,
-            # network) is treated as a real failure and reported, not masked
-            # by silently trying a different model.
-            if status in (429, 403) and candidate is not models[-1]:
-                log.warning("[%s] Tier 2 model %s unavailable (HTTP %s), trying next", task_id, candidate, status)
-                continue
-            # agy's argv-size guard (llm_client._call_agy_cli) raises a
-            # synthetic CalledProcessError(0, ...) for a too-large prompt --
-            # not a real request failure, and orchestrator.run_task treats
-            # any Tier 2 "error" status as fatal (raises RuntimeError,
-            # crashing the whole dispatch). Found for real 2026-09-01: an
-            # item editing a large file escalated Tier4->Tier3->Tier2 (agy,
-            # during peak hours) and its prompt (system prompt + full file
-            # contents) exceeded agy's 100k-char argv limit, crashing an
-            # otherwise-recoverable dispatch instead of gracefully falling
-            # through to Tier 1 (Claude, stdin-based, no argv limit). Return
-            # "skipped" instead of "error" for this specific case so
-            # orchestrator.py's Tier 2 block just falls through.
-            if (
-                isinstance(e, subprocess.CalledProcessError)
-                and e.returncode == 0
-                and "prompt too large for argv" in (e.stderr or "")
-            ):
-                log.warning("[%s] Tier 2 (%s) prompt too large for agy's argv limit, skipping to Tier 1: %s", task_id, candidate, e)
-                return {"status": "skipped", "reason": str(e)}
-            log.error("[%s] Tier 2 request failed on %s: %s", task_id, candidate, e, exc_info=True)
-            return {"status": "error", "reason": f"Tier 2 request failed on {candidate}: {e}"}
-
-    if response_text is None:
-        log.error("[%s] Tier 2 request failed on all candidates: %s", task_id, last_error, exc_info=True)
-        return {"status": "error", "reason": f"Tier 2 request failed on all candidates ({models}): {last_error}"}
+    log.info("[%s] Tier 2 (%s) escalating for %s", task_id, model_name, target_path)
+    try:
+        response_text, billing_type, prompt_tokens, output_tokens = llm_client.execute_llm(
+            provider=tier2.get("provider", "openrouter"),
+            endpoint=tier2.get("endpoint"),
+            api_key=secrets.get(tier2.get("api_key_secret", "open_router_api_key")),
+            model=model_name,
+            prompt=user_content,
+            system_prompt=system_instruction,
+            is_tier4=False,
+        )
+    except Exception as e:
+        # agy's argv-size guard (llm_client._call_agy_cli) raises a
+        # synthetic CalledProcessError(0, ...) for a too-large prompt --
+        # not a real request failure, and orchestrator.run_task treats
+        # any Tier 2 "error" status as fatal (raises RuntimeError,
+        # crashing the whole dispatch). Found for real 2026-09-01: an
+        # item editing a large file escalated Tier4->Tier3->Tier2 (agy,
+        # during peak hours) and its prompt (system prompt + full file
+        # contents) exceeded agy's 100k-char argv limit, crashing an
+        # otherwise-recoverable dispatch instead of gracefully falling
+        # through to Tier 1 (Claude, stdin-based, no argv limit). Return
+        # "skipped" instead of "error" for this specific case so
+        # orchestrator.py's Tier 2 block just falls through.
+        if (
+            isinstance(e, subprocess.CalledProcessError)
+            and e.returncode == 0
+            and "prompt too large for argv" in (e.stderr or "")
+        ):
+            log.warning("[%s] Tier 2 (%s) prompt too large for agy's argv limit, skipping to Tier 1: %s", task_id, model_name, e)
+            return {"status": "skipped", "reason": str(e)}
+        log.error("[%s] Tier 2 request failed on %s: %s", task_id, model_name, e, exc_info=True)
+        return {"status": "error", "reason": f"Tier 2 request failed on {model_name}: {e}"}
 
     cached_tokens = 0
 
@@ -209,15 +192,26 @@ def escalate(
     if editing:
         new_content, err = edit_blocks.apply_edit_blocks(current_contents, response_text)
         if new_content is None:
-            log.warning("[%s] Tier 2 edit-block apply failed: %s", task_id, err)
-            return {
-                "status": "fix_rejected",
-                "reason": f"Could not apply proposed edit: {err}",
-                "model": model_name,
-                "prompt_tokens": prompt_tokens,
-                "cached_tokens": cached_tokens,
-                "output_tokens": output_tokens,
-            }
+            # Not all models reliably return SEARCH/REPLACE blocks even when
+            # prompted to; fall back to treating the response as a full-file
+            # replacement (same extraction used for new files) before
+            # giving up outright.
+            fallback_code = extract_code(response_text)
+            if fallback_code is None:
+                log.warning("[%s] Tier 2 edit-block apply failed: %s", task_id, err)
+                return {
+                    "status": "fix_rejected",
+                    "reason": f"Could not apply proposed edit: {err}",
+                    "model": model_name,
+                    "prompt_tokens": prompt_tokens,
+                    "cached_tokens": cached_tokens,
+                    "output_tokens": output_tokens,
+                }
+            log.info(
+                "[%s] Tier 2 edit-block apply failed (%s); falling back to full-file replacement",
+                task_id, err,
+            )
+            new_content = fallback_code
         fixed_code = new_content
     else:
         fixed_code = extract_code(response_text)

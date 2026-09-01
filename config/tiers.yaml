@@ -50,15 +50,20 @@ tier_1_manager:
   effort: "high"
 
 tier_2_manager:
-  # 2026-09-01: off-peak/peak now swap PROVIDER (via peak_alt, resolved by
-  # budget_guard.resolve_peak_conditional), not skip-the-tier like before --
-  # off-peak stays DeepSeek v4 Pro (cheap window), peak switches to agy/
-  # Gemini 3.7 Flash instead of DeepSeek's 2x-billed window. peak_hours_utc
-  # stays here (not on tier_3_debugger, which now also has provider:
-  # deepseek) because budget_guard.resolve_deepseek_tier() scans
-  # TIER_SCAN_ORDER and returns the FIRST tier with provider==deepseek --
-  # that's this block -- so this is the one whose peak_hours_utc actually
-  # gets read.
+  # 2026-09-01: simplified into a single conceptual 3-rung "promotion
+  # chain" shared across tiers 2/3/4 (off-peak: DeepSeek v4 Pro -> agy/
+  # Gemini 3.1 Pro -> OpenRouter Nemotron; peak: DeepSeek drops out and
+  # everything promotes up one rung, with local Ollama filling the new
+  # bottom rung) -- see tier_3_debugger's and tier_4_worker's own history
+  # comments for the other two rungs. This tier is rung 1: DeepSeek v4 Pro
+  # off-peak, promoted to agy/Gemini 3.1 Pro (rung 2's off-peak model)
+  # during DeepSeek's peak-billing window. Off-peak/peak swap providers
+  # (via peak_alt, resolved by budget_guard.resolve_peak_conditional), not
+  # skip-the-tier like before peak_hours_utc stays here (not on
+  # tier_3_debugger, which also has provider: deepseek) because
+  # budget_guard.resolve_deepseek_tier() scans TIER_SCAN_ORDER and returns
+  # the FIRST tier with provider==deepseek -- that's this block -- so this
+  # is the one whose peak_hours_utc actually gets read.
   provider: deepseek
   api_key_secret: deepseek_api_key
   name: "DeepSeek API"
@@ -79,11 +84,9 @@ tier_2_manager:
   peak_alt:
     provider: agy
     models:
-      default: gemini-3.7-flash
+      default: gemini-3.1-pro
     default_model: default
     effort: high
-
-
 
 # Shared OpenRouter connection defaults for any tier/fallback leg that
 # dispatches through the "openrouter" provider. Previously borrowed from
@@ -114,18 +117,16 @@ deepseek_reference_pricing:
   output_per_mtok_usd: null
 
 tier_3_debugger:
-  # 2026-09-01: moved off agy/Gemini 3.1 Pro (see tier_1_planner's own
-  # history comment -- gemini-3.1-pro now lives there instead) onto
-  # DeepSeek v4 Flash off-peak, with a peak_alt swap to OpenRouter's free
-  # Nemotron model during DeepSeek's peak-billing window (see
-  # budget_guard.resolve_peak_conditional). Previously this tier was
-  # skipped outright during peak hours; it now stays live year-round, just
-  # on a different backend when DeepSeek is expensive.
-  provider: deepseek
-  api_key_secret: deepseek_api_key
-  endpoint: "https://api.deepseek.com"
+  # 2026-09-01: rung 2 of the shared promotion chain (see tier_2_manager's
+  # history comment) -- agy/Gemini 3.1 Pro off-peak (the same model/
+  # provider tier_1_planner uses, reused deliberately), promoted to rung
+  # 3's off-peak model (OpenRouter Nemotron) during DeepSeek's
+  # peak-billing window. Previously this tier ran DeepSeek v4 Flash
+  # off-peak; DeepSeek was dropped from this rung entirely so only rung 1
+  # (tier_2_manager) still calls DeepSeek off-peak.
+  provider: agy
   models:
-    default: "deepseek-v4-flash"
+    default: gemini-3.1-pro
   default_model: default
   effort: high
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
