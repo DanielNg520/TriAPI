@@ -187,11 +187,7 @@ def run(
     editing = target_path.exists()
     current_contents = target_path.read_text() if editing else None
 
-    # Single attempt, no fallback chain (2026-09-01): primary is agy/Gemini
-    # 3.7 Flash, config-driven via tier_5_librarian.models.primary. Any
-    # failure (LLM request, empty response, edit-apply, content guard,
-    # verify) fails fast to human_handoff instead of trying an alternate
-    # provider -- see this module's docstring.
+    # Single execution of the primary model using the `agy` provider
     models_cfg = lib_config.get("models", {})
     model = models_cfg.get("primary")
     last_stderr = ""

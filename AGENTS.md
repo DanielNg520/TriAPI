@@ -433,3 +433,23 @@ Now I have full grounding. Here's the plan:
 2. Phase 2: Update Carryover Documentation
    - [x] `docs/carryover/20260824-235900-misc-resolved-fixes.md`: Append a brief dated correction note (2026-08-28) stating that the test `test_cmd_dispatch_restores_ollama_state_on_exception` is now confirmed passing with full mocking in place. Do not remove or rewrite the original text, only append the correction. This edit MUST be executed using the `scripts/librarian_escalate.py` CLI, not via manual file write/edit tools. Verify with `python3 -m unittest tests.test_branch_features -v`.
 <!-- triapi:plan run_id=20260828-023258-1fe9e3 end -->
+
+<!-- triapi:plan run_id=20260901-002308-fa389b start -->
+## TriAPI Plan (run 20260901-002308-fa389b, appended 2026-09-01)
+
+1. Phase 1: Tier 5 librarian simplification
+   - [ ] `config/tiers.yaml`: Edit the `tier_5_librarian` block. Change `effort` from `low` to `high`. Keep `models: {primary: "gemini-3.7-flash"}` and delete the `fallback_local`, `fallback_openrouter`, and `fallback_agy` keys from `models`. Delete the `escalation_rules.tier5_to_fallbacks` block. Delete the `ollama_fallback` block entirely. Verify: `python3 -c "import yaml; yaml.safe_load(open('config/tiers.yaml'))"`
+   - [ ] `scripts/librarian_escalate.py`: Remove the `fallback_local_block` and `providers` list building. Replace the `for attempt_idx, provider_info in enumerate(providers):` loop with a single execution of the primary model using the `agy` provider (reading directly from `models_cfg.get("primary")`). If it fails, fail fast and call `_escalate_to_human` directly without looping through fallbacks. Verify: `python3 -m py_compile scripts/librarian_escalate.py && python3 -m pytest tests/ -q`
+   - [ ] `tests/test_tier5_librarian.py`: Remove any tests specifically asserting the escalation chain (`primary -> fallback_local -> fallback_agy -> fallback_openrouter`). Update tests to expect an immediate human handoff if the primary model fails. Verify: `python3 -m pytest tests/test_tier5_librarian.py -q`
+
+2. Phase 2: Remove Gemini per-model daily-quota fallback
+   - [ ] `scripts/gemini_fallback.py`: Delete this file via `git rm scripts/gemini_fallback.py`. Verify: `git status`
+   - [ ] `config/tiers.yaml`: Delete the `gemini_fallback` top-level block. Remove any remaining `fallback_chain` keys under `tier_2_manager` or anywhere else. Verify: `python3 -c "import yaml; yaml.safe_load(open('config/tiers.yaml'))"`
+   - [ ] `scripts/dispatcher.py`: In `_breakdown_phase_attempt()`, remove the `if provider == "google":` branch and the `gemini_fallback` import entirely. Always use the `else` branch's `llm_client.execute_llm` code path for all providers, ensuring it passes the correct `endpoint` and `api_key` for the given provider. Verify: `python3 -m py_compile scripts/dispatcher.py && python3 -m pytest tests/ -q`
+   - [ ] `scripts/tier2_escalate.py`: In `escalate()`, remove the `fallback_chain` lookup (`chain = tier2.get("fallback_chain") or []`) and the `for candidate in models:` loop. Call `llm_client.execute_llm` exactly once using the `default_model` (or explicit `model` override) and remove the `continue` on HTTP 429/403 to fail fast instead. Verify: `python3 -m py_compile scripts/tier2_escalate.py && python3 -m pytest tests/ -q`
+   - [ ] `tests/test_tier2_escalate.py`: Remove any tests that specifically exercise the `fallback_chain` loop behavior. Verify: `python3 -m pytest tests/test_tier2_escalate.py -q`
+   - [ ] `tests/test_dispatcher.py`: Remove any tests that specifically exercise `gemini_fallback.py` or the `provider == "google"` special case in phase breakdown. Verify: `python3 -m pytest tests/test_dispatcher.py -q`
+
+3. Phase 3: Simplify tiers 2/3/4's peak-hours provider assignment
+   - [ ] `config/tiers.yaml`: Update `tier_3_debugger`'s primary (off-peak) block to use `provider: agy` (replacing `deepseek`), `models: {default: gemini-3.1-pro}`, and `effort: high`, and remove its `endpoint` and `api_key_secret`. Leave its `peak_alt` block unchanged. Update `tier_2_manager`'s `peak_alt` block to use `provider: agy`, `models: {default: gemini-3.1-pro}`, and `effort: high` (replacing `gemini-3.7-flash`). Leave `tier_2_manager`'s primary block (with `peak_hours_utc`) and `tier_4_worker`'s primary/`peak_alt` blocks exactly as they are. Verify: `python3 -c "from scripts.config_loader import load_tiers; load_tiers()" && python3 -m pytest tests/ -q`
+<!-- triapi:plan run_id=20260901-002308-fa389b end -->

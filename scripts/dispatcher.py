@@ -32,7 +32,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import gemini_fallback, git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
+from scripts import git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
 from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok
@@ -50,23 +50,15 @@ class RunAlreadyDispatchingError(RuntimeError):
     """Raised when dispatch(state) is called for a run_id another live
     process is already dispatching.
 
-    Found for real 2026-08-31: a `triapi dispatch <run_id>` invocation that
-    appeared to produce no running process (a bare `nohup ... &` at the
-    shell, silently killed by the harness's own process-group cleanup when
-    the tool call returned -- indistinguishable from a genuine launch
-    failure from the caller's side) was retried with `triapi dispatch
-    --background <run_id>`. The first invocation had, in fact, kept
-    running. Both then dispatched the SAME run_id concurrently against the
-    same git working tree, each working from its own independently-fetched
-    (and non-deterministically worded, since the Tier 2/Gemini phase
-    breakdown is not deterministic) checklist for the same items. One
-    process cleanly `git rm`-deleted several files via its checklist's
-    fast verify_task path; the other, given differently-worded items for
-    the same targets, ran them through Tier 4 content-generation instead
-    and overwrote the already-deleted files with fresh (garbage) content.
-    Caught only by hand review of `git status` after the run finished, not
-    by anything in the pipeline itself -- there was no lock preventing two
-    dispatch() calls for one run_id from running at once."""
+    Found for real 2026-08-31: a background `triapi dispatch` invocation
+    looked like it hadn't launched (killed silently by the harness's own
+    process-group cleanup) and was retried, but the first run was in fact
+    still alive. Both then dispatched the SAME run_id concurrently against
+    the same git tree with differently-worded (non-deterministic) phase
+    breakdowns for the same items -- one process `git rm`-deleted files,
+    the other overwrote the already-deleted files via Tier 4. Caught only
+    by hand review of `git status`; nothing in the pipeline itself
+    prevented two dispatch() calls for one run_id running at once."""
 
 
 def _lock_path(run_id: str) -> Path:
@@ -157,34 +149,19 @@ def _split_plan_by_phase(plan_text: str) -> list[str]:
     output for a real 9-phase plan. Smallest reliable batch, not fewer,
     bigger calls.
 
-    Matches any ATX heading level ('#' through '######'), not just '## '
-    specifically -- found for real 2026-08-12: a plan used '### Phase 2'
-    (three hashes) while this only recognized exactly '## ', silently
-    dropping that entire phase's checklist items from the breakdown with
-    no error at all (the dropped phase just never existed as far as
-    dispatch was concerned). The planner's own header depth isn't a
-    guaranteed convention to rely on. Also matches a numbered top-level
-    marker of the form 'N. ' at the start of a line when it is followed by
-    a plausible phase title ('Phase ...' or a capitalized word) -- found
-    for real 2026-08-19 (run 20260819-063339-9d23c7): a plan used numbered
-    top-level headers ('1. Phase 1 -- ...', '2. Phase 2 -- ...') with no
-    '#' markers at all, and the splitter previously saw no phase headers,
-    silently collapsing the whole plan into one chunk and dropping every
-    phase after the first from the breakdown. The numbered-marker match is
-    deliberately narrower than the ATX one (requires 'Phase' or an
-    uppercase letter after the number) so numbered checklist sub-items
-    inside a phase are not misread as new phases. Also tolerates up to two
-    leading '*'/'_' markdown emphasis markers before 'Phase' -- found for
-    real 2026-08-20 (run 20260820-081806-d7c25f): a plan used
-    '1. **Phase 1 -- ...**' (bold-wrapped), which the number+'Phase'
-    literal match didn't recognize, same silent single-chunk collapse as
-    the two incidents above. A stray '# Title' line
-    before the first real phase header still produces a harmless chunk,
-    filtered out below same as before. A plan with NO header at all (a
-    single short plan, e.g. one Tier-1-drafted phase with no '#' line
-    whatsoever) produces exactly one chunk -- the whole text -- which is
-    correct as long as the checklist-item filter below still recognizes
-    it."""
+    _PHASE_HEADER_RE matches: any ATX heading level ('#' through '######'),
+    not just '## ' (a plan using '### Phase 2' silently dropped that whole
+    phase under a narrower match, found live 2026-08-12); a numbered
+    top-level marker 'N. ' followed by 'Phase ...' or a capitalized word,
+    for plans with no '#' markers at all (found live 2026-08-19, run
+    20260819-063339-9d23c7) -- deliberately narrower than the ATX case so
+    numbered checklist sub-items aren't misread as new phases; and up to
+    two leading '*'/'_' emphasis markers before 'Phase' for bold-wrapped
+    numbered headers like '1. **Phase 1 -- ...**' (found live 2026-08-20,
+    run 20260820-081806-d7c25f). A stray leading '# Title' line produces a
+    harmless chunk, filtered out below. A plan with no header at all
+    produces exactly one chunk -- the whole text -- correct as long as the
+    checklist-item filter below still recognizes it."""
     lines = plan_text.splitlines(keepends=True)
     chunks = []
     current = []
@@ -324,22 +301,18 @@ def _find_anchor_test_file(project_dir: str, exclude: str | None = None) -> str 
     Prefer 'tests/test_branch_features.py' if it exists and is not excluded,
     otherwise find the first sorted tests/test_*.py file.
 
-    Found for real 2026-08-18 (two incidents, see CARRYOVER.md queue item #1):
-    when a step referenced "the test file" / "existing test patterns" without
-    naming an exact path, the worker had no context file to ground against and
-    hallucinated a test structure; and when an anchor test file was chosen by
-    alphabetical order instead of the project's canonical
-    'tests/test_branch_features.py', the worker copied a pattern that did not
-    apply. This helper is the deterministic fallback for both cases.
+    Found for real 2026-08-18 (CARRYOVER.md queue item #1): a step that
+    referenced "the test file" with no exact path left the worker with no
+    context to ground against, and picking an anchor by alphabetical order
+    instead of the project's canonical file led to a copied pattern that
+    didn't apply. This is the deterministic fallback for both cases.
 
     Args:
-        project_dir (str): The root directory of the project.
-        exclude (str | None): An optional regex pattern to exclude specific
-            files or directories. When None or empty, nothing is excluded.
+        project_dir: The root directory of the project.
+        exclude: Optional regex pattern to exclude specific files/dirs.
 
     Returns:
-        str | None: The path to the anchor test file, or None if no suitable
-        file is found.
+        The path to the anchor test file, or None if none found.
     """
     target_path = Path(project_dir) / 'tests' / 'test_branch_features.py'
     if target_path.exists() and not (exclude and re.match(exclude, str(target_path))):
@@ -404,22 +377,16 @@ def _item_deletes_target_file(item: dict) -> bool:
     further. Requires the delete verb's own grammatical object to be the
     target filename (allowing a few filler words/articles/backticks in
     between, e.g. "delete the old `state.py` file"), not just proximity
-    anywhere in a longer description -- found for real 2026-08-20: an
-    80-char proximity window let "delete everything between and including
-    the ... markers from `AGENTS.md`" (an in-place prune, not a whole-file
-    delete) false-positive-match and skip the size-ceiling guard entirely,
-    sending an oversized file through Tier 4 undefended.
-
-    The filler-word list also needs a bare "file"/"module" BEFORE the
-    filename, not just AFTER it -- found for real 2026-08-30 (oh-my-llama
-    Sub-Phase 5H): the planner phrased several items as "Delete file
-    ohmyllama/conversational.py via git rm", which this pattern's older
-    filler list (old/entire/whole/flat, plus a trailing "file" as in
-    "state.py file") didn't match, so _force_verify_only_for_pure_deletions
-    below never fired and every one of those items went through the
-    LLM-driven Tier 4/3/2 edit-block path for a whole-file deletion --
-    exactly the fragile-for-no-reason failure mode this function exists to
-    prevent (see _force_verify_only_for_pure_deletions's own docstring)."""
+    anywhere in the description -- a looser proximity match once let an
+    in-place prune ("delete everything ... from `AGENTS.md`") false-
+    positive and skip the size-ceiling guard entirely (found live
+    2026-08-20). The filler-word list also needs a bare "file"/"module"
+    BEFORE the filename, not just after it -- "Delete file
+    ohmyllama/conversational.py via git rm" (found live 2026-08-30,
+    oh-my-llama Sub-Phase 5H) didn't match the older after-only filler
+    list, so _force_verify_only_for_pure_deletions never fired and the
+    item went through the fragile LLM-driven edit-block path for a
+    whole-file deletion instead."""
     desc = item.get("description", "")
     target_name = Path(item["target"]).name
     pattern = re.compile(
@@ -437,21 +404,18 @@ def _force_verify_only_for_pure_deletions(phases: list[dict], project_dir: str) 
     already performs that deletion via a shell `rm` of the target.
 
     Found live 2026-08-29 (run 20260828-182931-264248, oh-my-llama Phase
-    5G): the planner marked one deletion item verify_only=true (worked --
-    direct `rm`, no LLM involved) and an identically-shaped deletion item
-    verify_only=false in the SAME breakdown -- every tier then failed it
-    with "SEARCH text not found verbatim", human_handoff, because a
-    non-verify_only item is routed through the LLM SEARCH/REPLACE
-    edit-block path, which for a whole-file deletion means asking a model
-    to reproduce the entire current file content verbatim in a SEARCH
-    block just to replace it with nothing -- fragile for no reason, since
-    build_cmd already contains the real `rm`. The planner's own
-    verify_only choice for this item shape isn't reliable, so enforce it
-    here (same pattern as _enforce_file_size_ceiling, _item_deletes_target_file
-    above) rather than trusting the LLM breakdown. Mutates items in place;
-    leaves alone any deletion item whose build_cmd does NOT already
-    contain an `rm` of the target, since forcing verify_only there would
-    skip the file actually being deleted."""
+    5G): the planner marked one deletion item verify_only=true (worked)
+    and an identically-shaped deletion item verify_only=false in the SAME
+    breakdown -- the latter failed with "SEARCH text not found verbatim",
+    because a non-verify_only whole-file deletion routes through the LLM
+    SEARCH/REPLACE path, asking a model to reproduce the entire file
+    content verbatim just to replace it with nothing, when build_cmd
+    already contains the real `rm`. The planner's own verify_only choice
+    for this item shape isn't reliable, so enforce it here instead.
+    Mutates items in place; leaves alone any deletion item whose
+    build_cmd does NOT already contain an `rm` of the target, since
+    forcing verify_only there would skip the file actually being
+    deleted."""
     for phase in phases:
         for item in phase["items"]:
             if "git" in item or item.get("verify_only") or not item.get("target"):
@@ -478,32 +442,24 @@ def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | No
       split could never dispatch the retirement step for the very file
       it's splitting.
     - A doc target (matches tier_5_librarian.target_globs, with that tier
-      enabled) never actually reaches Tier 4 -- dispatch_plan()'s per-item
-      loop routes it to tier_5_librarian (agy/gemini-3.7-flash, a large
-      cloud context) regardless of this guard, so skip_tier4=True would be
-      a no-op and the Tier-4-context wording below would be actively false
-      for it. Still flagged (docs benefit from staying small for a
-      different reason -- token economy for any agent, human or Claude,
-      that reads the file directly -- see feedback_docs_are_index_files),
-      but with wording naming that reason instead of Tier 4, and without
-      setting skip_tier4.
+      enabled) never actually reaches Tier 4 -- routed to tier_5_librarian
+      instead, so skip_tier4=True would be a no-op. Still flagged (docs
+      benefit from staying small for token economy -- see
+      feedback_docs_are_index_files), but with wording naming that reason
+      instead of Tier 4, and without setting skip_tier4.
     - Any other (code) item on an oversized target is marked
-      skip_tier4=True (in place, mutating the item) instead of failing:
-      Tier 4's small local context window can never hold it, but Tier
-      3/2's cloud context windows are far larger, so
-      orchestrator.run_task() routes straight to Tier 3 for that one item
-      rather than refusing the entire plan. This is a one-time unblock for
-      the CURRENT oversized file, not a standing way to keep patching it
-      in place -- so the item's description also gets an explicit
-      instruction appended: reduce the file's size (split it into
-      cohesive smaller files/modules, per the ohmyllama/state/ package
-      precedent) as part of this fix, not just edit its content while
-      leaving it oversized. A future item that still targets the same
-      file after that should find it under the ceiling and go through
-      Tier 4 normally again.
-      Only returns an error for a genuinely unrecoverable case (there is
-      none left today, but the return type stays str | None for callers
-      that still branch on failure).
+      skip_tier4=True (mutating the item): Tier 4's small local context
+      window can never hold it, but Tier 3/2's cloud context windows are
+      far larger, so orchestrator.run_task() routes straight to Tier 3 for
+      that one item instead of refusing the entire plan. This is a
+      one-time unblock, not a standing way to keep patching the file in
+      place -- the item's description gets an explicit instruction to
+      reduce the file's size (split it into cohesive smaller modules) as
+      part of the fix, not just edit its content while leaving it
+      oversized.
+      Only returns an error for a genuinely unrecoverable case (none left
+      today; return type stays str | None for callers that still branch
+      on failure).
     """
     tier_5 = (load_tiers().get("tier_5_librarian") or {})
     tier_5_enabled = tier_5.get("enabled", True)
@@ -593,54 +549,28 @@ def _enforce_no_raw_edits_to_encrypted_files(phases: list[dict], project_dir: st
     return None
 
 
-_RETRY_AFTER_RE = re.compile(r"[Rr]etry in ([\d.]+)s")
-
-
-def _parse_retry_after(body: str) -> float | None:
-    """Google's 429 body names an exact backoff (e.g. 'Please retry in
-    27.33s.') -- use it when present instead of guessing."""
-    m = _RETRY_AFTER_RE.search(body)
-    return float(m.group(1)) if m else None
-
 
 def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, secrets: dict) -> dict:
-    provider = tier2.get("provider", "google")
-    
-    if provider == "google":
-        body = {
-            "systemInstruction": {"parts": [{"text": BREAKDOWN_SYSTEM_INSTRUCTION}]},
-            "contents": [{"role": "user", "parts": [{"text": phase_text}]}],
-            "generationConfig": {"responseMimeType": "application/json"},
-        }
-        try:
-            resp, model_used = gemini_fallback.post_generate_content(
-                requests.post, tier2["endpoint"], secrets.get(tier2.get("api_key_secret", "google_ai_studio_api_key"), ""), body, models, timeout=120,
-            )
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            log.error("Phase breakdown request failed: %s", e)
-            resp_text = getattr(getattr(e, "response", None), "text", "") or ""
-            retry_after = _parse_retry_after(resp_text)
-            return {"status": "error", "reason": f"Gemini request failed: {e}", "retry_after": retry_after}
-        if model_used != models[0]:
-            log.info("Phase breakdown used fallback model %s (default %s exhausted for today)", model_used, models[0])
-        data = resp.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-    else:
-        from scripts.llm_client import execute_llm
-        try:
-            api_key = secrets.get(tier2.get("api_key_secret", "open_router_api_key"))
-            text, _, _, _ = execute_llm(
-                provider=provider,
-                endpoint=tier2["endpoint"],
-                api_key=api_key,
-                model=models[0],
-                prompt=phase_text,
-                system_prompt=BREAKDOWN_SYSTEM_INSTRUCTION,
-            )
-        except Exception as e:
-            log.error("Phase breakdown request failed: %s", e)
-            return {"status": "error", "reason": f"OpenRouter request failed: {e}", "retry_after": None}
+    # 2026-09-01: always the generic execute_llm path now, for every
+    # provider -- the special-cased "google" branch (gemini_fallback.py's
+    # per-model quota fallback) was removed once the account moved off
+    # Google AI Studio's free tier, where that quota limit applied.
+    provider = tier2.get("provider", "openrouter")
+
+    from scripts.llm_client import execute_llm
+    try:
+        api_key = secrets.get(tier2.get("api_key_secret", "open_router_api_key"))
+        text, _, _, _ = execute_llm(
+            provider=provider,
+            endpoint=tier2["endpoint"],
+            api_key=api_key,
+            model=models[0],
+            prompt=phase_text,
+            system_prompt=BREAKDOWN_SYSTEM_INSTRUCTION,
+        )
+    except Exception as e:
+        log.error("Phase breakdown request failed: %s", e)
+        return {"status": "error", "reason": f"LLM request failed: {e}", "retry_after": None}
         
     text = text.strip()
     if text.startswith("```json"):
@@ -674,23 +604,19 @@ def breakdown_phase(phase_text: str, model: str | None = None, max_attempts: int
     _split_plan_by_phase for why this is per-phase, not per-plan.
 
     Retries on malformed JSON: Gemini's responseMimeType=application/json
-    mode is not 100% reliable even for small, simple inputs -- observed the
-    exact same tiny (307-char) phase produce valid JSON on one call and
-    malformed JSON on the next, with no input change. This is a transient/
-    stochastic failure, not a deterministic bug, so retrying is the right
-    response -- time is not a constraint here, a wrong plan running is what
-    actually costs something.
+    mode is not 100% reliable even for small, simple inputs -- the exact
+    same tiny (307-char) phase produced valid JSON on one call and
+    malformed JSON on the next, with no input change. Transient/stochastic,
+    not deterministic, so retrying is right -- time isn't a constraint
+    here, a wrong plan running is what actually costs something.
 
     An RPM refusal from check_tier2_ok() is retried the same way (the
-    sliding window empties within 60s on its own) -- found for real
-    2026-08-12: breaking down a large plan fires one Gemini call per phase
-    in a tight loop, easily bursting past a 10 RPM cap well before any
-    single phase's own retry logic would ever kick in, and the previous
-    immediate "skipped" return killed the whole breakdown (and, one layer
-    up, marked the run "failed" instead of resumable) over a condition that
-    clears itself in under a minute. An RPD refusal is NOT retried here --
-    it won't clear until the next day, so retrying within this call would
-    just busy-wait for no reason; that case still returns immediately."""
+    sliding window empties within 60s) -- found live 2026-08-12: a large
+    plan's per-phase Gemini calls easily burst past a 10 RPM cap, and the
+    previous immediate "skipped" return killed the whole breakdown (marking
+    the run "failed" instead of resumable) over a condition that clears in
+    under a minute. An RPD refusal is NOT retried -- it won't clear until
+    the next day, so this case still returns immediately."""
     config = load_tiers()
     tier2 = config["tier_2_manager"]
     secrets = load_secrets()
@@ -1041,20 +967,14 @@ def _dispatch_git_item(task_id: str, git_spec: dict, project_dir: str) -> dict:
 
 # A bare `python`/`python3`/`pytest` token used as the START of a shell
 # command or sub-command (start of string, or right after `&&`/`;`/`|`/`!`,
-# possibly with leading whitespace and/or leading `VAR=value` env
-# assignments, e.g. `PYTHONPATH=. python3 -c ...` -- a common enough shell
-# idiom that missing it defeated this exact fix on its own first real
-# verify command) -- but NOT already qualified with a path
-# (`.venv/bin/python`, `/usr/bin/python3`) or already run through
-# `uv run`. Matches the interpreter name only, not every occurrence of the
-# substring "python" anywhere in a command (e.g. inside a quoted string or
-# a --flag value), which a blunter regex would wrongly touch.
+# with optional leading whitespace and `VAR=value` env assignments, e.g.
+# `PYTHONPATH=. python3 -c ...`) -- but NOT already qualified with a path
+# (`.venv/bin/python`, `/usr/bin/python3`) or run through `uv run`. Matches
+# the interpreter name only, not every "python" substring in a command.
 #
-# `!` (boolean negation) added after a real miss: `! python3 -m pkg --help |
-# grep ... && python3 other.py` only rewrote the SECOND python3 (after `&&`)
-# -- the first, immediately after a leading `!`, was silently left bare and
-# resolved to the system interpreter instead of the project's `.venv`,
-# exactly the failure mode this whole function exists to prevent.
+# `!` (negation) added after a real miss: a leading `! python3 ...` left
+# that first interpreter bare while a later `&&`-joined one got rewritten,
+# resolving to the system interpreter instead of the project's `.venv`.
 _BARE_PYTHON_RE = re.compile(
     r"(?P<prefix>^|&&|;|\|\|?|\n|!)(?P<ws>\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S+\s+)*)"
     r"(?P<interp>python3?|pytest)(?=\s|$)"
@@ -1065,23 +985,18 @@ def _normalize_build_cmd(build_cmd: str, project_dir: str) -> str:
     """Rewrites a bare `python`/`python3`/`pytest` invocation in build_cmd
     to `uv run python`/`uv run pytest`, IF the target project is uv-managed
     (a `pyproject.toml` or `uv.lock` at its root) -- found for real
-    2026-08-12, three separate times in one session: a bare `python`/
-    `pytest` resolves to the system interpreter, not the project's own
-    `.venv`, and fails on a missing dependency that's very much installed,
-    just in the venv nobody asked to use. Two earlier instances were
-    hand-patched into a specific run's stored JSON build_cmd (narrow,
-    per-item fixes); this is the general, permanent fix, since the
-    mistake can originate from a human-written plan prompt just as easily
-    as from Gemini's own breakdown -- an instruction-level fix to
-    BREAKDOWN_SYSTEM_INSTRUCTION alone would not have caught this third
-    instance, which came from a human-authored `triapi plan` prompt, not
-    the LLM's paraphrasing of one.
+    2026-08-12, three times in one session: a bare interpreter resolves to
+    the system Python, not the project's own `.venv`, and fails on a
+    dependency that's actually installed, just in the venv nobody asked to
+    use. This is the general, permanent fix (vs. two earlier per-run hand
+    patches), since the mistake can come from a human-written plan prompt
+    just as easily as from the LLM's own breakdown.
 
     Deliberately conservative: only rewrites the interpreter token itself,
     at a command/sub-command boundary, and only for a project this signal
     actually applies to -- never touches an already-qualified interpreter
-    path or a project with no uv project files at all (this codebase
-    itself, TriAPI, has neither and must be left alone)."""
+    path or a project with no uv project files at all (TriAPI itself has
+    neither and must be left alone)."""
     if not (Path(project_dir, "pyproject.toml").exists() or Path(project_dir, "uv.lock").exists()):
         return build_cmd
 
@@ -1269,21 +1184,18 @@ def _is_transient_timeout_failure(result: dict, remaining: int) -> bool:
     should be retried in place instead of stopping the whole dispatch run.
 
     Exact trigger found for real: the tier-4 local Ollama drafting step fed
-    back ``HTTPConnectionPool(host='localhost', port=11434): Read timed out.
-    (read timeout=300)`` from a slow/busy local model. That is a statement
-    about the drafting infrastructure, not about the item -- stopping the
-    entire dispatch over it (and forcing an SSH reconnect + manual resume for
-    a condition that clears once the model finishes its previous request) is
-    the wrong failure mode, so a small number of retries is worth it.
+    back a Read-timed-out error from a slow/busy local model -- a statement
+    about the drafting infrastructure, not the item, so stopping the whole
+    dispatch (forcing an SSH reconnect + manual resume) is the wrong
+    response; a small number of retries is worth it instead.
 
     Deliberately narrow: this must NOT become a generic retry-until-success
-    loop. A retrying worker that gets to keep editing a failed item is
-    exactly the failure mode the verify_only/heredoc rules in
-    BREAKDOWN_SYSTEM_INSTRUCTION exist to prevent (seen for real 2026-08-12:
-    a retrying worker loosened its OWN verification script's assertion until
-    it trivially passed, leaving the real bug in place). Only a failure whose
-    own text says the infrastructure timed out earns a retry, and only while
-    retries remain."""
+    loop -- a retrying worker that keeps editing a failed item is exactly
+    the failure mode verify_only/heredoc rules exist to prevent (seen live
+    2026-08-12: a retrying worker loosened its own verification assertion
+    until it trivially passed, leaving the real bug in place). Only a
+    failure whose own text says the infrastructure timed out earns a
+    retry, and only while retries remain."""
     if remaining <= 0 or result["status"] == "success":
         return False
     # The same timeout can surface from the build/verification command's
@@ -1404,24 +1316,15 @@ def _dispatch_locked(state: dict) -> dict:
                                 target=resolved_target,
                                 workdir=state["project_dir"],
                                 # Without this, librarian_escalate.run()'s own
-                                # verify_cmd_resolved falls through to
-                                # tier_5_librarian.verify_command (null in
-                                # config/tiers.yaml) then the literal no-op
-                                # "true" -- meaning the item's real build_cmd
-                                # (this repo's own content-asserting check,
-                                # e.g. confirming a specific file actually
-                                # changed) was NEVER run for any tier_5-routed
-                                # item; "Verification succeeded" was logged
-                                # unconditionally regardless of what actually
-                                # happened on disk. Confirmed live 2026-08-28:
+                                # verify_cmd_resolved falls through to the
+                                # literal no-op "true", meaning the item's
+                                # real build_cmd never ran for a tier_5-routed
+                                # item and "Verification succeeded" logged
+                                # unconditionally. Confirmed live 2026-08-28:
                                 # a MAPPING.md update reported success twice
-                                # while writing to a wrong resolved path
-                                # (itself caused by a separate project_dir
-                                # mistake, see triapi.py's cmd_plan() fix
-                                # earlier the same day) and the item's own
-                                # build_cmd -- which explicitly checked the
-                                # correct file via git -C <repo> diff -- would
-                                # have caught it immediately, had it run.
+                                # while writing to a wrong resolved path, and
+                                # the item's own build_cmd (git diff check)
+                                # would have caught it immediately, had it run.
                                 verify_cmd=build_cmd,
                             )
                         except requests.exceptions.RequestException as e:

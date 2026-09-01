@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
 
-from scripts import budget_guard, dispatcher, gemini_fallback, llm_client
+from scripts import budget_guard, dispatcher, llm_client
 
 
 def _make_config(tier_deepseek, tier_google, deepseek_peak=None):
@@ -113,13 +113,17 @@ class TestAgyProviderGracefulFailure(unittest.TestCase):
 
 
 class TestBreakdownPhaseAttemptRouting(unittest.TestCase):
-    def test_routing_for_non_google_providers(self):
-        # _breakdown_phase_attempt's non-google branch does
+    def test_routing_for_every_provider(self):
+        # 2026-09-01: gemini_fallback.py and the special-cased "google"
+        # branch were removed -- _breakdown_phase_attempt now always uses
+        # the generic scripts.llm_client.execute_llm path, for every
+        # provider, "google" included (via execute_llm's own generic
+        # OpenAI-compatible fallback, same as deepseek/openrouter). It does
         # `from scripts.llm_client import execute_llm` *inside* the function
         # body on every call, so the patch target must be the real owning
         # module (scripts.llm_client), not an attribute dispatcher never
         # binds at import time.
-        providers = ["deepseek", "cli", "agy", "openrouter"]
+        providers = ["deepseek", "cli", "agy", "openrouter", "google"]
         for provider in providers:
             with self.subTest(provider=provider):
                 tier2 = {
@@ -128,45 +132,14 @@ class TestBreakdownPhaseAttemptRouting(unittest.TestCase):
                     "api_key_secret": "some_key",
                 }
                 secrets = {"some_key": "secret-value"}
-                with (
-                    mock.patch(
-                        "scripts.llm_client.execute_llm",
-                        return_value=('{"name": "p", "items": []}', provider, 0, 0),
-                    ) as mock_execute,
-                    mock.patch(
-                        "scripts.dispatcher.gemini_fallback.post_generate_content"
-                    ) as mock_post,
-                ):
+                with mock.patch(
+                    "scripts.llm_client.execute_llm",
+                    return_value=('{"name": "p", "items": []}', provider, 0, 0),
+                ) as mock_execute:
                     dispatcher._breakdown_phase_attempt(
                         phase_text="test", models=["m"], tier2=tier2, secrets=secrets
                     )
                     mock_execute.assert_called_once()
-                    mock_post.assert_not_called()
-
-    def test_routing_for_google_provider(self):
-        tier2 = {
-            "provider": "google",
-            "endpoint": "http://example.test",
-            "api_key_secret": "some_key",
-        }
-        secrets = {"some_key": "secret-value"}
-        resp = mock.Mock()
-        resp.raise_for_status = mock.Mock()
-        resp.json.return_value = {
-            "candidates": [{"content": {"parts": [{"text": '{"name": "p", "items": []}'}]}}]
-        }
-        with (
-            mock.patch("scripts.llm_client.execute_llm") as mock_execute,
-            mock.patch(
-                "scripts.dispatcher.gemini_fallback.post_generate_content",
-                return_value=(resp, "model-a"),
-            ) as mock_post,
-        ):
-            dispatcher._breakdown_phase_attempt(
-                phase_text="test", models=["model-a"], tier2=tier2, secrets=secrets
-            )
-            mock_execute.assert_not_called()
-            mock_post.assert_called_once()
 
 
 class TestPeakHoursPositionIndependence(unittest.TestCase):

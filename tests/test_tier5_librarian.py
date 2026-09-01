@@ -48,33 +48,28 @@ def _fake_response(content: str, prompt_tokens: int = 5, completion_tokens: int 
 
 class TestTier5Librarian(unittest.TestCase):
     def _tier5_config(self) -> dict:
+        # No fallback chain (removed 2026-09-01): a single `primary` model
+        # slot, `agy` provider always -- any failure escalates straight to
+        # human_handoff, no fallback_local/fallback_agy/fallback_openrouter
+        # legs to try. `threshold` still gates the verify-failure retry
+        # count enforced across external dispatcher retries (see
+        # librarian_escalate.run's docstring), not a chain traversal.
         return {
             "tier_5_librarian": {
                 "enabled": True,
                 "role": "doc_librarian",
-                "provider": "ollama",
+                "provider": "agy",
+                "effort": "high",
                 "models": {
                     "primary": "mistral-small:latest",
-                    "fallback_local": "ollama_fallback",
-                    "fallback_openrouter": "stealth/ox-alpha",
-                    "fallback_agy": "default",
                 },
                 "target_globs": ["*.md", "docs/**"],
                 "verify_command": None,
                 "max_attempts": 2,
             },
-            "ollama_fallback": {
-                "endpoint": "http://localhost:11434",
-                "models": {"default": "qwen2.5-coder:14b-instruct-q6_K"},
-            },
-            "openrouter_defaults": {
-                "endpoint": "https://openrouter.ai/api/v1",
-                "api_key_secret": "open_router_api_key",
-            },
             "escalation_rules": {
                 "tier5_to_fallbacks": {
                     "threshold": 2,
-                    "chain": ["fallback_local", "fallback_agy", "fallback_openrouter", "log_and_notify"],
                 }
             },
         }
@@ -228,7 +223,7 @@ class TestTier5Librarian(unittest.TestCase):
             agy_sentinel.assert_called_once()
             human_handoff.assert_called_once()
             handoff_reason = human_handoff.call_args.args[1]
-            self.assertIn("primary -> fallback_local -> fallback_agy -> fallback_openrouter", handoff_reason)
+            self.assertNotIn("primary -> fallback_local -> fallback_agy -> fallback_openrouter", handoff_reason)
             self.assertEqual(result["status"], "human_handoff")
             self.assertIsNone(result["resolved_by"])
             summary_path = logs_dir / "escalation_t-exhausted.md"
@@ -269,9 +264,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate.content_guard, "check_write") as check_write,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
@@ -279,7 +274,7 @@ class TestTier5Librarian(unittest.TestCase):
                     "t-nochange", "check if guide is stale", str(target), workdir=tmp,
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
             check_write.assert_not_called()
             clear_state.assert_called_once_with("t-nochange")
             self.assertEqual(target.read_text(encoding="utf-8"), original)
@@ -300,16 +295,16 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
                     "t-fresh-single", "check if guide is stale", str(target), workdir=tmp,
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
             clear_state.assert_called_once_with("t-fresh-single")
             self.assertEqual(target.read_text(encoding="utf-8"), original)
             self.assertEqual(result["status"], "success")
@@ -322,9 +317,10 @@ class TestTier5Librarian(unittest.TestCase):
         # even though the file still needs the described edit. A caller who
         # supplies a real (non-trivial) verify_cmd must have that claim
         # checked against the file on disk, not trusted unconditionally --
-        # every provider in the chain returns FRESH here, verify_cmd ("false")
-        # contradicts every one of them, so the run must exhaust to
-        # human_handoff rather than falsely reporting success.
+        # the primary model's FRESH claim is contradicted by verify_cmd
+        # ("false"), and with no fallback chain the run must go straight to
+        # human_handoff on this single attempt rather than falsely reporting
+        # success.
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "docs" / "STILL_STALE.md"
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -336,10 +332,6 @@ class TestTier5Librarian(unittest.TestCase):
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
-                mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
                 mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
                 mock.patch.object(librarian_escalate, "_escalate_to_human") as escalate_to_human,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
@@ -349,8 +341,6 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=tmp, verify_cmd="false",
                 )
 
-            # 3 ollama-provider slots (primary, fallback_local, fallback_openrouter)
-            self.assertEqual(execute_llm.call_count, 3)
             agy_sentinel.assert_called_once()
             clear_state.assert_not_called()
             escalate_to_human.assert_called_once()
@@ -373,9 +363,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
@@ -383,7 +373,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=tmp, verify_cmd="true",
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
             clear_state.assert_called_once_with("t-fresh-confirmed")
             self.assertEqual(target.read_text(encoding="utf-8"), original)
             self.assertEqual(result["status"], "success")
@@ -409,16 +399,16 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=(response, "ollama", 12, 7),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=(response, "subscription", 12, 7),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
                     "t-edit-single", "keep guide fresh", str(target), workdir=tmp,
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
             clear_state.assert_called_once_with("t-edit-single")
             self.assertEqual(target.read_text(encoding="utf-8"), "# Edit\n\nNew sentence here.\n")
             self.assertEqual(result["status"], "success")
@@ -437,16 +427,16 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=(response, "ollama", 6, 4),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=(response, "subscription", 6, 4),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state") as clear_state,
             ):
                 result = librarian_escalate.run(
                     "t-newfile-single", "create new doc", str(target), workdir=tmp,
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
             clear_state.assert_called_once_with("t-newfile-single")
             self.assertTrue(target.exists())
             self.assertEqual(target.read_text(encoding="utf-8"), "# New Doc\n\nBrand new content.\n")
@@ -455,17 +445,16 @@ class TestTier5Librarian(unittest.TestCase):
 
     # -- (12) single-call-flow: unparseable response escalates chain --------
 
-    def test_unparseable_response_escalates_to_next_chain_model(self) -> None:
+    def test_unparseable_response_escalates_to_human_handoff(self) -> None:
+        # No fallback chain (removed 2026-09-01): an unparseable primary
+        # response escalates straight to human_handoff on this one attempt,
+        # it never tries a second/third model.
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "docs" / "GARBLED.md"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("stale doc\n", encoding="utf-8")
             logs_dir = Path(tmp) / "logs"
 
-            responses = [
-                ("not FRESH and not a SEARCH/REPLACE block either", "ollama", 4, 2)
-                for _ in range(3)
-            ]
             agy_sentinel = mock.Mock(
                 return_value=("not FRESH and not a SEARCH/REPLACE block either", "subscription", 4, 2)
             )
@@ -473,9 +462,6 @@ class TestTier5Librarian(unittest.TestCase):
             with (
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
-                mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm", side_effect=responses,
-                ) as execute_llm,
                 mock.patch.object(librarian_escalate.llm_client, "execute_agy", new=agy_sentinel),
                 mock.patch.object(orchestrator, "ESCALATIONS_DIR", logs_dir),
                 mock.patch.object(orchestrator, "ESCALATIONS_LOG", logs_dir / "escalations.jsonl"),
@@ -486,21 +472,7 @@ class TestTier5Librarian(unittest.TestCase):
                     "t-unparseable", "update stale doc", str(target), workdir=tmp,
                 )
 
-            self.assertEqual(execute_llm.call_count, 3)
-            call_models = [c.kwargs["model"] for c in execute_llm.call_args_list]
-            self.assertEqual(
-                call_models,
-                ["mistral-small:latest", "qwen2.5-coder:14b-instruct-q6_K", "stealth/ox-alpha"],
-            )
-            
             agy_sentinel.assert_called_once()
-            
-            # Third call (openrouter fallback) must use openrouter_defaults'
-            # shared endpoint, not None or the local Ollama host.
-            self.assertEqual(
-                execute_llm.call_args_list[2].kwargs["endpoint"],
-                "https://openrouter.ai/api/v1",
-            )
             self.assertEqual(result["status"], "human_handoff")
             self.assertIsNone(result["resolved_by"])
 
@@ -604,9 +576,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
@@ -614,7 +586,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_calls_model_when_code_committed_after_doc(self) -> None:
         """Code committed after the doc -> execute_llm called exactly once."""
@@ -630,9 +602,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
@@ -640,7 +612,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_forces_call_for_non_staleness_description_even_when_fresh(self) -> None:
         """Non-staleness description + doc newer than code + clean tree -> execute_llm called once."""
@@ -656,16 +628,16 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
             ):
                 result = librarian_escalate.run(
                     "t-non-staleness", "append a note recording that X changed", str(workdir / "docs" / "GUIDE.md"),
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_calls_model_when_doc_untracked(self) -> None:
         """Untracked doc (no commits for it) -> execute_llm called exactly once."""
@@ -682,9 +654,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
@@ -692,7 +664,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_explicit_mention_force_calls_by_relpath(self) -> None:
         """Description naming the file by relpath -> execute_llm called once."""
@@ -707,9 +679,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
@@ -717,7 +689,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_explicit_mention_force_calls_by_basename(self) -> None:
         """Description naming the file by basename -> execute_llm called once."""
@@ -731,9 +703,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
@@ -741,7 +713,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_explicit_mention_force_calls_by_stem(self) -> None:
         """Description naming the file by bare stem -> execute_llm called once."""
@@ -755,9 +727,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
             ):
                 result = librarian_escalate.run(
@@ -765,7 +737,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_staleness_precheck_fail_open_when_subprocess_raises(self) -> None:
         """Monkeypatched subprocess raising -> model still called (fail-open)."""
@@ -779,9 +751,9 @@ class TestTier5Librarian(unittest.TestCase):
                 mock.patch.object(librarian_escalate, "load_tiers", return_value=self._tier5_config()),
                 mock.patch.object(librarian_escalate, "load_secrets", return_value=self._secrets()),
                 mock.patch.object(
-                    librarian_escalate.llm_client, "execute_llm",
-                    return_value=('FRESH\n', "ollama", 4, 2),
-                ) as execute_llm,
+                    librarian_escalate.llm_client, "execute_agy",
+                    return_value=('FRESH\n', "subscription", 4, 2),
+                ) as execute_agy,
                 mock.patch.object(librarian_escalate, "clear_state"),
                 mock.patch(
                     "scripts.doc_staleness.subprocess.run",
@@ -793,7 +765,7 @@ class TestTier5Librarian(unittest.TestCase):
                     workdir=str(workdir),
                 )
 
-            execute_llm.assert_called_once()
+            execute_agy.assert_called_once()
 
     def test_should_skip_model_call_returns_false_immediately_for_non_staleness_description(self) -> None:
         from scripts import doc_staleness

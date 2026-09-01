@@ -422,3 +422,50 @@ AssertionError: agent fallback routing must exclude both chat and confirm
 AssertionError
 
 - [ ] FILE: /home/dyne/Documents/Coding/oh-my-llama/tests/test_injection_scan.py | HASH: 01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b | REASON: Could not apply proposed edit: Block 1: SEARCH text matches 2 locations in the file -- ambiguous, needs more surrounding context to be unique.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/config/tiers.yaml | HASH: 5a568be5e7e077f2144c0e4ad6375539e2256af93b6d17c94b0c016cf4fbcf9c | REASON: Rebuild failed after Tier 3 rewrite: Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import yaml; yaml.safe_load(open('config/tiers.yaml'))
+                 ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/site-packages/yaml/__init__.py", line 125, in safe_load
+    return load(stream, SafeLoader)
+  File "/usr/lib64/python3.14/site-packages/yaml/__init__.py", line 81, in load
+    return loader.get_single_data()
+           ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/site-packages/yaml/constructor.py", line 49, in get_single_data
+    node = self.get_single_node()
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 36, in get_single_node
+    document = self.compose_document()
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 55, in compose_document
+    node = self.compose_node(None, None)
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 133, in compose_mapping_node
+    item_value = self.compose_node(node, item_key)
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 84, in compose_node
+    node = self.compose_mapping_node(anchor)
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 133, in compose_mapping_node
+    item_value = self.compose_node(node, item_key)
+  File "/usr/lib64/python3.14/site-packages/yaml/composer.py", line 64, in compose_node
+    if self.check_event(AliasEvent):
+       ~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/site-packages/yaml/parser.py", line 98, in check_event
+    self.current_event = self.state()
+                         ~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/site-packages/yaml/parser.py", line 449, in parse_block_mapping_value
+    if not self.check_token(KeyToken, ValueToken, BlockEndToken):
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/site-packages/yaml/scanner.py", line 116, in check_token
+    self.fetch_more_tokens()
+    ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/site-packages/yaml/scanner.py", line 215, in fetch_more_tokens
+    return self.fetch_block_entry()
+           ~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/site-packages/yaml/scanner.py", line 491, in fetch_block_entry
+    raise ScannerError(None, None,
+            "sequence entries are not allowed here",
+            self.get_mark())
+yaml.scanner.ScannerError: sequence entries are not allowed here
+  in "config/tiers.yaml", line 137, column 19
+
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_tier5_librarian.py | HASH: df0b962e57db330d750f8a7c45f300f870ee35221e0cc5afe1583e47085095ed | REASON: Could not apply proposed edit: No SEARCH/REPLACE blocks found in the response.
+- [ ] FILE: /home/dyne/Documents/Coding/TriAPI/config/tiers.yaml | HASH: 85543cc6659a1b6a13b1e3758a24b90ec7df638add886f1ee824b3e646e028c5 | REASON: Tier 3 returned empty content (finish_reason=None, reasoning_content_populated=False)

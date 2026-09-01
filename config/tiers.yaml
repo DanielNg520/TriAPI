@@ -83,11 +83,7 @@ tier_2_manager:
     default_model: default
     effort: high
 
-gemini_fallback:
-  endpoint: "https://generativelanguage.googleapis.com"
-  models:
-    flash: "gemini-3.5-flash"
-  api_key_secret: google_ai_studio_api_key
+
 
 # Shared OpenRouter connection defaults for any tier/fallback leg that
 # dispatches through the "openrouter" provider. Previously borrowed from
@@ -174,20 +170,14 @@ tier_5_librarian:
   role: doc_librarian
   automatable: true
   provider: agy
-  effort: low
+  effort: high
   models:
-    primary: "gemini-3.7-flash"   # or the confirmed-live suffixed id if the bare form is rejected
-    fallback_local: ollama_fallback
-    fallback_openrouter: "nvidia/nemotron-3-ultra-550b-a55b:free"
-    fallback_agy: default
+    primary: "gemini-3.7-flash"
   target_globs: ["*.md", "docs/**"]
   verify_command: null
   max_attempts: 2
 
-ollama_fallback:
-  endpoint: "http://localhost:11434"
-  models:
-    default: "qwen2.5-coder:14b-instruct-q6_K"
+
 
 escalation_rules:
   # Claude (Tier 1) is deliberately last in the automated chain, after
@@ -210,9 +200,7 @@ escalation_rules:
     trigger: claude_code_unresolved
     threshold: 1
     action: log_and_notify
-  tier5_to_fallbacks:
-    threshold: 2
-    chain: [fallback_local, fallback_agy, fallback_openrouter, log_and_notify]
+
 critique:
   enabled: true
   applies_to_tiers: ["tier_3", "tier_1", "tier_2", "tier_4"]
