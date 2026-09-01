@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260901-100100-triapi-tier-simplification-self-dispatch-two-bugs-fixed.md`](docs/carryover/20260901-100100-triapi-tier-simplification-self-dispatch-two-bugs-fixed.md) | **ACTIVE** — tier reassignment simplified into one shared promotion chain (Tiers 2/3/4), Tier 5 fallback chain + Gemini quota-fallback mechanism retired; done via TriAPI's own self-dispatch, which surfaced two real pipeline bugs (no per-run dispatch lock; agy argv-too-large crashing instead of escalating), both fixed+committed; full doc sweep done; nothing mid-flight, 20 commits ahead of origin/main, unpushed |
+| [`docs/carryover/20260901-140000-triapi-self-audit-complete-clean-handoff.md`](docs/carryover/20260901-140000-triapi-self-audit-complete-clean-handoff.md) | **ACTIVE** — clean session-end brief: full day's work summarized (tier simplification, agy-crash fix completed, cmd_tech_debt fixed, TECH_DEBT.md pruned, PLAN.md split, two on-hold items recovered, self-audit found+fixed two more real bugs), all pushed, tests green; queue is VIRTUAL_CODEBASE_PLAN.md (on hold for user) + docs/TUI_plan.md (unblocked, needs user input) + Gemini key placement (deferred) |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260901-100100-triapi-tier-simplification-self-dispatch-two-bugs-fixed.md`](docs/carryover/20260901-100100-triapi-tier-simplification-self-dispatch-two-bugs-fixed.md) | 2026-09-01 | RESOLVED | Tier reassignment simplified into shared promotion chain; Tier 5 fallback chain + Gemini quota-fallback retired; agy-crash fix completed (was incomplete); `cmd_tech_debt` fixed + `TECH_DEBT.md` pruned; `PLAN.md` split into `docs/plan/`; two on-hold items (`VIRTUAL_CODEBASE_PLAN.md`, `docs/TUI_plan.md`) recovered from silently dropping out of tracking; self-audit via `triapi plan` found+fixed two more real bugs (`breakdown_phase` peak-conditional gap, dead librarian `--model` override) |
 | [`20260830-084600-session-stopped-for-usage-sub-phase-5h-partial.md`](docs/carryover/20260830-084600-session-stopped-for-usage-sub-phase-5h-partial.md) | 2026-08-30 | RESOLVED | Sub-Phase 5H fully completed and pushed (commit `c4c8722`, next session); two forked-subagent incidents from prior day cleaned up |
 | [`20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md`](docs/carryover/20260830-072000-sub-phase-5g-done-caused-a-live-service-outage-recovered.md) | 2026-08-30 | RESOLVED | oh-my-llama Sub-Phase 5G fully retired; found+fixed a real dead-import bug and a real never-ported feature (ADR 0015); a multi-hour patch loop briefly crash-looped a live service, caught and recovered |
 | [`20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md`](docs/carryover/20260830-021500-oh-my-llama-docs-refreshed-caught-own-weak-verify-cmd-dataloss.md) | 2026-08-30 | RESOLVED | oh-my-llama docs refreshed for a new session (stale CARRYOVER.md corrected, 4 more plan blocks confirmed resolved and archived); caught+fixed a real content-loss regression from my own plan's tautological verify_cmd deleting a block it was told to preserve |

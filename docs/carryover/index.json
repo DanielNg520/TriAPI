@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260901-100100-triapi-tier-simplification-self-dispatch-two-bugs-fixed.md",
+  "active": "20260901-140000-triapi-self-audit-complete-clean-handoff.md",
   "history": [
+    {
+      "file": "20260901-100100-triapi-tier-simplification-self-dispatch-two-bugs-fixed.md",
+      "date": "2026-09-01",
+      "status": "RESOLVED",
+      "topic": "Tier reassignment simplified into shared promotion chain; Tier 5 fallback chain + Gemini quota-fallback retired; agy-crash fix completed (was incomplete); cmd_tech_debt fixed + TECH_DEBT.md pruned; PLAN.md split into docs/plan/; two on-hold items (VIRTUAL_CODEBASE_PLAN.md, docs/TUI_plan.md) recovered from silently dropping out of tracking; self-audit via triapi plan found+fixed two more real bugs (breakdown_phase peak-conditional gap, dead librarian --model override)"
+    },
     {
       "file": "20260830-084600-session-stopped-for-usage-sub-phase-5h-partial.md",
       "date": "2026-08-30",
