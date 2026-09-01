@@ -6,11 +6,11 @@ TriAPI orchestrates a C++/Edge AI debugging workflow across five tiers (four aut
 
 | Tier | Surface | Cost model | Role |
 |---|---|---|---|
-| **4 — Worker** | OpenRouter (`dots-studio/dots-3-note-preview:free`) / Local Ollama (`qwen2.5-coder`) | OpenRouter API / $0 local | Drafts/fixes code, runs the build, tries repeatedly |
-| **3 — Debugger** | agy / gemini-3.1-pro (Antigravity CLI, effort high) | Subscription-billed, $0 marginal cost | Harder logic errors Tier 4 couldn't fix |
-| **2 — Manager** | DeepSeek API (`deepseek-v4-pro`) | Metered, prefix-cache discount | Second automated repair attempt |
+| **4 — Worker** | OpenRouter nvidia/nemotron-3.5-lightning:free off-peak, local Ollama qwen2.5-coder:14b-instruct-q6_K during DeepSeek peak hours | OpenRouter API / $0 local | Drafts/fixes code, runs the build, tries repeatedly |
+| **3 — Debugger** | agy/gemini-3.1-pro (effort high) off-peak, OpenRouter nvidia/nemotron-3.5-lightning:free during DeepSeek peak hours | Subscription-billed ($0 marginal) off-peak, $0 OpenRouter during DeepSeek peak hours | Harder logic errors Tier 4 couldn't fix |
+| **2 — Manager** | DeepSeek v4 Pro off-peak, agy/gemini-3.1-pro (effort high) during DeepSeek peak hours | Metered (prefix-cache discount) off-peak, subscription-billed during DeepSeek peak hours | Second automated repair attempt |
 | **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | Strongest, last automated repair attempt before human review (its `tier_1_planner` role, initial `triapi plan` authoring, is separate and always runs first regardless of this repair ordering) |
-| **5 — Librarian** | Ollama mistral-small (local), escalating to agy/OpenRouter | $0 local / subscription on agy fallback | Doc-only repair for *.md/docs/** targets, see the existing Tier 5 section below |
+| **5 — Librarian** | agy/gemini-3.7-flash (effort high) | Subscription-billed, $0 marginal cost | Doc-only repair for *.md/docs/** targets, no fallback chain -- fails fast to human handoff on any failure instead of escalating through Ollama/OpenRouter fallbacks |
 
 If all four repair tiers are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically. Tier 1 (Claude) is deliberately ordered last in the repair chain, after Tier 2 (DeepSeek), so subscription quota is spent only on problems the cheaper/free tiers couldn't already resolve.
 
@@ -24,7 +24,7 @@ Tier 4 (OpenRouter/Ollama): draft + build
   └─ fails twice (escalation_rules.tier4_to_tier3.threshold)
        │
        ▼
-     Tier 3 (agy/gemini-3.1-pro): patch file, then Tier 4 does a PLAIN REBUILD
+     Tier 3 (agy/OpenRouter): patch file, then Tier 4 does a PLAIN REBUILD
        │  (not a re-draft -- that would overwrite the patch)
        ├─ builds ───────────────────────────────────────► done
        └─ still fails
@@ -35,7 +35,7 @@ Tier 4 (OpenRouter/Ollama): draft + build
             ├─ refused (free-tier limit) ─► skip to Tier 1
             └─ ok
                  ▼
-               Tier 2 (DeepSeek): patch file, plain rebuild
+               Tier 2 (DeepSeek/agy): patch file, plain rebuild
                  ├─ builds ─────────────────────────────► done
                  └─ still fails
                       │
@@ -71,32 +71,25 @@ The whole premise of this pipeline is conserving paid quota, so Tier 1 and Tier 
 
 `scripts/cost_report.py` aggregates `logs/cost_log.jsonl` per task and clearly separates **actual dollars spent** (DeepSeek, metered) from **notional cost** (what Tier 1 would have cost on metered billing, but was actually covered by the subscription at $0 real cost) — so the user always knows exactly what a task cost.
 
-## Tier 5 — doc librarian fallback chain and CLI/HTTP timeouts
+## Tier 5 — doc librarian and CLI/HTTP timeouts
 
 Tier 5 (`tier_5_librarian`, added 2026-08-24) keeps `*.md`/`docs/**` targets
 out of the code-repair tiers above: a single-model dispatcher
-(`scripts/librarian_escalate.py`) that escalates through an all-local/free
-chain rather than the paid Tier 1-3 ladder. As of 2026-08-26 the chain is
-`primary` (Ollama `mistral-small:latest`) → `fallback_local` (Ollama
-`ollama_fallback`'s model) → **`fallback_agy`** (Antigravity CLI,
-`gemini-3.1-pro`, effort high, subscription-billed at $0 marginal cost) →
-`fallback_openrouter` (OpenRouter free-tier model) → `log_and_notify`
-(human handoff). `fallback_agy` was inserted between the two Ollama legs and
-OpenRouter — cheapest-first — so a librarian item doesn't stall when local
-Ollama is slow or unavailable, or when a doc exceeds Ollama's effective
-context ceiling. Motivating incidents: the Phases 30-32 `PLAN.md`-too-large
-librarian gap, and a 2026-08-25 `self_fix_drafted` crash (run
-`20260825-174353-a25d29`) where the librarian's Ollama probe hit a
-hardcoded 300s HTTP read timeout against `localhost:11434`.
+(`scripts/librarian_escalate.py`) that makes exactly one call using
+`agy/gemini-3.7-flash` (effort high, subscription-billed at $0 marginal cost)
+and fails fast to human handoff (`human_handoff`) on any failure -- no
+fallback chain at all (the previous multi-provider fallback chain was removed
+2026-09-01). Designed to be invoked once per attempt; `consecutive_failures`
+persists across external retries so verification thresholds are still
+enforced across calls without an internal fallback loop.
 
-That crash's root cause — and the reason `fallback_agy` alone isn't a full
-fix — is a shallow HTTP timeout, the same bug class already fixed for the
-CLI-subprocess path (`_CLI_TIMEOUT`, raised 300→600s, commit `5a6ae01`) but
-missed for direct HTTP calls. `scripts/llm_client.py` now defines a
-sibling constant, `_HTTP_TIMEOUT` (default 600, override via
-`TRIAPI_HTTP_TIMEOUT`), used by both `_call_openai_api()` (the Ollama/
-OpenRouter-shaped HTTP path) and `_call_gemini_api()`, following the same
-"everything configurable" env-var convention as `_CLI_TIMEOUT`.
+For CLI and HTTP calls across the pipeline, timeouts are standardized to prevent
+shallow failures: the CLI-subprocess path uses `_CLI_TIMEOUT` (default 600s, commit
+`5a6ae01`), while direct HTTP calls use a sibling constant, `_HTTP_TIMEOUT` (default
+600s, override via `TRIAPI_HTTP_TIMEOUT`), defined in `scripts/llm_client.py` and used
+by both `_call_openai_api()` (the Ollama/OpenRouter-shaped HTTP path) and
+`_call_gemini_api()`, following the same "everything configurable" env-var convention
+as `_CLI_TIMEOUT`.
 
 ## Design decisions that changed during the build
 
