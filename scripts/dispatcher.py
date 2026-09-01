@@ -332,11 +332,23 @@ def _item_deletes_target_file(item: dict) -> bool:
     80-char proximity window let "delete everything between and including
     the ... markers from `AGENTS.md`" (an in-place prune, not a whole-file
     delete) false-positive-match and skip the size-ceiling guard entirely,
-    sending an oversized file through Tier 4 undefended."""
+    sending an oversized file through Tier 4 undefended.
+
+    The filler-word list also needs a bare "file"/"module" BEFORE the
+    filename, not just AFTER it -- found for real 2026-08-30 (oh-my-llama
+    Sub-Phase 5H): the planner phrased several items as "Delete file
+    ohmyllama/conversational.py via git rm", which this pattern's older
+    filler list (old/entire/whole/flat, plus a trailing "file" as in
+    "state.py file") didn't match, so _force_verify_only_for_pure_deletions
+    below never fired and every one of those items went through the
+    LLM-driven Tier 4/3/2 edit-block path for a whole-file deletion --
+    exactly the fragile-for-no-reason failure mode this function exists to
+    prevent (see _force_verify_only_for_pure_deletions's own docstring)."""
     desc = item.get("description", "")
     target_name = Path(item["target"]).name
     pattern = re.compile(
-        r"\b(?:delete|remove)\b\s+(?:the\s+)?(?:old\s+|entire\s+|whole\s+|flat\s+)*"
+        r"\b(?:delete|remove)\b\s+(?:the\s+)?"
+        r"(?:file\s+|module\s+|old\s+|entire\s+|whole\s+|flat\s+)*"
         rf"[`\"']?(?:[\w./-]*/)?{re.escape(target_name)}[`\"']?\b",
         re.I,
     )

@@ -1095,3 +1095,16 @@ def main() -> int:
 if __name__ == "__main__":
     sys.exit(main())
 ```
+
+### Fault-Tolerant Registry Initialization
+
+**Pattern:** When building a registry of modular capabilities, plugins, or optional dependencies during application startup, initialize each component independently and isolate instantiation errors.
+
+**Rationale:** 
+If components are initialized synchronously without error isolation, a failure in one optional dependency (e.g., a missing binary or unreachable service) will abort the entire application boot sequence. In environments with auto-restart policies (like `systemd` with `Restart=always`), this transforms a minor feature degradation into a catastrophic restart loop that takes down the entire system.
+
+**Implementation Guidelines:**
+1. **Isolate Construction:** Map capability names to factory functions or lambdas (e.g., `_CAPABILITY_FACTORIES`), so each can be invoked independently.
+2. **Catch and Degrade:** Iterate through the factories and wrap each instantiation in a `try...except` block.
+3. **Log and Continue:** On failure, log a warning that the specific capability is unavailable and proceed with booting the rest of the application. The system should be designed to handle the absence of these optional components gracefully.
+4. **Clean Up Hacks on Removal:** When deprecating or removing capabilities (as demonstrated in the diff), proactively remove any lazy-import workarounds (like module-level `__getattr__` overrides) that were previously introduced to prevent those specific components from breaking imports.

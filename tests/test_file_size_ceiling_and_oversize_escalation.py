@@ -339,6 +339,22 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         }
         self.assertTrue(_item_deletes_target_file(deletes_with_path))
 
+    def test_item_deletes_target_file_matches_bare_file_before_filename(self):
+        """Real incident 2026-08-30 (oh-my-llama Sub-Phase 5H): the planner
+        phrased several pure-deletion items as "Delete file
+        ohmyllama/conversational.py via git rm" -- a bare "file" noun
+        directly before the path, not one of the old/entire/whole/flat
+        filler words this check previously recognized. Every one of those
+        items missed _force_verify_only_for_pure_deletions and went through
+        the LLM edit-block path for a whole-file deletion instead of the
+        direct verify_only path, failing exactly as
+        _force_verify_only_for_pure_deletions's own docstring predicts."""
+        deletes_bare_file = {
+            "target": "ohmyllama/conversational.py",
+            "description": "Delete file ohmyllama/conversational.py via git rm since zero real references remain.",
+        }
+        self.assertTrue(_item_deletes_target_file(deletes_bare_file))
+
     def test_tier4_timeout_failure_escalates_after_one_consecutive_failure(self):
         task_id = self._task_id("timeout_task")
         build_output = "Command timed out after 120s: ./run_tests.sh"
