@@ -12,17 +12,17 @@ class RunBuildPipefailTests(unittest.TestCase):
     def test_piped_failure_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ok, output = run_build("false | tail -1", tmp)
-            self.assertIs(ok, False)
+            self.assertFalse(ok)
 
     def test_piped_success_still_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ok, output = run_build("true | tail -1", tmp)
-            self.assertIs(ok, True)
+            self.assertTrue(ok)
 
     def test_ordinary_non_piped_command_unaffected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertIs(run_build("true", tmp)[0], True)
-            self.assertIs(run_build("false", tmp)[0], False)
+            self.assertTrue(run_build("true", tmp)[0])
+            self.assertFalse(run_build("false", tmp)[0])
 
 
 if __name__ == "__main__":

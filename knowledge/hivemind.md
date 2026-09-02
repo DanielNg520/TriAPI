@@ -1419,3 +1419,25 @@ When writing tests that verify configuration values are correctly passed through
 Using real version strings makes tests brittle and creates unnecessary maintenance churn. Every time the project upgrades to a newer model or tool version, these tests have to be manually updated just to keep passing, even though the specific version string has no bearing on the routing or configuration logic being tested.
 
 Instead, use obvious dummy or sentinel values (e.g., `dummy-model-v1` or `mock-test-model`). This clearly communicates to future readers that the specific string doesn't matter for the test's assertions, and ensures the test remains robust and untouched during routine real-world version bumps.
+
+### Prefer `assertTrue` and `assertFalse` over `assertIs` for boolean assertions
+
+When writing tests using Python's `unittest` framework, prefer using `self.assertTrue(x)` and `self.assertFalse(x)` instead of `self.assertIs(x, True)` and `self.assertIs(x, False)`. 
+
+**Reasoning:**
+- **Readability and Idiom:** `assertTrue` and `assertFalse` are the standard, idiomatic methods provided by `unittest` specifically for evaluating boolean conditions. They are more concise and make the intent of the test immediately clear.
+- **Truthiness vs. Strict Identity:** `assertIs` checks for strict object identity (i.e., `x is True`). `assertTrue` and `assertFalse` evaluate the *truthiness* of the expression (i.e., `bool(x)`). In most testing scenarios, you only care whether a value evaluates to a truthy or falsy value in a boolean context, rather than it being the exact singleton `True` or `False` object. 
+
+*Note: If your test specifically requires validating that a return value is exactly the `True` or `False` singleton and not just truthy/falsy, `assertIs` would still be the correct choice. However, for general boolean outcomes, `assertTrue`/`assertFalse` should be the default.*
+
+**Example:**
+
+```python
+# Less idiomatic, strictly checks object identity
+self.assertIs(is_valid, True)
+self.assertIs(has_errors, False)
+
+# Preferred, idiomatic, checks truthiness
+self.assertTrue(is_valid)
+self.assertFalse(has_errors)
+```

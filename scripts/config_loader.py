@@ -22,7 +22,7 @@ def load_tiers(path: Path = TIERS_PATH) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"{path} not found.")
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     missing = [k for k in REQUIRED_KEYS if k not in config]
@@ -51,7 +51,7 @@ def load_resource_guard_services(path: Path = RESOURCE_GUARD_PATH) -> list[str]:
     just becomes a no-op rather than an error."""
     if not path.exists():
         return []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
     return config.get("pause_services") or []
 
@@ -59,6 +59,6 @@ def load_unload_ollama_models_flag(path: Path = RESOURCE_GUARD_PATH) -> bool:
     """Return True if unload_other_ollama_models is true (default), False otherwise."""
     if not path.exists():
         return True
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
     return config.get("unload_other_ollama_models", True)
