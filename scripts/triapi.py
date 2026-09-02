@@ -629,10 +629,21 @@ def cmd_self_fix_discard(bug_id: str) -> None:
         print(f"nothing found for {bug_id}")
 
 
+def _tech_debt_build_cmd(filepath: str) -> str:
+    """py_compile always; also run the specific test module for a test-shaped
+    target (matched on basename since TECH_DEBT.md entries use absolute
+    paths), else fall back to the shared full-suite command."""
+    name = Path(filepath).name
+    if name.startswith("test_") and name.endswith(".py"):
+        module = f"tests.{name[:-3]}"
+        return f"python3 -m py_compile {filepath} && PYTHONPATH=. python3 -m unittest {module} -v"
+    return f"python3 -m py_compile {filepath} && PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v"
+
+
 def cmd_tech_debt(project_dir: str) -> None:
     entries = tech_debt.read_tech_debt_entries()
     filtered_entries = [entry for entry in entries if not tech_debt.check_staleness(entry)]
-    
+
     synthetic_state = {
         "run_id": str(uuid.uuid4()),
         "project_dir": project_dir,
@@ -646,7 +657,7 @@ def cmd_tech_debt(project_dir: str) -> None:
                         {
                             "description": f"Fix {entry['filepath']}: {entry['reason']}",
                             "target": entry["filepath"],
-                            "build_cmd": f"python3 -m py_compile {entry['filepath']}",
+                            "build_cmd": _tech_debt_build_cmd(entry["filepath"]),
                             "verify_only": False,
                             "context_files": []
                         }
