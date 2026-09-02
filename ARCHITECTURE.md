@@ -10,7 +10,7 @@ TriAPI orchestrates a C++/Edge AI debugging workflow across five tiers (four aut
 | **3 — Debugger** | agy/gemini-3.1-pro (effort high) off-peak, OpenRouter nvidia/nemotron-3.5-lightning:free during DeepSeek peak hours | Subscription-billed ($0 marginal) off-peak, $0 OpenRouter during DeepSeek peak hours | Harder logic errors Tier 4 couldn't fix |
 | **2 — Manager** | DeepSeek v4 Pro off-peak, agy/gemini-3.1-pro (effort high) during DeepSeek peak hours | Metered (prefix-cache discount) off-peak, subscription-billed during DeepSeek peak hours | Second automated repair attempt |
 | **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | Strongest, last automated repair attempt before human review (its `tier_1_planner` role, initial `triapi plan` authoring, is separate and always runs first regardless of this repair ordering) |
-| **5 — Librarian** | agy/gemini-3.7-flash (effort high) | Subscription-billed, $0 marginal cost | Doc-only repair for *.md/docs/** targets, no fallback chain -- fails fast to human handoff on any failure instead of escalating through Ollama/OpenRouter fallbacks |
+| **5 — Librarian** | agy/gemini-3.8-flash (effort high) | Subscription-billed, $0 marginal cost | Doc-only repair for *.md/docs/** targets, no fallback chain -- fails fast to human handoff on any failure instead of escalating through Ollama/OpenRouter fallbacks |
 
 If all four repair tiers are exhausted, the task is logged for manual review — nothing tries to call a GUI app programmatically. Tier 1 (Claude) is deliberately ordered last in the repair chain, after Tier 2 (DeepSeek), so subscription quota is spent only on problems the cheaper/free tiers couldn't already resolve.
 
@@ -76,7 +76,7 @@ The whole premise of this pipeline is conserving paid quota, so Tier 1 and Tier 
 Tier 5 (`tier_5_librarian`, added 2026-08-24) keeps `*.md`/`docs/**` targets
 out of the code-repair tiers above: a single-model dispatcher
 (`scripts/librarian_escalate.py`) that makes exactly one call using
-`agy/gemini-3.7-flash` (effort high, subscription-billed at $0 marginal cost)
+`agy/gemini-3.8-flash` (effort high, subscription-billed at $0 marginal cost)
 and fails fast to human handoff (`human_handoff`) on any failure -- no
 fallback chain at all (the previous multi-provider fallback chain was removed
 2026-09-01). Designed to be invoked once per attempt; `consecutive_failures`

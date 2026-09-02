@@ -140,7 +140,7 @@ class TestTier5Librarian(unittest.TestCase):
             config = self._tier5_config()
             config["tier_5_librarian"]["provider"] = "agy"
             config["tier_5_librarian"]["effort"] = "low"
-            config["tier_5_librarian"]["models"]["primary"] = "gemini-3.7-flash"
+            config["tier_5_librarian"]["models"]["primary"] = "gemini-3.8-flash"
 
             response = (
                 "<<<<<<< SEARCH\n"
@@ -170,7 +170,7 @@ class TestTier5Librarian(unittest.TestCase):
             # configured model/effort -- proves the new primary provider
             # slot is wired through, not silently falling back to ollama.
             agy_sentinel.assert_called_once()
-            self.assertEqual(agy_sentinel.call_args.kwargs["model"], "gemini-3.7-flash")
+            self.assertEqual(agy_sentinel.call_args.kwargs["model"], "gemini-3.8-flash")
             self.assertEqual(agy_sentinel.call_args.kwargs["effort"], "low")
 
             # fallback_local (ollama/openrouter path) is never reached
@@ -201,7 +201,7 @@ class TestTier5Librarian(unittest.TestCase):
 
             config = self._tier5_config()
             config["tier_5_librarian"]["provider"] = "agy"
-            config["tier_5_librarian"]["models"]["primary"] = "gemini-3.7-flash"
+            config["tier_5_librarian"]["models"]["primary"] = "gemini-3.8-flash"
 
             response = (
                 "<<<<<<< SEARCH\n"

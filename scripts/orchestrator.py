@@ -325,8 +325,9 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
 
     # Tier 5 (librarian): for standalone single-target runs whose target is a
     # doc file matched by tier_5_librarian.target_globs, delegate entirely to
-    # librarian_escalate.run() -- which handles the full doc-fix pipeline --
-    # and return its result through the normal cost-report path below.
+    # librarian_escalate.run() -- which handles the full doc-fix pipeline with
+    # model gemini-3.8-flash -- and return its result through the normal
+    # cost-report path below.
     librarian_cfg = tiers_config.get("tier_5_librarian")
     if librarian_cfg and librarian_cfg.get("enabled", True) and _is_doc_target(target, librarian_cfg.get("target_globs", [])):
         log.info("[%s] Tier 5 (librarian) routing for doc target %s", task_id, target)
@@ -429,7 +430,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
                                         tier3_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
 
     if resolved_by is None:
-        # Tier 2: DeepSeek v4 Pro off-peak; agy/Gemini 3.7 Flash during
+        # Tier 2: DeepSeek v4 Pro off-peak; gemini-3.1-pro during
         # DeepSeek's peak-billing window instead of being skipped outright --
         # tier2_escalate.escalate() resolves which one via
         # budget_guard.resolve_peak_conditional(tiers_config[

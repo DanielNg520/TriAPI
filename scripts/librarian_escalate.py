@@ -1,6 +1,6 @@
 """Librarian: escalates stale library detection and update.
 
-Asks agy/Gemini 3.7 Flash (config/tiers.yaml's tier_5_librarian) to
+Asks agy/gemini-3.8-flash (config/tiers.yaml's tier_5_librarian) to
 determine if a library file is stale based on a task description, writes
 the updated file if stale, and runs a verification command. Fails fast to
 human_handoff on any failure -- no multi-provider fallback chain (removed

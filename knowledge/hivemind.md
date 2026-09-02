@@ -1390,3 +1390,32 @@ Failing to update comments during a refactoring leads to "documentation rot." Th
 
 **Best Practice:**
 Whenever you perform a structural refactor, rename classes, or move modules, always do a text search for the old terms (e.g., `ohmyllama`, `Config.load`) across the codebase. This ensures that documentation and comments are updated in tandem with the implementation.
+
+### Declarative AI Model Configuration
+
+**Context:** The application orchestrates multiple AI models across different tiers, roles, and fallback chains. 
+
+**Lesson:** Avoid hardcoding model names, versions, and endpoints in your execution scripts. Instead, extract them into a centralized configuration file (e.g., `tiers.yaml`) that serves as a single source of truth. 
+
+**Why it matters:** 
+The AI ecosystem evolves rapidly. You will frequently need to upgrade model versions (as seen here, bumping `gemini-3.7-flash` to `gemini-3.8-flash`), switch providers due to rate limits, or adjust fallback logic. By keeping model configurations declarative:
+- **Trivial Upgrades:** Bumping a model version is a one-line configuration change, requiring no changes to the underlying code.
+- **Hot-Swapping:** You can cleanly swap providers or implement peak-hour alternatives without risking regressions in the core orchestration logic.
+- **Visibility:** Developers can see exactly which models handle which roles (e.g., "strategic planning" vs. "doc_librarian") at a glance.
+
+### Use Machine-Readable Model Identifiers in Documentation
+
+When documenting the use of specific LLMs, external services, or configuration values, use the exact machine-readable identifier or slug (e.g., `gemini-3.8-flash`) rather than informal, human-readable display names (e.g., `Gemini 3.7 Flash`). 
+
+**Why this matters:**
+- **Searchability:** Developers frequently rely on code search tools (like `grep` or CodeGraph) to track down where a specific model or version is utilized. Using the exact programmatic slug ensures your documentation surfaces in those search results alongside code and configuration files.
+- **Precision:** Model versions and variants often share similar human-readable names. Using the exact identifier eliminates ambiguity about which specific model version a component was tested with or depends on.
+- **Consistency:** It aligns the documentation language directly with the code and configuration files (e.g., `config/tiers.yaml`), creating a single source of truth for terminology.
+
+### Avoid Hardcoding Real Versioned Names in Config Mocks
+
+When writing tests that verify configuration values are correctly passed through to mocked dependencies (like an LLM client), avoid hardcoding real, versioned names (e.g., `gemini-3.7-flash` or `gemini-3.8-flash`). 
+
+Using real version strings makes tests brittle and creates unnecessary maintenance churn. Every time the project upgrades to a newer model or tool version, these tests have to be manually updated just to keep passing, even though the specific version string has no bearing on the routing or configuration logic being tested.
+
+Instead, use obvious dummy or sentinel values (e.g., `dummy-model-v1` or `mock-test-model`). This clearly communicates to future readers that the specific string doesn't matter for the test's assertions, and ensures the test remains robust and untouched during routine real-world version bumps.

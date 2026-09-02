@@ -173,7 +173,7 @@ tier_5_librarian:
   provider: agy
   effort: high
   models:
-    primary: "gemini-3.7-flash"
+    primary: "gemini-3.8-flash"
   target_globs: ["*.md", "docs/**"]
   verify_command: null
   max_attempts: 2
