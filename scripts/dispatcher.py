@@ -620,7 +620,61 @@ def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, se
     return {"status": "ok", "phase": parsed}
 
 
-def breakdown_phase(phase_text: str, model: str | None = None, max_attempts: int = 3) -> dict:
+# Top-level checklist bullet: no leading indentation, unlike a bullet's own
+# wrapped continuation lines or nested sub-bullets. Deliberately narrower
+# than _CHECKLIST_ITEM_RE (which allows any indentation) -- this is used to
+# find bullet BOUNDARIES within a phase, where an indented match would
+# wrongly split a bullet's own body away from its marker line.
+_TOP_LEVEL_BULLET_RE = re.compile(r"^(?:[-*]|\d+\.)\s+")
+
+# Chars: a real incident (2026-09-01/02) showed a single unusually long/
+# dense checklist bullet losing most of its technical detail during Tier 2
+# phase-breakdown compression, despite BREAKDOWN_SYSTEM_INSTRUCTION's
+# explicit "carry forward every concrete technical requirement... failure
+# to do so" instruction -- the instruction alone isn't enough once one call
+# has to compress many bullets at once including one much longer than the
+# rest. No principled threshold exists; this is a conservative starting
+# point (well above a normal single-file bullet, which is usually under
+# 1,000 chars in practice).
+_DENSE_BULLET_THRESHOLD = 4000
+
+
+def _split_phase_by_dense_bullet(phase_text: str, threshold: int = _DENSE_BULLET_THRESHOLD) -> tuple[str, str] | None:
+    """If phase_text has a single top-level checklist bullet whose own text
+    clearly dominates the phase (>= threshold chars AND >= half of all
+    bullet text combined), split it out so a later breakdown_phase() call
+    gives it undivided attention instead of competing for compression
+    budget against every other bullet in the same Gemini call.
+
+    Returns None when no split is warranted (nothing to split against, or
+    no single bullet dominates -- several long-ish bullets of similar size
+    are left alone, since there's no one bullet to isolate). Otherwise
+    returns (rest_text, dense_text): two standalone phase-shaped chunks,
+    each keeping the phase's own header line so both stay independently
+    breakdownable -- rest_text has the dense bullet excised, dense_text is
+    the header plus the dense bullet alone."""
+    lines = phase_text.splitlines(keepends=True)
+    bullet_starts = [i for i, line in enumerate(lines) if _TOP_LEVEL_BULLET_RE.match(line)]
+    if len(bullet_starts) < 2:
+        return None
+    header = "".join(lines[:bullet_starts[0]])
+    bullets = [
+        "".join(lines[start:(bullet_starts[idx + 1] if idx + 1 < len(bullet_starts) else len(lines))])
+        for idx, start in enumerate(bullet_starts)
+    ]
+    lengths = [len(b) for b in bullets]
+    max_idx = max(range(len(lengths)), key=lengths.__getitem__)
+    max_len = lengths[max_idx]
+    if max_len < threshold or max_len < sum(lengths) / 2:
+        return None
+    dense_text = header + bullets[max_idx]
+    rest_text = header + "".join(b for i, b in enumerate(bullets) if i != max_idx)
+    if not _CHECKLIST_ITEM_RE.search(rest_text):
+        return None  # the dense bullet was the only bullet -- nothing to split off
+    return rest_text, dense_text
+
+
+def breakdown_phase(phase_text: str, model: str | None = None, max_attempts: int = 3, _dense_split_depth: int = 0) -> dict:
     """Breaks down ONE phase's markdown into {"name", "items"}. See
     _split_plan_by_phase for why this is per-phase, not per-plan.
 
@@ -637,7 +691,37 @@ def breakdown_phase(phase_text: str, model: str | None = None, max_attempts: int
     previous immediate "skipped" return killed the whole breakdown (marking
     the run "failed" instead of resumable) over a condition that clears in
     under a minute. An RPD refusal is NOT retried -- it won't clear until
-    the next day, so this case still returns immediately."""
+    the next day, so this case still returns immediately.
+
+    If one checklist bullet clearly dominates this phase's size, it's
+    split off (_split_phase_by_dense_bullet) and broken down in its own
+    recursive call so it isn't compressed alongside the rest -- see that
+    function's docstring for the incident this fixes. `_dense_split_depth`
+    is internal (bounds the recursion so unusual markdown, e.g. an
+    unindented dash line inside the dense bullet's own body, can't loop
+    indefinitely) and isn't meant to be passed by callers."""
+    if _dense_split_depth < 3:
+        split = _split_phase_by_dense_bullet(phase_text)
+        if split is not None:
+            rest_text, dense_text = split
+            log.info(
+                "Phase breakdown: splitting off one dense bullet (%d chars) from the rest (%d chars) for separate breakdown calls",
+                len(dense_text), len(rest_text),
+            )
+            rest_result = breakdown_phase(rest_text, model=model, max_attempts=max_attempts, _dense_split_depth=_dense_split_depth + 1)
+            if rest_result["status"] != "ok":
+                return rest_result
+            dense_result = breakdown_phase(dense_text, model=model, max_attempts=max_attempts, _dense_split_depth=_dense_split_depth + 1)
+            if dense_result["status"] != "ok":
+                return dense_result
+            return {
+                "status": "ok",
+                "phase": {
+                    "name": rest_result["phase"]["name"] or dense_result["phase"]["name"],
+                    "items": rest_result["phase"]["items"] + dense_result["phase"]["items"],
+                },
+            }
+
     config = load_tiers()
     # Resolve peak_alt like every other real Tier 2 call site (e.g.
     # tier2_escalate.py) does -- without this, phase-breakdown calls kept

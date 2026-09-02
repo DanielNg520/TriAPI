@@ -101,6 +101,30 @@ class TestContentGuardEditBlockMarkerLeak(unittest.TestCase):
         result = check_write("task8", self.target_path, "")
         self.assertTrue(result["ok"])
 
+    def test_prose_quoting_the_markers_inline_is_allowed(self) -> None:
+        # Real false-positive found 2026-09-01/02: a legitimate doc
+        # paragraph describing this very incident, quoting both markers
+        # inline mid-sentence rather than as real leaked edit-block markup
+        # (each marker on its own line). Must not be refused.
+        doc_path = self.repo_root / "note.md"
+        content = (
+            "the literal \"<<<<<<< SEARCH / ======= / >>>>>>> REPLACE\" "
+            "markup sailed through check_write() with no guard at all\n"
+        )
+        result = check_write("task9", doc_path, content)
+        self.assertTrue(result["ok"])
+
+    def test_marker_with_trailing_prose_on_same_line_is_allowed(self) -> None:
+        # A marker-shaped string followed by other text on the same line
+        # is not a real leaked block (real leaks have the marker alone on
+        # its own line) -- guards against a regex too loose to tell the
+        # difference.
+        result = check_write(
+            "task10", self.repo_root / "note2.py",
+            ">>>>>>> REPLACE is the closing marker for an edit block.\n",
+        )
+        self.assertTrue(result["ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

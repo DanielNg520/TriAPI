@@ -25,6 +25,7 @@ ceiling on every later run -- nothing at write time had stopped it from
 growing that far in the first place.
 """
 
+import re
 from pathlib import Path
 
 from scripts.tri_logging import get_logger
@@ -52,6 +53,22 @@ def _nonblank_lines(text: str) -> list[str]:
 
 _EDIT_BLOCK_MARKERS = ("<<<<<<< SEARCH", ">>>>>>> REPLACE")
 
+# Line-anchored, not a bare substring: a real leaked marker (both in
+# edit_blocks.py's own SYSTEM_PROMPT and in every real leak seen so far)
+# stands alone on its own line with nothing else on it. A bare substring
+# check also false-positives on ordinary prose that merely *quotes* a
+# marker string mid-sentence -- found for real 2026-09-01/02, same session
+# as the leak fix below: a doc paragraph describing this very incident
+# (e.g. `the literal "<<<<<<< SEARCH / ======= / >>>>>>> REPLACE" markup`)
+# tripped the guard despite containing no actual leaked edit-block markup.
+# Requiring the marker to occupy its own line (only leading/trailing
+# whitespace allowed) keeps catching genuine leaks while no longer firing
+# on prose that references the marker text.
+_EDIT_BLOCK_MARKER_LINE_RES = tuple(
+    re.compile(r"(?m)^[ \t]*" + re.escape(marker) + r"[ \t]*$")
+    for marker in _EDIT_BLOCK_MARKERS
+)
+
 
 def check_write(task_id: str, target_path: Path, new_content: str) -> dict:
     """Returns {"ok": True} to allow the write. Returns {"ok": False, "reason":
@@ -60,7 +77,7 @@ def check_write(task_id: str, target_path: Path, new_content: str) -> dict:
     never created). The refused content is saved to
     logs/rejected_writes/<task_id>.txt so a human can still see what the
     model proposed."""
-    if any(marker in new_content for marker in _EDIT_BLOCK_MARKERS):
+    if any(pattern.search(new_content) for pattern in _EDIT_BLOCK_MARKER_LINE_RES):
         # A model can respond with a SEARCH/REPLACE attempt that isn't
         # wrapped in a code fence -- edit_blocks.apply_edit_blocks() then
         # correctly fails to parse it, but the caller's own fallback path
