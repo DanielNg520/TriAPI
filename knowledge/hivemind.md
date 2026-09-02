@@ -1108,3 +1108,132 @@ If components are initialized synchronously without error isolation, a failure i
 2. **Catch and Degrade:** Iterate through the factories and wrap each instantiation in a `try...except` block.
 3. **Log and Continue:** On failure, log a warning that the specific capability is unavailable and proceed with booting the rest of the application. The system should be designed to handle the absence of these optional components gracefully.
 4. **Clean Up Hacks on Removal:** When deprecating or removing capabilities (as demonstrated in the diff), proactively remove any lazy-import workarounds (like module-level `__getattr__` overrides) that were previously introduced to prevent those specific components from breaking imports.
+
+### Enforce Architectural Intent with Explicit Constraints and Routing
+
+When designing distinct subsystems for an application (e.g., discrete "facts" vs. long-form documents for RAG), encode the architectural intent directly into the data model using explicit constraints.
+
+**Best Practice:**
+1. **Define the limit:** Set a hard boundary (e.g., `FACT_MAX_CHARS = 300`) that aligns with the intended use case (e.g., a fact is a single sentence).
+2. **Document the alternative:** Always explain in the comment *why* the limit exists and *where* developers should route data that exceeds this limit (e.g., "longer material belongs in RAG, retrieved on demand").
+
+This pattern prevents scope creep (e.g., treating a simple key-value fact store as a document database) and explicitly guides future developers on how to properly route different types of data within the broader system architecture.
+
+### Consistent Project Namespacing During Code Migration
+
+**Pattern / Lesson:**
+When migrating, copying, or extracting code from one project to another, always ensure that absolute internal imports are updated to reflect the new project's namespace. Leaving stale imports creates hidden dependencies on the old project.
+
+**Analysis of the Change:**
+The diff reveals a correction of an import from a legacy or external project namespace (`ohmyllama.security.secrets`) to the current project's namespace (`semai.security.secrets`). The original code likely carried over this stale import during a copy-paste or modular extraction operation, which can lead to `ModuleNotFoundError` in a clean environment or unintended tight coupling if both packages happen to be installed.
+
+**Best Practices for Future Reference:**
+- **Thorough Search and Replace:** When porting modules between codebases, perform a codebase-wide search for the old root namespace (e.g., `ohmyllama.`) to catch any lingering absolute dependencies.
+- **Isolated Testing:** Test newly migrated code in an isolated environment (like a fresh virtual environment, CI runner, or Docker container) where the old project is not installed. This ensures that any forgotten namespace updates fail loudly.
+- **Linter Checks:** Rely on static analysis tools and linters (like `mypy`, `flake8`, or `pylint`) in your CI pipeline to automatically detect unresolved imports before they are merged.
+
+### Correcting Project Namespace Imports
+When copying or migrating code from another project (e.g., a template or an older repository like `ohmyllama`), always ensure that all module imports are updated to reflect the new project's namespace (e.g., `semai`). Failing to update these imports can lead to unintended external dependencies, broken builds, or security risks by resolving utilities (such as secret managers) from the wrong codebase.
+
+**Best Practice:**
+- Perform a project-wide search for the old namespace after migrating or copying code.
+- Verify that core internal utilities (e.g., `resolve_secret`, `Settings`) are imported from the current project's own modules to maintain proper isolation and decoupling.
+
+### Project Rename / Namespace Consistency
+
+When renaming a project, forking a codebase, or migrating modules to a new namespace, ensure that all internal absolute imports are updated to use the new package name. In this change, an import from a legacy or external namespace (`ohmyllama.security.secrets`) is corrected to use the current project's namespace (`semai.security.secrets`). Failing to update these imports can cause `ModuleNotFoundError` if the old package is removed, or lead to subtle and dangerous bugs by accidentally importing and executing code from an older, globally installed version of the package.
+
+### Pattern: Consistent Internal Package Renaming
+
+**Context:**
+When renaming a core project, namespace, or internal library (in this case, from `ohmyllama` to `semai`), absolute imports across the codebase can easily be overlooked. Leaving stale imports behind will lead to `ModuleNotFoundError` and broken functionality.
+
+**Lesson / Best Practice:**
+- **Thorough Update:** Whenever an internal package or namespace is renamed, ensure that you perform a comprehensive search and replace across the entire codebase to update all corresponding absolute imports.
+- **Internal Consistency:** All modules within the project must reference the new package name (e.g., `semai.security.secrets`) rather than the legacy name (`ohmyllama.security.secrets`).
+- **Tooling:** Utilize IDE refactoring tools or global search-and-replace (e.g., `grep` or `ripgrep`) to guarantee that no legacy package references remain in any files.
+
+### Centralize Security Primitives in Dedicated Namespaces
+
+**Lesson:**
+Security-critical utilities, such as path validation guards and access control checks, should be maintained in a clearly defined, internal security namespace rather than imported from external, legacy, or generic "capabilities" modules. 
+
+**Why it matters:**
+* **Auditability:** Centralizing security logic into a dedicated module (like `security.path_guard`) makes it much easier to review and audit the code for vulnerabilities.
+* **Decoupling:** Moving away from external dependencies (e.g., `ohmyllama`) for core security mechanisms ensures the project maintains full control over its own security boundaries and risk profile.
+* **Clarity:** It clearly signals the intent and importance of the code to other developers, separating security rules from general business logic or generic utilities.
+
+### Clean Up Legacy Imports After Module Migration
+
+**Context:**
+When migrating features from a legacy package or monolithic structure into a new architecture, constants, data structures, and functions are often moved into new domain-specific modules. 
+
+**Lesson:**
+Ensure that newly migrated code imports its dependencies (such as configuration constants or limits) from the new internal modules rather than the legacy package. 
+
+**Why it matters:**
+Leaving residual imports pointing to the old codebase creates a hidden dependency that bridges the new architecture back to the legacy system. This tangles architectural boundaries and prevents the legacy code from being safely deprecated and removed, ultimately undermining the structural goals of the migration.
+
+### Standardize Internal Namespaces During Migration
+
+When migrating code, renaming a project, or consolidating components into a unified namespace (e.g., migrating from `ohmyllama` to `semai`), always review and update your import statements to reflect the new internal structure. 
+
+Leaving legacy imports that reference old project names or external packages—when an internal equivalent now exists—can lead to disjointed dependencies, potential versioning conflicts, and brittle code. Ensure that components within the same project rely on their internal modules rather than externalized legacy versions of themselves.
+
+### Leverage Short-Circuit Evaluation in Compound Conditionals
+
+When writing compound `if` conditions, order your checks from the cheapest and safest (e.g., null/existence checks) to the most expensive (e.g., function calls). Python's `and` operator short-circuits, meaning it stops evaluating as soon as it encounters a falsy condition.
+
+**Anti-Pattern:**
+Evaluating expensive or complex conditions before ensuring the required base objects even exist.
+```python
+if (
+    (retry or _is_retryable_backend_error(error)) # ⚠️ Function executes even if row is None
+    and row
+    and row["attempts"] < max_attempts
+):
+```
+
+**Best Practice:**
+Place existence checks first, followed by simple attribute access, and defer function calls to the very end.
+```python
+if (
+    row                                               # 1. Safest/cheapest existence check
+    and row["attempts"] < max_attempts                # 2. Simple dictionary/attribute lookup
+    and (retry or _is_retryable_backend_error(error)) # 3. Expensive function call (deferred)
+):
+```
+
+This strict ordering prevents unnecessary computation and guarantees that variables are fully validated before their properties are accessed or passed into deeper logic.
+
+### Prefer Instance Configuration Over Inline Global Config Loading
+
+When a class requires configuration or dependencies to perform an action, use the configuration provided during the class's initialization (e.g., `self.cfg`) instead of dynamically loading global state within deeply nested methods. 
+
+**Before:**
+```python
+def _notify(self, store: Store, title: str, message: str) -> None:
+    try:
+        from ohmyllama.alerts import deliver
+        from ohmyllama.config import Config
+        cfg = Config.load() # Hidden dependency, potential I/O overhead
+        deliver(cfg, store, "topic", title, message)
+    except Exception as e:
+        log.warning("notify failed: %s", e)
+```
+
+**After:**
+```python
+def _notify(self, store: Store, title: str, message: str) -> None:
+    try:
+        from semai.adapters.push import deliver
+        # Use the configuration already injected into the instance
+        deliver(self.cfg, store, "topic", title, message)
+    except Exception as e:
+        log.warning("notify failed: %s", e)
+```
+
+**Benefits:**
+*   **Testability:** It is much easier to mock or provide specific test configurations by instantiating the class with a custom `Settings` object, rather than having to monkeypatch a global `Config.load()` method.
+*   **Performance:** Avoids the overhead of repeatedly parsing or loading configuration from disk or environment variables on every method invocation.
+*   **Explicit Dependencies:** The state required by the class is explicitly declared in its constructor, making the code easier to reason about, maintain, and refactor.
