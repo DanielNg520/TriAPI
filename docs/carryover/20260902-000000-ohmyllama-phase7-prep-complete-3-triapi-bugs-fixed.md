@@ -67,17 +67,14 @@ All three code fixes have regression tests, full suite green throughout
   `docs/agents/`-style; (2) reconsider restoring at least one Tier 5
   fallback leg for oversized-file cases.
 - **`dispatcher.breakdown_phase()` silent detail drop on dense plan steps** --
-  still unfixed (worked around by hand twice this session, see prior
-  history file for the full incident detail). A single unusually long/dense
-  checklist bullet can lose most of its technical detail during the Tier
-  2/Gemini phase-breakdown compression despite the system prompt's explicit
-  anti-summarization instructions. Worth a length-based split heuristic or
-  a stronger verify_cmd convention -- not yet designed.
+  FIXED: a dominant checklist bullet is now split off into its own recursive
+  breakdown_phase() call instead of being compressed alongside the rest of the
+  phase, regression-tested in tests/test_breakdown_dense_bullet_split.py.
 - **`content_guard.py`'s new edit-block-marker guard has a narrow
-  false-positive** (found live, same session): fires on legitimate prose
-  that quotes the marker strings themselves (e.g. a doc describing this
-  very bug). Not yet fixed -- low frequency, current workaround is a
-  direct hand-write when it fires on genuinely legitimate content.
+  false-positive** -- FIXED: the guard now requires a marker to occupy its own
+  line rather than matching as a bare substring, so prose quoting the marker
+  strings inline no longer trips it, regression-tested in
+  tests/test_content_guard.py.
 
 ## Session state
 
