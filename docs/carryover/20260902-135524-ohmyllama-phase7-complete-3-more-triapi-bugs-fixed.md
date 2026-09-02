@@ -135,3 +135,25 @@ RAG test can't false-flag an unrelated file edit as a regression.
 The flashrank-download regression-check flakiness above is worth fixing
 eventually but is not urgent (doesn't block anything, false positive is
 easy to recognize and resolve manually when it recurs).
+
+## Addendum (next session, same day)
+
+Found and fixed one more loose end while confirming docs were ready to
+hand off: run `20260902-005154-7f74ad`'s plan block in oh-my-llama's own
+`AGENTS.md` (56 total unchecked boxes across all blocks, but only the
+*last* block actually gates `find_incomplete_plan()`) was never checked
+off — every item genuinely finished and was committed, but the run was
+driven to completion via manual state-patches rather than dispatcher's
+own final loop iteration, so `mark_plan_complete()` never ran
+automatically. Called it directly (`scripts/agents_md_gate.
+mark_plan_complete('/home/dyne/Documents/Coding/oh-my-llama',
+'20260902-005154-7f74ad', 16)` — 16 matches the run's own breakdown item
+count) rather than hand-editing the checkboxes. `find_incomplete_plan()`
+now correctly returns `None` for oh-my-llama; a future `triapi plan`
+there won't be spuriously gated. Committed to oh-my-llama as `066c77e`.
+
+**Note for a future session**: oh-my-llama's current checked-out branch
+is `migration-clean-up`, not `main` — this predates this session (not
+something introduced here), just flagging so a fresh session doesn't
+wonder why commits aren't landing on `main`. Not investigated further;
+out of scope for this session's task.
