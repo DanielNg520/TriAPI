@@ -471,3 +471,25 @@ Now I have full grounding. Here's the plan:
 - [x] `scripts/orchestrator.py`: Find the inline comment referencing `gemini-3.7-flash` as the librarian tier model and update it to `gemini-3.8-flash`. Additionally, fix the stale comment about Tier 2 peak_alt's actual current config to say `gemini-3.1-pro` instead of whatever it currently says. Verify command: `python3 -m py_compile scripts/orchestrator.py && grep "gemini-3.8-flash" scripts/orchestrator.py && grep "gemini-3.1-pro" scripts/orchestrator.py`
 - [x] `tests/test_tier5_librarian.py`: Update the test fixture string literals that explicitly assert on the model id `gemini-3.7-flash`, changing them to `gemini-3.8-flash`. Verify command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v`
 <!-- triapi:plan run_id=20260902-105125-fa54aa end -->
+
+<!-- triapi:plan run_id=20260902-134333-db9aba start -->
+## TriAPI Plan (run 20260902-134333-db9aba, appended 2026-09-02)
+
+## Phase 1: Fix `cmd_status` crash for tech-debt runs
+- [ ] `scripts/triapi.py`: Update `cmd_tech_debt()` to include a `"prompt"` key in the `synthetic_state` dictionary (e.g., `"prompt": f"Tech debt: {len(filtered_entries)} entries"`) so that `cmd_status()` does not crash with a `KeyError`. Verify with `python3 -m py_compile scripts/triapi.py && PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+
+## Phase 2: Targeted verification for tech-debt items
+- [ ] `scripts/triapi.py`: Update `cmd_tech_debt()` to generate a specific `build_cmd` for each item. It should always start with `python3 -m py_compile <target>`. If the target starts with `tests/test_` and ends with `.py`, derive its dotted module name and append `&& PYTHONPATH=. python3 -m unittest <module_name> -v`. For non-test files, append `&& PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v`. Verify with `python3 -m py_compile scripts/triapi.py && PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+
+## Phase 3: Clean up resolved tech-debt entries
+- [ ] `scripts/tech_debt.py`: Add a `remove_resolved_entries(resolved_targets: set[str]) -> None` helper. It should read `knowledge/TECH_DEBT.md`, filter out any entry lines whose parsed `filepath` is in `resolved_targets`, and overwrite the file with the remaining lines (preserving the header intact). Verify with `python3 -m py_compile scripts/tech_debt.py && PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+- [ ] `scripts/triapi.py`: In `cmd_tech_debt()`, after `dispatcher.dispatch(synthetic_state)` returns, collect the targets of all items in `synthetic_state["results"]` that have `status == "success"`. Call `tech_debt.remove_resolved_entries()` with that set of targets. Verify with `python3 -m py_compile scripts/triapi.py && PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+
+## Phase 4: Manage self-fix backlog
+- [ ] `scripts/dispatcher.py`: Add a `delete_run(run_id: str) -> None` helper that deletes the run state file at `logs/runs/<run_id>.json` if it exists. Verify with `python3 -m py_compile scripts/dispatcher.py && PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+- [ ] `scripts/triapi.py`: Add a `cmd_self_fix_discard(bug_id: str)` function. It should resolve the bug report via `_resolve_bug_report()` and delete the JSON file if found. It should also resolve the run via `_find_self_fix_run()` and call `dispatcher.delete_run(state["run_id"])` ONLY if the run's status is exactly `"self_fix_drafted"`. Print a one-line confirmation of what was deleted, or `"nothing found for <bug_id>"` if neither existed. Wire this function up as the `discard` subcommand under `triapi self-fix` in `main()`. Verify with `python3 -m py_compile scripts/triapi.py && PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+- [ ] `tests/test_branch_features.py`: In the `SelfFixTests` class, add tests for `triapi self-fix discard`: discarding a bug-report-only entry, discarding a drafted-run-only entry, discarding both together, discarding a nonexistent ID (must not crash and should print the clear message), and verifying it refuses to discard a run whose status is not `"self_fix_drafted"`. Verify with `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+
+## Phase 5: Clear stale self-fix backlog
+- [ ] `scripts/clear_stale_self_fixes.py`: Create a one-off python script that executes `python3 scripts/triapi.py self-fix list`, parses the unqueued bug reports and drafted run IDs, and verifies they fall into the known stale categories described in the goal (tempfile-style names like `tmp*`, or specific timestamped entries for already-fixed crashes). If an entry matches a stale category, invoke `python3 scripts/triapi.py self-fix discard <bug_id>`. If any entry does NOT match the known stale signatures, STOP and print a flag without discarding it. Verify with `python3 scripts/clear_stale_self_fixes.py && python3 scripts/triapi.py self-fix list`
+<!-- triapi:plan run_id=20260902-134333-db9aba end -->

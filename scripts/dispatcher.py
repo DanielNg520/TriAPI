@@ -1,18 +1,4 @@
-"""Tier 2 (as Manager): breaks a Tier-1 plan into phases of concrete
-checklist items -- one file + one task each -- then dispatches them to the
-existing repair pipeline (orchestrator.run_task()) one at a time, in order.
-
-Distinct from tier2_escalate.py, which uses the Gemini API as a repair
-tier for a single already-known-broken file. This module uses Gemini in
-the manager role from the original design: turning a rough plan into a
-strict, executable checklist and working through it sequentially.
-
-Run state is persisted to logs/runs/<run_id>.json after every single item
-completes (not just at the end), so a long-running plan survives an SSH
-disconnect -- resume by re-reading the same run_id.
-
-Must only be called after budget_guard.check_tier2_ok().
-"""
+"""Tier 2 dispatcher: breaks a Tier-1 plan into checklist items and dispatches them sequentially."""
 
 import contextlib
 import fnmatch
@@ -32,7 +18,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import git_ops, judge, librarian_escalate, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
+from scripts import git_ops, judge, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
 from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok, resolve_peak_conditional
@@ -47,18 +33,7 @@ RUNS_DIR = Path(__file__).resolve().parent.parent / "logs" / "runs"
 
 
 class RunAlreadyDispatchingError(RuntimeError):
-    """Raised when dispatch(state) is called for a run_id another live
-    process is already dispatching.
-
-    Found for real 2026-08-31: a background `triapi dispatch` invocation
-    looked like it hadn't launched (killed silently by the harness's own
-    process-group cleanup) and was retried, but the first run was in fact
-    still alive. Both then dispatched the SAME run_id concurrently against
-    the same git tree with differently-worded (non-deterministic) phase
-    breakdowns for the same items -- one process `git rm`-deleted files,
-    the other overwrote the already-deleted files via Tier 4. Caught only
-    by hand review of `git status`; nothing in the pipeline itself
-    prevented two dispatch() calls for one run_id running at once."""
+    """Raised when dispatch(state) is called for a run_id another live process is already dispatching."""
 
 
 def _lock_path(run_id: str) -> Path:
@@ -77,16 +52,7 @@ def _pid_alive(pid: int) -> bool:
 
 @contextlib.contextmanager
 def _run_lock(run_id: str):
-    """Exclusive lock for the duration of dispatch(state) against run_id.
-
-    A pidfile, not flock: the lock must be independently checkable (and
-    stale-clearable after a SIGKILL/crash) from any process, including one
-    just checking status, and must span the actual background dispatch
-    child -- not just the short-lived parent that spawns it -- which rules
-    out anything tied to a single process's file descriptor lifetime. See
-    RunAlreadyDispatchingError's docstring for the incident this guards
-    against.
-    """
+    """Exclusive pidfile lock for the duration of dispatch(state)."""
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     lock_path = _lock_path(run_id)
     if lock_path.exists():
@@ -120,24 +86,7 @@ from scripts.breakdown_prompts import BREAKDOWN_SYSTEM_INSTRUCTION
 
 _PHASE_HEADER_RE = re.compile(r"^(?:#{1,6} |\d+\.\s+\*{0,2}_{0,2}Phase\b)", re.IGNORECASE)
 
-# Matches a markdown task-list item regardless of bullet style: '- [ ]',
-# '* [ ]', or a numbered '1. [ ]' -- and regardless of checked state ('x'/'X'
-# inside the brackets, not just an empty box). Found for real 2026-08-12:
-# a plan used numbered items ('1. [ ]', '2. [ ]') instead of the dash-bullet
-# style this previously hardcoded a literal '- [ ]' substring check for --
-# the whole (non-empty, clearly checklist-bearing) plan chunk was silently
-# treated as having "no checklist items" and dropped, and the run reported
-# "Dispatch completed: all items resolved" having done zero actual work.
-# Matches any bulleted/numbered list item, with or without a literal
-# '[ ]' checkbox -- found for real 2026-08-13: a planner turn produced a
-# perfectly good 11-phase, real plan using plain "1. **file** -- ..."
-# items with no checkbox markup at all (the SYSTEM_PROMPT only asks for
-# "a checklist", it doesn't mandate '[ ]' syntax, and the model doesn't
-# reliably add it). Requiring '[.]' silently filtered out every phase
-# chunk as "no checklist items", producing a 0-phase/0-item breakdown
-# with no error. A bare list marker is enough: the leading title/context
-# chunk this filter is meant to drop is prose with no list markers at
-# all, so this stays selective without depending on checkbox syntax.
+# Matches top-level markdown checklist items regardless of bullet style.
 _CHECKLIST_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+", re.MULTILINE)
 
 
@@ -199,15 +148,7 @@ def _split_plan_by_phase(plan_text: str) -> list[str]:
     return [c for c in chunks if _CHECKLIST_ITEM_RE.search(c)]
 
 
-# Path-like references in an item's own description text -- with or
-# without backticks, since Gemini's breakdown output does NOT reliably
-# preserve the backticks the source plan.md used (confirmed: the real
-# 2026-08-10 breakdown wrote "following ohmyllama/watcher.py's poll-loop
-# pattern" with no backticks at all, even though plan.md's own text had
-# them). Two shapes: any slash-containing path ending in a dotted
-# extension (covers e.g. `config/tiers.yaml`, `docs/decisions/0011-x.md`),
-# or a bare filename with a common code/doc extension (covers e.g.
-# `plan.md`, `watcher.py` referenced without its directory).
+# Path-like references in item description text; used as deterministic context_files fallback.
 _FILE_REF_RE = re.compile(
     r"[\w][\w-]*(?:/[\w.-]+)+\.\w+"
     r"|\b[\w-]+\.(?:py|md|yaml|yml|json|js|ts|jsx|tsx|toml|cfg|ini|sh|txt)\b"
@@ -290,18 +231,7 @@ def _enforce_module_import_order(phases: list[dict], project_dir: str) -> str | 
     return None
 
 def _backstop_context_files(item: dict) -> None:
-    """Deterministic fallback for BREAKDOWN_SYSTEM_INSTRUCTION's
-    'context_files' field: found for real 2026-08-10 (PLAN.md Phase 13c)
-    that relying on Gemini to comply with that instruction isn't reliable
-    enough on its own -- a real 96-item breakdown left EVERY item's
-    context_files empty, including ones whose description explicitly named
-    another file to follow ("following `ohmyllama/watcher.py`'s poll-loop
-    pattern"), and the worker hallucinated instead of reading it. This
-    regex-extracts every backtick-quoted, dotted-extension path mentioned in
-    the item's own description (Gemini already quotes paths this way
-    consistently -- see BREAKDOWN_SYSTEM_INSTRUCTION's own examples) and
-    unions it into context_files, deduped, minus the item's own target.
-    Mutates item in place. A no-op for items with no such references."""
+    """Extract referenced paths from the item description into context_files as a deterministic fallback."""
     target = item.get("target")
     referenced = [p for p in _FILE_REF_RE.findall(item.get("description", "")) if p != target]
     if not referenced:
@@ -384,9 +314,6 @@ def _apply_test_context_guard(items: list[dict], project_dir: str) -> str | None
     return None
 
 
-_ESTIMATED_NEW_CONTENT_CHARS = 2000  # conservative fixed buffer: breakdown doesn't know real diff size in advance
-
-
 def _item_deletes_target_file(item: dict) -> bool:
     """True if this item's own description says it deletes/removes the
     target file wholesale, not merely edits/trims its contents.
@@ -462,38 +389,7 @@ def _force_verify_only_for_pure_deletions(phases: list[dict], project_dir: str) 
 
 
 def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | None:
-    """Post-breakdown guard for a file item whose target is already at/over
-    the Tier 4 context ceiling before any new content is added (see
-    constants above). Nonexistent targets are skipped; files that would
-    only tip over once new content is applied are deliberately NOT flagged,
-    because the real diff size isn't known at breakdown time and only the
-    existing size is ground truth.
-
-    An oversized target no longer blocks the whole breakdown outright:
-    - An item that deletes the target wholesale (see
-      _item_deletes_target_file) is exempt outright -- otherwise a package
-      split could never dispatch the retirement step for the very file
-      it's splitting.
-    - A doc target (matches tier_5_librarian.target_globs, with that tier
-      enabled) never actually reaches Tier 4 -- routed to tier_5_librarian
-      instead, so skip_tier4=True would be a no-op. Still flagged (docs
-      benefit from staying small for token economy -- see
-      feedback_docs_are_index_files), but with wording naming that reason
-      instead of Tier 4, and without setting skip_tier4.
-    - Any other (code) item on an oversized target is marked
-      skip_tier4=True (mutating the item): Tier 4's small local context
-      window can never hold it, but Tier 3/2's cloud context windows are
-      far larger, so orchestrator.run_task() routes straight to Tier 3 for
-      that one item instead of refusing the entire plan. This is a
-      one-time unblock, not a standing way to keep patching the file in
-      place -- the item's description gets an explicit instruction to
-      reduce the file's size (split it into cohesive smaller modules) as
-      part of the fix, not just edit its content while leaving it
-      oversized.
-      Only returns an error for a genuinely unrecoverable case (none left
-      today; return type stays str | None for callers that still branch
-      on failure).
-    """
+    """Guard file items whose target already exceeds the Tier 4 context ceiling."""
     tier_5 = (load_tiers().get("tier_5_librarian") or {})
     tier_5_enabled = tier_5.get("enabled", True)
     tier_5_globs = tier_5.get("target_globs", [])
@@ -994,6 +890,14 @@ def load_run(run_id: str) -> dict:
         return json.load(f)
 
 
+def delete_run(run_id: str) -> None:
+    path = _run_path(run_id)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def list_runs() -> list[dict]:
     if not RUNS_DIR.exists():
         return []
@@ -1455,7 +1359,6 @@ def _dispatch_locked(state: dict) -> dict:
                         resolved_target, tier_5.get("target_globs", [])
                     )
                     if tier_5.get("enabled", True) and doc_target:
-                        from scripts import librarian_escalate
                         log.info("[%s] [ROUTING] %s -> tier_5_librarian", task_id, resolved_target)
                         try:
                             result = librarian_escalate.run(

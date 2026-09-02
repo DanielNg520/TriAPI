@@ -86,6 +86,32 @@ def verify_tech_debt() -> bool:
     return all_fresh
 
 
+def remove_resolved_entries(resolved_targets: set[str]) -> None:
+    """Remove tech-debt entries whose filepath is in resolved_targets.
+
+    Reads knowledge/TECH_DEBT.md, filters out any entry lines whose parsed
+    filepath is in resolved_targets, and overwrites the file with the remaining
+    lines, preserving the header intact.
+    """
+    if not TECH_DEBT_PATH.exists():
+        return
+
+    lines = TECH_DEBT_PATH.read_text(encoding="utf-8").splitlines()
+    kept_lines = []
+
+    for line in lines:
+        match = _ENTRY_RE.match(line.strip())
+        if match:
+            filepath = match.group("filepath")
+            if filepath not in resolved_targets:
+                kept_lines.append(line)
+        else:
+            # Non-entry lines (header, description) are always kept
+            kept_lines.append(line)
+
+    TECH_DEBT_PATH.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(0 if verify_tech_debt() else 1)

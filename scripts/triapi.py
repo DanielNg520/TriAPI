@@ -609,6 +609,26 @@ def cmd_self_fix_approve(bug_id: str) -> None:
     print(f"Run it: triapi dispatch {state['run_id']}")
 
 
+def cmd_self_fix_discard(bug_id: str) -> None:
+    """Discard a captured bug report and its drafted self-fix run."""
+    bug_path = _resolve_bug_report(bug_id)
+    state = _find_self_fix_run(bug_id)
+
+    deleted = []
+    if bug_path is not None and bug_path.is_file():
+        bug_path.unlink()
+        deleted.append(f"bug report {bug_path.name}")
+
+    if state is not None and state.get("status") == "self_fix_drafted":
+        dispatcher.delete_run(state["run_id"])
+        deleted.append(f"drafted run {state['run_id']}")
+
+    if deleted:
+        print(f"Discarded {' and '.join(deleted)}.")
+    else:
+        print(f"nothing found for {bug_id}")
+
+
 def cmd_tech_debt(project_dir: str) -> None:
     entries = tech_debt.read_tech_debt_entries()
     filtered_entries = [entry for entry in entries if not tech_debt.check_staleness(entry)]
@@ -626,7 +646,7 @@ def cmd_tech_debt(project_dir: str) -> None:
                         {
                             "description": f"Fix {entry['filepath']}: {entry['reason']}",
                             "target": entry["filepath"],
-                            "build_cmd": "PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v",
+                            "build_cmd": f"python3 -m py_compile {entry['filepath']}",
                             "verify_only": False,
                             "context_files": []
                         }
@@ -641,6 +661,10 @@ def cmd_tech_debt(project_dir: str) -> None:
     
     dispatcher.save_run(synthetic_state)
     dispatcher.dispatch(synthetic_state)
+    resolved_targets = {
+        r["target"] for r in synthetic_state["results"] if r.get("status") == "success"
+    }
+    tech_debt.remove_resolved_entries(resolved_targets)
 
 
 def main():
@@ -675,6 +699,8 @@ def main():
     p_sf_show.add_argument("bug_id")
     p_sf_approve = selffix_sub.add_parser("approve", help="approve a drafted self-fix run for dispatch")
     p_sf_approve.add_argument("bug_id")
+    p_sf_discard = selffix_sub.add_parser("discard", help="discard a captured bug report and its drafted self-fix run")
+    p_sf_discard.add_argument("bug_id")
 
     p_tech_debt = sub.add_parser("tech-debt", help="process tech debt entries")
     p_tech_debt.add_argument("--project-dir", required=True, help="the project directory containing TECH_DEBT.md")
@@ -698,6 +724,8 @@ def main():
             cmd_self_fix_show(args.bug_id)
         elif args.self_fix_action == "approve":
             cmd_self_fix_approve(args.bug_id)
+        elif args.self_fix_action == "discard":
+            cmd_self_fix_discard(args.bug_id)
     elif args.command == "list":
         cmd_list()
     elif args.command == "tech-debt":

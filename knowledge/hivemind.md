@@ -1441,3 +1441,46 @@ self.assertIs(has_errors, False)
 self.assertTrue(is_valid)
 self.assertFalse(has_errors)
 ```
+
+### Populate Metadata in Synthetic State Objects
+
+**Context:** 
+Programmatically generating synthetic state objects (such as tasks, runs, or jobs) to bypass standard user-facing creation flows.
+
+**Issue:** 
+It is easy to only populate the fields strictly required by the execution engine (e.g., execution phases or steps), while omitting metadata fields that are normally provided by user input (such as `prompt`, `title`, or `description`).
+
+**Consequence:** 
+Downstream components like observability tools (CLI list/status commands), logging, or completion hooks (e.g., auto-generated commit messages) often assume these metadata fields are always present. Omitting them leads to unhandled exceptions like `KeyError: 'prompt'` when the system attempts to process or display the synthetic object.
+
+**Best Practice:** 
+When creating synthetic state objects, always supply sensible defaults or generated summaries for all expected metadata fields to satisfy the implicit data contracts of the object's entire lifecycle.
+
+### Safe In-Place Filtering of Structured Text Files
+
+**Pattern:** When programmatically removing data entries from a human-readable, text-based file (such as a Markdown backlog, custom log, or config file), read the file line-by-line and unconditionally preserve any lines that do not match the expected data format (e.g., headers, comments, or descriptions).
+
+**Why this matters:** Data files often contain manual documentation, headers, or whitespace formatting that provide essential context. If a script naively parses the file into data objects and then overwrites the file using only the remaining objects, it will destroy this metadata. By using a regex or parser to identify *only* the data rows, you can safely filter out specific targets while passing through all structural and contextual content untouched.
+
+**Implementation Example:**
+```python
+def remove_resolved_entries(file_path: Path, resolved_targets: set[str]) -> None:
+    if not file_path.exists():
+        return
+
+    lines = file_path.read_text(encoding="utf-8").splitlines()
+    kept_lines = []
+
+    for line in lines:
+        match = _ENTRY_RE.match(line.strip())
+        if match:
+            # Data entry line: keep only if it shouldn't be removed
+            filepath = match.group("filepath")
+            if filepath not in resolved_targets:
+                kept_lines.append(line)
+        else:
+            # Non-entry lines (headers, descriptions, blank lines) are always kept
+            kept_lines.append(line)
+
+    file_path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+```
