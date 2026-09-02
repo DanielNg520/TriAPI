@@ -299,11 +299,15 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         _force_verify_only_for_pure_deletions(phases, str(self.repo_root))
         self.assertFalse(phases[0]["items"][0]["verify_only"])
 
-    def test_force_verify_only_leaves_deletion_alone_when_build_cmd_has_no_rm(self):
-        # A deletion-shaped description whose build_cmd doesn't actually
-        # perform the rm (e.g. only a post-hoc grep check) must not be
-        # forced verify_only -- that would skip the file ever being
-        # deleted, since verify_only never invokes an LLM edit either.
+    def test_force_verify_only_synthesizes_rm_when_build_cmd_has_no_rm(self):
+        # Real incident 2026-09-02 (run 20260902-005154-7f74ad): the planner
+        # wrote a deletion-shaped item whose build_cmd was only a bare
+        # existence check (no `rm` at all) -- that never matched the old
+        # rm-required condition, so the item fell through to the fragile
+        # LLM SEARCH/REPLACE path and crashed Tier 4/3/2 repeatedly on a
+        # plain file deletion. The guard must now synthesize a correct
+        # `rm` + absence-check build_cmd itself rather than requiring the
+        # planner to have gotten it right, and still force verify_only.
         phases = [{
             "name": "p",
             "items": [{
@@ -314,7 +318,10 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
             }],
         }]
         _force_verify_only_for_pure_deletions(phases, str(self.repo_root))
-        self.assertFalse(phases[0]["items"][0]["verify_only"])
+        item = phases[0]["items"][0]
+        self.assertTrue(item["verify_only"])
+        self.assertIn("rm -rf", item["build_cmd"])
+        self.assertIn("ohmyllama/capabilities/search_router.py", item["build_cmd"])
 
     def test_force_verify_only_does_not_touch_already_true_or_git_items(self):
         already_true = [{

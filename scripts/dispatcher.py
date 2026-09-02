@@ -421,8 +421,9 @@ def _item_deletes_target_file(item: dict) -> bool:
 
 def _force_verify_only_for_pure_deletions(phases: list[dict], project_dir: str) -> None:
     """Force verify_only=True on any item whose own description deletes its
-    target file wholesale (_item_deletes_target_file) and whose build_cmd
-    already performs that deletion via a shell `rm` of the target.
+    target file wholesale (_item_deletes_target_file), synthesizing a
+    correct `rm` + absence-check build_cmd for it if one isn't already
+    present.
 
     Found live 2026-08-29 (run 20260828-182931-264248, oh-my-llama Phase
     5G): the planner marked one deletion item verify_only=true (worked)
@@ -430,13 +431,22 @@ def _force_verify_only_for_pure_deletions(phases: list[dict], project_dir: str) 
     breakdown -- the latter failed with "SEARCH text not found verbatim",
     because a non-verify_only whole-file deletion routes through the LLM
     SEARCH/REPLACE path, asking a model to reproduce the entire file
-    content verbatim just to replace it with nothing, when build_cmd
-    already contains the real `rm`. The planner's own verify_only choice
-    for this item shape isn't reliable, so enforce it here instead.
-    Mutates items in place; leaves alone any deletion item whose
-    build_cmd does NOT already contain an `rm` of the target, since
-    forcing verify_only there would skip the file actually being
-    deleted."""
+    content verbatim just to replace it with nothing. The planner's own
+    verify_only choice for this item shape isn't reliable, so enforce it
+    here instead.
+
+    Originally this only fired when build_cmd ALREADY contained an `rm` of
+    the target, leaving the item alone (still fragile) otherwise. Found
+    live 2026-09-02 (run 20260902-005154-7f74ad): the planner instead wrote
+    a bare existence check as build_cmd (e.g. `ls scratch.py`) with no `rm`
+    at all -- worse, that check is backwards for a post-deletion verify
+    (`ls` exits 0 when the file is still THERE). That build_cmd never
+    matched the old rm-required condition, so the item fell through to the
+    same fragile LLM edit path this guard exists to prevent, crashing Tier
+    4/3/2 repeatedly on a plain file deletion. Now synthesizes a correct
+    `rm -f <target> && ! test -e <target>` build_cmd whenever a detected
+    deletion item doesn't already have a real `rm` of the target in its
+    build_cmd, instead of requiring the planner to have gotten it right."""
     for phase in phases:
         for item in phase["items"]:
             if "git" in item or item.get("verify_only") or not item.get("target"):
@@ -444,9 +454,11 @@ def _force_verify_only_for_pure_deletions(phases: list[dict], project_dir: str) 
             if not _item_deletes_target_file(item):
                 continue
             build_cmd = item.get("build_cmd") or ""
-            target_name = Path(item["target"]).name
-            if re.search(rf"\brm\b[^&|;]*\b{re.escape(target_name)}\b", build_cmd):
-                item["verify_only"] = True
+            target = item["target"]
+            target_name = Path(target).name
+            if not re.search(rf"\brm\b[^&|;]*\b{re.escape(target_name)}\b", build_cmd):
+                item["build_cmd"] = f'rm -rf "{target}" && ! test -e "{target}"'
+            item["verify_only"] = True
 
 
 def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | None:
