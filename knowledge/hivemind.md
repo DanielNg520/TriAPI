@@ -1268,3 +1268,125 @@ In this change, the `deliver` function was moved to a new adapter package, but t
 
 **Best Practice:**
 Make it a habit to perform a text search for the old module or function name whenever relocating code. This ensures that test descriptions, file headers, and inline comments do not become stale and misleading for future developers.
+
+### Separation of Parsing and Authorization
+
+**Context:** A pure parsing or routing module was previously responsible for both extracting route information and validating if the route (e.g., a chat ID) was allowed (authorization).
+
+**Action:** The authorization functions (`is_allowed_chat`, `is_chat_id`) and their tests were removed from the routing module during an architectural migration to the `semai` architecture. 
+
+**Lesson:** Maintain a strict separation of concerns between data parsing/routing and security/authorization. Pure parsing logic should only be responsible for structural validation, data extraction, and serialization. Security boundaries and access control checks should be handled by a dedicated, higher-level authorization layer, rather than being tightly coupled with low-level string parsing or routing utilities.
+
+### Narrow Interfaces & Direct State Verification in Tests
+
+When building a database-backed component (like a queue or task store), keep its public interface strictly limited to the operations actually needed by the application in production (e.g., `enqueue`, `claim_next`, `requeue_stale`). 
+
+**Do not add generic accessors (like `get_task`) solely for the convenience of test assertions.** 
+
+Instead, tests should verify persistence and state changes by querying the underlying database directly. In the provided diff, the removal of `get_task` from the queue assertions forces the test to verify state via raw SQL (`db.execute("SELECT status FROM ...")`). This approach provides two major benefits:
+
+1. **Interface Segregation:** The production interface remains minimal and focused, exposing only the exact operational surface area required by the domain.
+2. **True State Verification:** Direct database queries ensure the tests are verifying the actual persisted state on disk, bypassing any potential caching, ORM mapping, or logic errors that might exist inside the domain accessors.
+
+**Secondary Pattern: Test Cohesion & Separation of Concerns** 
+The diff also removes a large block of tests related to "model health and quarantine" from a file dedicated to "queue recovery." Orthogonal domain concepts should be decoupled into separate components and tested in separate, highly cohesive files.
+
+### Append-Only Reverts (Roll-Forward Recovery)
+
+When implementing undo or revert functionality in a system that tracks history or audit logs, treat the revert operation as a new state transition rather than a destructive rollback. 
+
+**Pattern Characteristics:**
+1. **Preserve the Audit Trail**: A revert should not erase or rewrite history. The current state immediately prior to the revert must be snapshotted, just like any standard update.
+2. **Revert is just an Update**: Implement reverts by fetching the historical snapshot and applying it using your standard update mechanism (e.g., routing it through the same `put_fact` or `update` method). This ensures all existing business logic, validation, and history-tracking automatically apply to the revert action.
+3. **Revertible Reverts**: Because a revert appends to the history rather than mutating it, the revert itself can be safely undone by simply reverting to the snapshot taken right before the revert occurred.
+
+**Example:**
+```python
+def revert_fact(self, history_id: int) -> str | None:
+    """Restore a fact to a specific retired snapshot. 
+    Goes through `put_fact`, so the CURRENT version is itself
+    snapshotted first -- a revert is not a hole in the history, 
+    it is one more entry in it, and can itself be undone."""
+    row = self.db.execute("SELECT * FROM fact_history WHERE id=?", (history_id,)).fetchone()
+    if not row:
+        return None
+        
+    # Re-use standard update path to ensure the current state is snapshotted
+    self.put_fact(row["key"], row["fact"], scope=row["scope"],
+                  source=row["source"], changed_by="revert")
+    return row["key"]
+```
+
+### Match Sync/Async Signatures in Test Doubles
+
+**Context:** 
+Creating fakes, stubs, or side effects to replace real dependencies in tests (e.g., when using `unittest.mock.patch`).
+
+**The Pitfall:** 
+Stubbing a **synchronous** method with an **asynchronous** fake (`async def`) will cause the calling code to receive an unawaited coroutine object instead of the expected return value. Because the actual system-under-test expects a synchronous function, it will not `await` the result. Consequently, the fake's internal logic is never executed and the scripted behaviors are silently dropped, leading to baffling test failures or false positives.
+
+**The Solution:** 
+Always ensure your test double's signature (sync vs. async) exactly matches the real method's signature. If the target method is a standard `def`, the fake must also be a standard `def`—even if the surrounding test case or test runner uses `asyncio`.
+
+**Example:**
+```python
+# Real implementation is synchronous
+class LLMProvider:
+    def chat(self, prompt): 
+        ... 
+
+# BAD: Async fake for a sync method
+async def fake_chat(*args, **kwargs):
+    # This logic is silently dropped because the sync caller won't `await` it
+    return "fake response" 
+
+# GOOD: Sync fake for a sync method
+def fake_chat(*args, **kwargs):
+    return "fake response"
+
+with mock.patch("LLMProvider.chat", side_effect=fake_chat):
+    ...
+```
+
+### [Refactoring Pattern] Namespace Migration and Configuration Schema Evolution
+
+**Context:**
+As a project matures, its core namespace may evolve from a working title or project-specific name (e.g., `ohmyllama`) to a permanent, library-oriented name (e.g., `semai`). During this transition, configuration management often shifts from generic classes (`Config`) to more structured, schema-validated models (`Settings`).
+
+**Key Takeaways:**
+1. **Namespace Updates in Tests:** When renaming a project's root namespace, ensure that all auxiliary scripts and integration/seam tests are updated to reflect the new package structure.
+2. **Schema-Driven Configuration:** Evolving from a generic `Config` class to a `Settings` class (often backed by validation libraries like Pydantic) encourages stronger schema validation. When applying this change, update factory methods (e.g., changing `Config.load()` to `Settings.load()`).
+3. **Decoupled Secret Resolution:** Keep sensitive credential resolution (e.g., `resolve_secret`) separate from the main configuration model. The diff shows that while the configuration class changed, secret resolution remained a dedicated utility, ensuring secure, decoupled handling of environment-specific overrides.
+
+**Code Example:**
+```python
+# Before
+from ohmyllama.config import Config
+from ohmyllama.security.secrets import resolve_secret
+
+cfg = Config.load()
+vault_path = getattr(cfg, "obsidian_vault_path", None) or resolve_secret("OBSIDIAN_VAULT_PATH")
+
+# After
+from semai.config.schema import Settings
+from semai.security.secrets import resolve_secret
+
+cfg = Settings.load()
+vault_path = getattr(cfg, "obsidian_vault_path", None) or resolve_secret("OBSIDIAN_VAULT_PATH")
+```
+
+### Updating Standalone Tests During Namespace Refactoring
+When renaming a project's root namespace (e.g., `ohmyllama` to `semai`) or core configuration classes (e.g., `Config` to `Settings`), you must update imports in all standalone test scripts and integration tests. These scripts often manually configure `sys.path` and load settings directly to interact with the environment (such as fetching secrets or paths), making them easy to miss but critical to update to prevent test suite failures during large-scale refactors.
+
+### Keep Documentation in Sync with Code Refactors
+
+**Lesson:**
+When refactoring module names, class names, or namespaces (such as migrating from `ohmyllama` to `semai`), it is critical to also update any docstrings, inline comments, and string literals that reference the old names. 
+
+**Context from the Code:**
+The provided diff shows a refactoring where `ohmyllama.config.Config` was replaced with `semai.config.schema.Settings` and `ohmyllama.security.secrets` was updated to `semai.security.secrets`. However, the file's top-level docstring was left untouched and still incorrectly references `ohmyllama's own Config.load()`. 
+
+Failing to update comments during a refactoring leads to "documentation rot." The documentation no longer accurately describes the underlying code, which can confuse future maintainers who rely on it for context.
+
+**Best Practice:**
+Whenever you perform a structural refactor, rename classes, or move modules, always do a text search for the old terms (e.g., `ohmyllama`, `Config.load`) across the codebase. This ensures that documentation and comments are updated in tandem with the implementation.
