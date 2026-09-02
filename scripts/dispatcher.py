@@ -493,6 +493,13 @@ def _enforce_file_size_ceiling(phases: list[dict], project_dir: str) -> str | No
             target_path = Path(project_dir) / item["target"]
             if not target_path.exists():
                 continue
+            if target_path.is_dir():
+                # A directory-deletion item (e.g. "delete the ohmyllama/
+                # directory") has no text content to measure against a
+                # per-file char ceiling -- read_text() on a directory
+                # crashes with IsADirectoryError, found live 2026-09-02
+                # (oh-my-llama Phase 7 rename's directory-delete item).
+                continue
             existing_chars = len(target_path.read_text())
             if existing_chars > TIER4_MAX_CONTEXT_CHARS:
                 if _item_deletes_target_file(item):

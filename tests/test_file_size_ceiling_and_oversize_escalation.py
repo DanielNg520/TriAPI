@@ -178,6 +178,20 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         result = _enforce_file_size_ceiling(self._phases("nonexistent_file.cpp"), str(self.repo_root))
         self.assertIsNone(result)
 
+    def test_enforce_file_size_ceiling_ignores_directory_target(self):
+        # Real incident 2026-09-02 (oh-my-llama Phase 7 rename): a plan
+        # item whose target is a directory to delete wholesale (e.g.
+        # "delete the ohmyllama/ directory") crashed with
+        # IsADirectoryError on target_path.read_text() -- a directory has
+        # no text content to measure against a per-file char ceiling.
+        legacy_dir = self.repo_root / "legacy_pkg"
+        legacy_dir.mkdir()
+        (legacy_dir / "mod.py").write_text("x = 1\n")
+        phases = self._phases_with_desc("legacy_pkg", "Delete the legacy_pkg directory.")
+        result = _enforce_file_size_ceiling(phases, str(self.repo_root))
+        self.assertIsNone(result)
+        self.assertNotIn("skip_tier4", phases[0]["items"][0])
+
     def test_enforce_file_size_ceiling_exempts_deletion_of_oversized_file(self):
         # A package-split plan's retirement step must be able to delete the
         # very file whose size tripped the guard -- otherwise the fix for
