@@ -583,7 +583,15 @@ def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, se
         api_key = secrets.get(tier2.get("api_key_secret", "open_router_api_key"))
         text, _, _, _ = execute_llm(
             provider=provider,
-            endpoint=tier2["endpoint"],
+            # .get(), not tier2["endpoint"] -- an agy-provider block (e.g.
+            # tier_2_manager's peak_alt, resolved by resolve_peak_conditional()
+            # above during DeepSeek's peak billing window) has no "endpoint"
+            # key at all, same as every other agy call site in this repo
+            # (tier2_escalate.py, tier3_escalate.py both already use .get()
+            # here). A strict subscript crashed with KeyError: 'endpoint'
+            # the first time a real breakdown ran during peak hours -- found
+            # live 2026-09-02.
+            endpoint=tier2.get("endpoint"),
             api_key=api_key,
             model=models[0],
             prompt=phase_text,

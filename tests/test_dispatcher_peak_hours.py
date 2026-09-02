@@ -112,5 +112,29 @@ class BreakdownPhaseResolvesPeakConditionalTests(unittest.TestCase):
         self.assertEqual(used_tier2["provider"], "agy")
 
 
+class BreakdownPhaseAttemptAgyNoEndpointTests(unittest.TestCase):
+    """Real incident 2026-09-02: during DeepSeek's peak window,
+    breakdown_phase() correctly resolves tier_2_manager's peak_alt block
+    (provider: agy, no 'endpoint' key -- same shape as every other
+    agy-provider tier block in this repo), but _breakdown_phase_attempt()
+    did a strict tier2["endpoint"] subscript and crashed with
+    KeyError: 'endpoint' the first time a real breakdown ran during peak
+    hours, instead of degrading to None like every other agy call site
+    (tier2_escalate.py, tier3_escalate.py both already use .get())."""
+
+    def test_agy_block_with_no_endpoint_key_does_not_raise(self) -> None:
+        from scripts.dispatcher import _breakdown_phase_attempt
+
+        tier2 = {"provider": "agy", "models": {"default": "gemini-3.1-pro"}}
+        with mock.patch(
+            "scripts.llm_client.execute_llm",
+            return_value=('{"name": "Phase 1", "items": []}', "agy", 0, 0),
+        ) as mock_execute:
+            result = _breakdown_phase_attempt("some phase text", ["gemini-3.1-pro"], tier2, {})
+
+        self.assertEqual(result["status"], "ok")
+        self.assertIsNone(mock_execute.call_args.kwargs["endpoint"])
+
+
 if __name__ == "__main__":
     unittest.main()
