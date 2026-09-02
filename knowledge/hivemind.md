@@ -1237,3 +1237,34 @@ def _notify(self, store: Store, title: str, message: str) -> None:
 *   **Testability:** It is much easier to mock or provide specific test configurations by instantiating the class with a custom `Settings` object, rather than having to monkeypatch a global `Config.load()` method.
 *   **Performance:** Avoids the overhead of repeatedly parsing or loading configuration from disk or environment variables on every method invocation.
 *   **Explicit Dependencies:** The state required by the class is explicitly declared in its constructor, making the code easier to reason about, maintain, and refactor.
+
+### Targeted Stubs for Testing Fallback Logic
+
+When testing configuration resolution, routing, or fallback behaviors, avoid loading the real, fully-hydrated application configuration object (e.g., `Config.load()`). Instead, define a minimal, explicit test double (stub) directly within the test file. 
+
+By deliberately omitting specific attributes or methods from this minimal stand-in, you can predictably and reliably force the system under test to exercise its fallback paths and default values. This ensures your tests evaluate the pure resolution logic, remaining fast, deterministic, and entirely decoupled from the actual environment state or complex real-world configuration data.
+
+**Example:**
+```python
+# Instead of loading a real configuration:
+# cfg = Config.load()
+
+class StubSettings:
+    """Minimal stand-in: deliberately lacks specific routing attributes 
+    to force the resolver to fall back to the default pool rather than blow up."""
+    pass
+
+settings = StubSettings()
+
+# The resolver is forced to use the default pool because settings lacks overrides
+assert resolve_model(settings) == DEFAULT_FALLBACK_MODEL
+```
+
+### Update Documentation When Relocating Code
+
+When refactoring code by moving modules or functions to new namespaces (e.g., updating imports from `ohmyllama.alerts` to `semai.adapters.push`), always check for and update references to the old paths in comments and docstrings.
+
+In this change, the `deliver` function was moved to a new adapter package, but the file-level docstring in the test still references the old module path (`ohmyllama.alerts.deliver`). 
+
+**Best Practice:**
+Make it a habit to perform a text search for the old module or function name whenever relocating code. This ensures that test descriptions, file headers, and inline comments do not become stale and misleading for future developers.

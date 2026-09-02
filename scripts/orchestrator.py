@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.budget_guard import check_tier1_ok, check_tier1_manager_ok, check_tier2_ok, check_tier3_peak_hours_ok, resolve_deepseek_tier
 from scripts.config_loader import load_tiers
@@ -367,10 +369,29 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
         while True:
             try:
                 result = tier4_run(task_id, description, target, workdir, build_cmd, tier4_model, context_blob)
+            except requests.exceptions.HTTPError as e:
+                # llm_client._primary_request raises this for every API-level
+                # response failure (a real 4xx/5xx status, or a 200 with
+                # choices[0].message.content: null) regardless of which
+                # provider tier_4_worker is configured for -- and Tier 4 is
+                # NOT always local Ollama (tiers.yaml can point it at an
+                # OpenRouter/agy model same as any other tier). The broad
+                # except-and-crash below assumed an Ollama-only connectivity
+                # problem lower tiers "can't fix", but a transient upstream
+                # 502/null-content from a free OpenRouter model (found live
+                # 2026-09-02: nvidia/nemotron-3.5-lightning:free) is exactly
+                # the kind of thing Tier 3's different provider/model CAN
+                # route around -- so escalate instead of crashing, matching
+                # the same fix already applied to tier2_escalate.py/
+                # tier3_escalate.py's own HTTPError handling.
+                log.warning("[%s] Tier 4 raised %s; escalating rather than crashing", task_id, e)
+                record_failure(task_id, str(e))
+                break
             except Exception as e:
-                # An exception here (e.g. Ollama connection/read timeout) should
-                # crash the pipeline rather than silently escalating to lower
-                # tiers that can't fix an Ollama connectivity problem.
+                # Any other exception here (e.g. a genuine local Ollama
+                # connection/read timeout) should still crash the pipeline
+                # rather than silently escalating to lower tiers that can't
+                # fix that specific kind of problem.
                 log.warning("[%s] Tier 4 raised %s; crashing pipeline", task_id, e)
                 record_failure(task_id, str(e))
                 raise
