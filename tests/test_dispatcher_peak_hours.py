@@ -135,6 +135,24 @@ class BreakdownPhaseAttemptAgyNoEndpointTests(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertIsNone(mock_execute.call_args.kwargs["endpoint"])
 
+    def test_effort_is_threaded_through_to_execute_llm(self) -> None:
+        """Real incident 2026-09-02, found immediately after the endpoint
+        fix above: the live `agy` CLI rejects `--model gemini-3.1-pro` with
+        no `--effort` at all ("requires --effort"), but
+        _breakdown_phase_attempt() never read tier2.get("effort") -- every
+        other real agy call site in this repo (tier2_escalate.py,
+        tier3_escalate.py) already threads it through."""
+        from scripts.dispatcher import _breakdown_phase_attempt
+
+        tier2 = {"provider": "agy", "models": {"default": "gemini-3.1-pro"}, "effort": "high"}
+        with mock.patch(
+            "scripts.llm_client.execute_llm",
+            return_value=('{"name": "Phase 1", "items": []}', "agy", 0, 0),
+        ) as mock_execute:
+            _breakdown_phase_attempt("some phase text", ["gemini-3.1-pro"], tier2, {})
+
+        self.assertEqual(mock_execute.call_args.kwargs["effort"], "high")
+
 
 if __name__ == "__main__":
     unittest.main()

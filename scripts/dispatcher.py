@@ -596,6 +596,18 @@ def _breakdown_phase_attempt(phase_text: str, models: list[str], tier2: dict, se
             model=models[0],
             prompt=phase_text,
             system_prompt=BREAKDOWN_SYSTEM_INSTRUCTION,
+            # tier2.get("effort"), not omitted -- an agy-provider block
+            # (e.g. tier_2_manager's peak_alt, effort: high in
+            # config/tiers.yaml) is rejected by the live `agy` CLI with
+            # "--model gemini-3.1-pro requires --effort" when no effort is
+            # passed at all. Every other real agy call site in this repo
+            # (tier2_escalate.py, tier3_escalate.py) already threads this
+            # through; this one didn't. Found live 2026-09-02, right after
+            # the endpoint KeyError above was fixed -- exit status 1 with no
+            # stderr surfaced in the logged exception message (see
+            # _call_agy_cli's non-JSON-decode CalledProcessError branch,
+            # which doesn't embed stderr like its sibling branches do).
+            effort=tier2.get("effort"),
         )
     except Exception as e:
         log.error("Phase breakdown request failed: %s", e)
