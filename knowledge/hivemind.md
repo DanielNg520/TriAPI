@@ -1484,3 +1484,8 @@ def remove_resolved_entries(file_path: Path, resolved_targets: set[str]) -> None
 
     file_path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
 ```
+
+### Prevent Runtime Errors from Missing Imports
+When introducing new dependencies or modules (like `librarian_escalate`) into conditionally executed code paths, failing to add the corresponding `import` statement will result in a delayed `NameError` at runtime. Because this crash only occurs when the specific condition is met, it can easily slip past basic manual testing.
+
+**Best Practice:** Always run a static analysis tool or linter (such as `ruff`, `flake8`, or `pyright`) on your codebase before committing. These tools instantly detect undefined names and missing imports, ensuring that new execution paths have all their required dependencies loaded.

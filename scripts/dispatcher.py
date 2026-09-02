@@ -18,7 +18,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scripts import git_ops, judge, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate
+from scripts import git_ops, judge, mock_patch_lint, regression_guard, scope_guard, tech_debt, tier3_escalate, librarian_escalate
 from scripts.tier4_worker import run_build
 from scripts.tier4_context import TIER4_MAX_CONTEXT_CHARS
 from scripts.budget_guard import check_tier2_ok, check_tier3_peak_hours_ok, resolve_peak_conditional
