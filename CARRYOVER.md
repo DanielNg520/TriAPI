@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md`](docs/carryover/20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md) | RESOLVED -- oh-my-llama Phase 7 rename (ohmyllama -> semai) fully COMPLETE (both dispatch runs 20260901-230714-ebd3c2 and 20260902-005154-7f74ad finished `completed`); 3 more real TriAPI bugs found+fixed (deletion-guard rm synthesis, Tier 2/3/4 HTTPError soft-escalate instead of crash); live services healthy, full suite green, everything committed. Nothing pending. |
+| [`docs/carryover/20260902-191415-gemini38-tier5-swap-supervisor-mode-tightened.md`](docs/carryover/20260902-191415-gemini38-tier5-swap-supervisor-mode-tightened.md) | RESOLVED -- Gemini 3.7->3.8 tier_5_librarian swap complete (commit ca8085c), full suite green; supervisor mode tightened to fully-dispatch-only (any hand fix now needs approval); self-fix/tech-debt backlog (67 stale-looking entries) flagged for a future grooming pass, not resolved this session. |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md`](docs/carryover/20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md) | 2026-09-02 | RESOLVED | oh-my-llama Phase 7 rename fully complete, 3 more TriAPI bugs fixed; superseded same-session by the 191415 file |
 | [`20260902-064500-ohmyllama-phase7-rename-in-progress-3-more-triapi-bugs-fixed.md`](docs/carryover/20260902-064500-ohmyllama-phase7-rename-in-progress-3-more-triapi-bugs-fixed.md) | 2026-09-02 | RESOLVED | oh-my-llama Phase 7 rename dispatch paused mid-run at user request; 3 more TriAPI bugs found+fixed (breakdown_phase endpoint KeyError, missing effort kwarg, _enforce_file_size_ceiling directory-deletion crash); superseded by the 135524 file once the rename fully completed |
 | [`20260902-000000-ohmyllama-phase7-prep-complete-3-triapi-bugs-fixed.md`](docs/carryover/20260902-000000-ohmyllama-phase7-prep-complete-3-triapi-bugs-fixed.md) | 2026-09-02 | RESOLVED | oh-my-llama Phase 7 prep (retiring legacy ohmyllama imports) fully complete; 3 TriAPI bugs fixed (llm_client null-content crash, dispatcher bogus-duplicate-phase bug, content_guard edit-block-marker-leak bug); superseded same-session by the 064500 file |
 | [`20260901-140000-triapi-self-audit-complete-clean-handoff.md`](docs/carryover/20260901-140000-triapi-self-audit-complete-clean-handoff.md) | 2026-09-01 | RESOLVED | Session-end brief pointer only, superseded same-session by the 2026-09-02 file once oh-my-llama Phase 7 prep work began |

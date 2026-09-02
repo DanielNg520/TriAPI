@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md",
+  "active": "20260902-191415-gemini38-tier5-swap-supervisor-mode-tightened.md",
   "history": [
+    {
+      "file": "20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md",
+      "date": "2026-09-02",
+      "status": "RESOLVED",
+      "topic": "oh-my-llama Phase 7 rename fully complete, 3 more TriAPI bugs fixed; superseded same-session by the 191415 file once the Gemini 3.7->3.8 tier_5_librarian swap and supervisor-mode tightening were done"
+    },
     {
       "file": "20260902-064500-ohmyllama-phase7-rename-in-progress-3-more-triapi-bugs-fixed.md",
       "date": "2026-09-02",
