@@ -136,7 +136,15 @@ class TestEscalate:
         finally:
             target.unlink(missing_ok=True)
 
-    def test_escalate_error_on_genuine_called_process_error(self) -> None:
+    def test_escalate_soft_escalates_on_genuine_called_process_error(self) -> None:
+        # Real incident 2026-09-02: a genuinely non-zero-exit agy CLI
+        # failure previously returned "error", which orchestrator.run_task
+        # treats as fatal (raises RuntimeError, crashing the whole `triapi
+        # dispatch` process) instead of soft-escalating to Tier 1 -- the
+        # same crash-vs-soft-escalate distinction tier3_escalate.py's own
+        # CalledProcessError handling already got right (fixed 2026-08-29).
+        # "fix_rejected" is what orchestrator.py's Tier 2 block logs and
+        # falls through on, matching that existing pattern.
         import subprocess
         target = Path("/tmp/test_genuine_error.py")
         target.write_text("def broken():\n    pass\n", encoding="utf-8")
@@ -147,6 +155,6 @@ class TestEscalate:
                         1, ["agy", "-p", "prompt"], "", "real failure"
                     )
                     result = escalate("task-8", str(target), model="pro")
-            assert result["status"] == "error"
+            assert result["status"] == "fix_rejected"
         finally:
             target.unlink(missing_ok=True)

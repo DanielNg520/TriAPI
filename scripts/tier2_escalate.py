@@ -146,20 +146,38 @@ def escalate(
             system_prompt=system_instruction,
             is_tier4=False,
         )
-    except Exception as e:
-        # agy's llm_client._call_agy_cli raises synthetic
-        # CalledProcessError(0, ...) instances for recoverable failures
-        # (argv too large, json decode error, status != SUCCESS) --
-        # not real subprocess request failures, and orchestrator.run_task
-        # treats any Tier 2 "error" status as fatal (raises RuntimeError).
-        # Return "skipped" instead of "error" for all these cases so
-        # orchestrator.py's Tier 2 block just falls through.
-        if (
-            isinstance(e, subprocess.CalledProcessError)
-            and e.returncode == 0
-        ):
+    except subprocess.CalledProcessError as e:
+        # agy's llm_client._call_agy_cli raises this family for every
+        # CLI-level failure -- both synthetic CalledProcessError(0, ...)
+        # instances for recoverable failures (argv too large, json decode
+        # error, status != SUCCESS) AND a genuinely non-zero exit from the
+        # CLI itself. orchestrator.run_task treats any Tier 2 "error"
+        # status as fatal (raises RuntimeError, crashing the whole `triapi
+        # dispatch` process) -- so both cases must fall through to Tier 1
+        # instead, the same crash-vs-soft-escalate distinction
+        # tier3_escalate.py's own CalledProcessError handling already gets
+        # right (see its docstring, fixed 2026-08-29). Found live
+        # 2026-09-02: a real non-zero-exit agy CLI failure (returncode=1,
+        # not the synthetic returncode=0 case this branch previously
+        # special-cased alone) fell through to the generic `except
+        # Exception` below and returned "error", crashing dispatch on a
+        # transient CLI hiccup -- twice in the same session.
+        if e.returncode == 0:
             log.warning("[%s] Tier 2 (%s) agy provider raised synthetic recoverable error, skipping to Tier 1: %s", task_id, model_name, e)
             return {"status": "skipped", "reason": str(e)}
+        log.warning("[%s] Tier 2 (%s) CLI call failed (soft-escalating rather than crashing): %s", task_id, model_name, e)
+        return {"status": "fix_rejected", "reason": f"Tier 2 CLI call failed on {model_name}: {e}"}
+    except requests.exceptions.HTTPError as e:
+        # llm_client._primary_request raises this for every API-level
+        # response failure (a real 4xx/5xx status, or a 200 with
+        # choices[0].message.content: null -- see its own docstring) on
+        # the openrouter/deepseek provider paths -- the HTTP-request
+        # analogue of the CLI-shaped CalledProcessError case above. Same
+        # crash-vs-soft-escalate fix as tier3_escalate.py's matching branch
+        # (found live 2026-09-02).
+        log.warning("[%s] Tier 2 (%s) API call failed (soft-escalating rather than crashing): %s", task_id, model_name, e)
+        return {"status": "fix_rejected", "reason": f"Tier 2 API call failed on {model_name}: {e}"}
+    except Exception as e:
         log.error("[%s] Tier 2 request failed on %s: %s", task_id, model_name, e, exc_info=True)
         return {"status": "error", "reason": f"Tier 2 request failed on {model_name}: {e}"}
 

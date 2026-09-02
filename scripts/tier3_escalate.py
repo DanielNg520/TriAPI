@@ -17,6 +17,8 @@ import sys
 import time
 from pathlib import Path
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import content_guard, edit_blocks
 from scripts import lessons
@@ -237,6 +239,28 @@ def escalate(
         return {
             "status": "fix_rejected",
             "reason": f"Tier 3 CLI call failed: {e}",
+            "model": model_name,
+            "cache_hit_tokens": 0,
+            "cache_miss_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+        }
+    except requests.exceptions.HTTPError as e:
+        # llm_client._primary_request raises this for every API-level
+        # response failure (a real 4xx/5xx status, or a 200 with
+        # choices[0].message.content: null -- see its own docstring) --
+        # the HTTP-request analogue of the CLI-shaped CalledProcessError
+        # case above, and the same crash-vs-soft-escalate distinction
+        # applies: not an infra-level problem Tier 2/1 can't route around.
+        # Found live 2026-09-02: a null-content response (and, separately
+        # in the same session, an upstream-timeout 504 wrapped the same
+        # way) previously fell through to the generic `except Exception`
+        # below and returned "error", crashing the entire `triapi
+        # dispatch` process instead of soft-escalating.
+        log.warning("[%s] Tier 3 API call failed (soft-escalating rather than crashing): %s", task_id, e)
+        return {
+            "status": "fix_rejected",
+            "reason": f"Tier 3 API call failed: {e}",
             "model": model_name,
             "cache_hit_tokens": 0,
             "cache_miss_tokens": 0,
