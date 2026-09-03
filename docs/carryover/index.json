@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260903-142631-selffix-backlog-cleared-jules-split-silent-delete-caught-fixed.md",
+  "active": "20260903-162623-relocation-guard-hardfail-plus-p0-crash-found-fixed.md",
   "history": [
+    {
+      "file": "20260903-142631-selffix-backlog-cleared-jules-split-silent-delete-caught-fixed.md",
+      "date": "2026-09-03",
+      "status": "RESOLVED",
+      "topic": "Self-fix backlog cleared 12->0 after manual review against current source; Jules-split dispatch silently deleted 2 test classes despite success status, hand-restored with approval; superseded same-session by the 162623 file"
+    },
     {
       "file": "20260903-001301-audit-found-fixed-librarian-import-crash-fake-split-critique-gap.md",
       "date": "2026-09-03",
