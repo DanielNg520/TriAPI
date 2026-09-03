@@ -611,7 +611,16 @@ class CritiqueTests(unittest.TestCase):
                 mock.patch.object(
                     orchestrator.critique,
                     "critique_diff",
-                    return_value={"status": "ok", "score": 3, "issues": ["quality issue"]},
+                    # First call: the initial assessment that triggers revision
+                    # (score 3, below threshold). Second call: the re-check
+                    # after the revision succeeds and genuinely improves
+                    # (score 8, clears threshold) -- a revision that merely
+                    # applies and rebuilds is no longer accepted unconditionally,
+                    # it must also pass this second critique.
+                    side_effect=[
+                        {"status": "ok", "score": 3, "issues": ["quality issue"]},
+                        {"status": "ok", "score": 8, "issues": []},
+                    ],
                 ),
                 mock.patch.object(orchestrator, "run_build", return_value=(True, "")),
             ):

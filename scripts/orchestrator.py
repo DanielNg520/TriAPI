@@ -204,10 +204,46 @@ def _critique_and_maybe_revise_inner(task_id: str, resolved_target: str, descrip
             )
             continue
 
-        log.info(
-            "[%s] Critique revision %s/%s applied and build still passes",
-            task_id, attempt, max_revision_attempts,
+        new_after_content = _read_target_text(resolved_target)
+        new_diff_text = "".join(
+            difflib.unified_diff(
+                before_content.splitlines(keepends=True),
+                new_after_content.splitlines(keepends=True),
+                fromfile=resolved_target,
+                tofile=resolved_target,
+            )
         )
+
+        try:
+            crit_result = critique.critique_diff(
+                task_id,
+                Path(resolved_target).name,
+                description,
+                new_diff_text,
+                tier_name,
+                score_threshold=threshold,
+            )
+        except Exception as exc:
+            log.warning("[%s] Critique failed unexpectedly after revision for %s: %s", task_id, tier_name, exc)
+            return
+        if crit_result.get("status") != "ok":
+            level = log.warning if crit_result.get("status") == "error" else log.info
+            level("[%s] Critique %s for %s: %s", task_id, crit_result.get("status"), tier_name, crit_result.get("reason"))
+            return
+        try:
+            score = int(crit_result.get("score"))
+        except (TypeError, ValueError):
+            log.warning("[%s] Critique returned an invalid score after revision; keeping passing fix", task_id)
+            return
+        if score < threshold:
+            _revert()
+            log.warning(
+                "[%s] Critique scored %s below threshold %s after revision -- reverted",
+                task_id, score, threshold,
+            )
+            continue
+        # score >= threshold
+        log.info("[%s] Critique passed after revision (score=%s)", task_id, score)
         return
 
     log.warning(
