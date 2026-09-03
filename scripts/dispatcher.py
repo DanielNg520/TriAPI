@@ -1449,9 +1449,19 @@ def _dispatch_locked(state: dict) -> dict:
                         "in item description -- not blocking, review this diff by hand",
                         task_id, resolved_target, scope_concerns,
                     )
-            # Relocation intent check
+            # Relocation intent check. Gated the same way as scope_concerns
+            # above: only overrides an already-successful regular item, never
+            # runs on verify_only/git items or a result that already failed
+            # for a different (possibly unrelated) reason. Previously
+            # unconditional -- confirmed live 2026-09-03 (SemAI run
+            # 20260903-133525-cb514e, item p2-i0) false-failing a correct
+            # MAPPING.md doc edit whose own build_cmd passed, because the
+            # item's description used "moved" to describe a data filename
+            # (EmailRules.md) relocating between directories, not a real
+            # code move/split/extract -- symbol_exists_in_project() will
+            # never find a non-code filename as a defined symbol.
             reloc_symbols = scope_guard.detect_relocation_intent(item["description"])
-            if reloc_symbols:
+            if is_regular_item and result["status"] == "success" and reloc_symbols:
                 missing = []
                 for sym in reloc_symbols:
                     if not scope_guard.symbol_exists_in_project(state["project_dir"], sym):
