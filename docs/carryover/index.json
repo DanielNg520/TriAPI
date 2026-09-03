@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260902-225427-techdebt-selffix-backlog-cleared-3-bugs-fixed.md",
+  "active": "20260903-001301-audit-found-fixed-librarian-import-crash-fake-split-critique-gap.md",
   "history": [
+    {
+      "file": "20260902-225427-techdebt-selffix-backlog-cleared-3-bugs-fixed.md",
+      "date": "2026-09-02",
+      "status": "RESOLVED",
+      "topic": "Tech-debt backlog cleared and self-fix backlog groomed 72->12 entries; superseded same-session by the 001301 file once an audit found and fixed a live crash bug (missing librarian_escalate import), a fake file split (dead breakdown_guards.py), and a critique-gate design gap introduced by this same session's work"
+    },
     {
       "file": "20260902-191415-gemini38-tier5-swap-supervisor-mode-tightened.md",
       "date": "2026-09-02",

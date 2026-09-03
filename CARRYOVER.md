@@ -15,7 +15,7 @@ this markdown table at all.
 
 | File | Status |
 |---|---|
-| [`docs/carryover/20260902-225427-techdebt-selffix-backlog-cleared-3-bugs-fixed.md`](docs/carryover/20260902-225427-techdebt-selffix-backlog-cleared-3-bugs-fixed.md) | RESOLVED -- tech-debt backlog cleared (4 real fixes) and self-fix backlog groomed 72->12 entries via triapi tech-debt / triapi self-fix discard; 4 more TriAPI bugs fixed (cmd_status prompt KeyError, dispatcher.py size-ceiling split, self-fix discard command, tech_debt.remove_resolved_entries); full suite green, everything committed. |
+| [`docs/carryover/20260903-001301-audit-found-fixed-librarian-import-crash-fake-split-critique-gap.md`](docs/carryover/20260903-001301-audit-found-fixed-librarian-import-crash-fake-split-critique-gap.md) | RESOLVED -- audit of the prior tech-debt/self-fix cleanup session found+fixed a live crash bug (missing librarian_escalate import in dispatcher.py), a fake file split (dead scripts/breakdown_guards.py deleted), and a critique-gate design gap (revisions were accepted on rebuild-pass alone, never re-checked against the original critique feedback); full 289-test suite green, everything committed. |
 
 The ACTIVE file is the only one required reading for "what do I do next."
 Everything below is historical — read a row only if your task needs that
@@ -26,6 +26,7 @@ understanding why a past decision was made).
 
 | File | Date | Status | Topic |
 |---|---|---|---|
+| [`20260902-225427-techdebt-selffix-backlog-cleared-3-bugs-fixed.md`](docs/carryover/20260902-225427-techdebt-selffix-backlog-cleared-3-bugs-fixed.md) | 2026-09-02 | RESOLVED | Tech-debt backlog cleared and self-fix backlog groomed 72->12 entries; superseded same-session by the 001301 file once an audit found+fixed 3 real bugs in that session's own work. |
 | [`20260902-191415-gemini38-tier5-swap-supervisor-mode-tightened.md`](docs/carryover/20260902-191415-gemini38-tier5-swap-supervisor-mode-tightened.md) | 2026-09-02 | RESOLVED | Gemini 3.7->3.8 tier_5_librarian swap complete, supervisor mode tightened to fully-dispatch-only; superseded same-session by the 225427 file |
 | [`20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md`](docs/carryover/20260902-135524-ohmyllama-phase7-complete-3-more-triapi-bugs-fixed.md) | 2026-09-02 | RESOLVED | oh-my-llama Phase 7 rename fully complete, 3 more TriAPI bugs fixed; superseded same-session by the 191415 file |
 | [`20260902-064500-ohmyllama-phase7-rename-in-progress-3-more-triapi-bugs-fixed.md`](docs/carryover/20260902-064500-ohmyllama-phase7-rename-in-progress-3-more-triapi-bugs-fixed.md) | 2026-09-02 | RESOLVED | oh-my-llama Phase 7 rename dispatch paused mid-run at user request; 3 more TriAPI bugs found+fixed (breakdown_phase endpoint KeyError, missing effort kwarg, _enforce_file_size_ceiling directory-deletion crash); superseded by the 135524 file once the rename fully completed |
