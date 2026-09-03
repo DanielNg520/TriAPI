@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260903-162623-relocation-guard-hardfail-plus-p0-crash-found-fixed.md",
+  "active": "20260903-175142-minimax-swaps-plus-rag-design-plan-ready-to-dispatch.md",
   "history": [
+    {
+      "file": "20260903-162623-relocation-guard-hardfail-plus-p0-crash-found-fixed.md",
+      "date": "2026-09-03",
+      "status": "RESOLVED",
+      "topic": "Relocation-guard hard-fail shipped via triapi plan/dispatch; investigating its Phase 3 human_handoff uncovered a P0 (dispatch() would crash on item 1 of any future run), hand-fixed with approval; tier_3_debugger peak_alt swapped nemotron->minimax-m3; superseded same-session by the 175142 file"
+    },
     {
       "file": "20260903-142631-selffix-backlog-cleared-jules-split-silent-delete-caught-fixed.md",
       "date": "2026-09-03",
