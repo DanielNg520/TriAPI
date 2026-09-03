@@ -134,3 +134,33 @@ class DispatchRelocationGuardIntegrationTests(unittest.TestCase):
 
         self.assertEqual(state["results"][0]["status"], "success")
         self.assertEqual(state["status"], "completed")
+
+    @mock.patch("scripts.dispatcher.save_run")
+    @mock.patch("scripts.dispatcher.check_tier2_ok", return_value={"ok": True})
+    @mock.patch("scripts.dispatcher.librarian_escalate.run")
+    @mock.patch("subprocess.run")
+    def test_doc_target_relocation_prose_not_blocked(
+        self, mock_run, mock_librarian_run, mock_check_ok, mock_save
+    ):
+        # Real bug shape (SemAI run 20260903-133525-cb514e, item p2-i0): a
+        # tier_5_librarian doc edit whose own build_cmd already passes gets
+        # force-failed because its description says a data filename was
+        # "moved" between directories -- detect_relocation_intent() has no
+        # way to tell that apart from a real code-symbol move, and no
+        # Python symbol named after a data filename will ever be found.
+        doc_target = Path(self.project_dir) / "MAPPING.md"
+        doc_target.write_text("# Mapping\n", encoding="utf-8")
+        mock_librarian_run.return_value = {
+            "status": "success", "resolved_by": "tier_5", "changed": False, "via": "model_fresh",
+        }
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        state = self._state(
+            "Add a brief entry to MAPPING.md documenting that EmailRules.md "
+            "was moved from 10-Memory/Rules/ to .state-semai/"
+        )
+        state["breakdown"]["phases"][0]["items"][0]["target"] = "MAPPING.md"
+        dispatcher.dispatch(state)
+
+        self.assertEqual(state["results"][0]["status"], "success")
+        self.assertEqual(state["status"], "completed")
