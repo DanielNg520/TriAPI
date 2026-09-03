@@ -28,8 +28,10 @@ tier_1_planner:
   # that was never offered to them -- moved off free OpenRouter models
   # entirely for this tier, onto the same real, working, tool-using `agy`
   # CLI path tier_3_debugger already relies on. `dots-3-note-preview:free`
-  # demoted to tier_3_debugger as a secondary model (see below), not
-  # dropped from the approved-models list entirely.
+  # demoted to tier_3_debugger as a secondary model (see below); that slot
+  # was itself later swapped again (first to nemotron-3.5-lightning:free,
+  # then 2026-09-03 to minimax/minimax-m3:free) -- dots-3-note-preview is
+  # no longer configured anywhere in this file.
   provider: agy
   models:
     default: gemini-3.1-pro
@@ -132,11 +134,13 @@ tier_3_debugger:
   role: "complex C++ logic, hard SIMD fixes, algorithmic diffs"
   automatable: true
   peak_alt:
+    # 2026-09-03: swapped from "nvidia/nemotron-3.5-lightning:free" to
+    # "minimax/minimax-m3:free" (user request).
     provider: openrouter
     endpoint: "https://openrouter.ai/api/v1"
     api_key_secret: open_router_api_key
     models:
-      default: "nvidia/nemotron-3.5-lightning:free"
+      default: "minimax/minimax-m3:free"
     default_model: default
 
 tier_4_worker:
