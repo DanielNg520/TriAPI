@@ -42,6 +42,7 @@ target.
 """
 
 import re
+from pathlib import Path
 
 _HUNK_FUNC_RE = re.compile(r"^@@[^@]*@@\s*(?:def|class)\s+(\w+)", re.MULTILINE)
 
@@ -62,11 +63,9 @@ def find_out_of_scope_functions(git_diff: str, description: str) -> list[str]:
     no per-hunk function context to check (e.g. pure module-level edits),
     or when the description doesn't name any specific function at all.
     """
-    touched = _HUNK_FUNC_RE.findall(git_diff) + _BODY_DEF_RE.findall(git_diff)
-    if not touched:
+    touched_unique = list(dict.fromkeys(_HUNK_FUNC_RE.findall(git_diff) + _BODY_DEF_RE.findall(git_diff)))
+    if not touched_unique:
         return []
-
-    touched_unique = list(dict.fromkeys(touched))  # de-dupe, keep order
     named_in_scope = [
         name for name in touched_unique if re.search(rf"\b{re.escape(name)}\b", description)
     ]
@@ -77,3 +76,78 @@ def find_out_of_scope_functions(git_diff: str, description: str) -> list[str]:
         return []
 
     return [name for name in touched_unique if name not in named_in_scope]
+
+
+_IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def extract_named_symbols(text: str) -> set[str]:
+    """Returns the set of tokens in `text` that look like a specific
+    Python function/class name rather than ordinary prose -- either
+    PascalCase (an uppercase letter appears after the first character,
+    e.g. `CheckJulesOkTests`) or containing an underscore (e.g.
+    `_is_deepseek_peak_hours`). A single capitalized English word
+    (`Move`, `Test`) matches neither shape and is excluded, so this
+    stays precise enough to use directly against free-text item
+    descriptions, not just git-diff hunk headers.
+    """
+    symbols = set()
+    for token in _IDENTIFIER_RE.findall(text):
+        if "_" in token or any(c.isupper() for c in token[1:]):
+            symbols.add(token)
+    return symbols
+
+
+_RELOCATION_VERBS = (
+    "move", "moved", "split", "split out", "extract", "extracted",
+    "relocate", "relocated",
+)
+
+
+def detect_relocation_intent(description: str) -> set[str]:
+    """Returns the symbol names `description` names as being moved,
+    split out, extracted, or relocated -- but ONLY when `description`
+    also uses one of those relocation verbs, so a description that
+    merely mentions a symbol for some other reason (e.g. "fix a bug in
+    TestBeta") never triggers this. Feeds a hard-blocking post-edit
+    existence check in dispatcher.py's dispatch loop -- deliberately
+    separate from find_out_of_scope_functions()'s advisory-only
+    out-of-scope-touch warning; see that function's docstring for why
+    THIS check does not need the same false-positive caution (a symbol
+    named as a relocation target either still exists somewhere after
+    the edit, or it doesn't).
+    """
+    lowered = description.lower()
+    if not any(verb in lowered for verb in _RELOCATION_VERBS):
+        return set()
+    return extract_named_symbols(description)
+
+
+_SKIP_DIR_NAMES = {".git", "logs", "__pycache__", ".venv", "venv"}
+
+
+def symbol_exists_in_project(project_dir: str, symbol_name: str) -> bool:
+    """Returns True if `symbol_name` is defined (`def NAME(` or
+    `class NAME:` / `class NAME(`) in any .py file under `project_dir`
+    (excluding .git/, logs/, __pycache__/, and venv dirs), False if no
+    file defines it anywhere. Used to confirm a symbol an item's own
+    description named as a relocation target actually landed
+    somewhere in the project, not just in whatever the item's own
+    `target` file happened to be.
+    """
+    root = Path(project_dir)
+    needles = (
+        f"def {symbol_name}(",
+        f"class {symbol_name}:",
+        f"class {symbol_name}(",
+    )
+    for path in root.rglob("*.py"):
+        if any(part in _SKIP_DIR_NAMES for part in path.relative_to(root).parts):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if any(needle in content for needle in needles):
+            return True
+    return False

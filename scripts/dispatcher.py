@@ -1449,6 +1449,23 @@ def _dispatch_locked(state: dict) -> dict:
                         "in item description -- not blocking, review this diff by hand",
                         task_id, resolved_target, scope_concerns,
                     )
+            # Relocation intent check
+            reloc_symbols = scope_guard.detect_relocation_intent(item["description"])
+            if reloc_symbols:
+                missing = []
+                for sym in reloc_symbols:
+                    if not scope_guard.symbol_exists_in_project(state["project_dir"], sym):
+                        missing.append(sym)
+                if missing:
+                    result["status"] = "build_failed"
+                    result["reason"] = (
+                        f"Relocation check failed: symbol(s) {missing} "
+                        f"named for move/split/extract in this item's description "
+                        f"are no longer defined anywhere in the project"
+                    )
+                    log.warning(
+                        "[%s] %s", task_id, result["reason"]
+                    )
 
             entry = {
                 "task_id": task_id,

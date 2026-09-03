@@ -1489,3 +1489,20 @@ def remove_resolved_entries(file_path: Path, resolved_targets: set[str]) -> None
 When introducing new dependencies or modules (like `librarian_escalate`) into conditionally executed code paths, failing to add the corresponding `import` statement will result in a delayed `NameError` at runtime. Because this crash only occurs when the specific condition is met, it can easily slip past basic manual testing.
 
 **Best Practice:** Always run a static analysis tool or linter (such as `ruff`, `flake8`, or `pyright`) on your codebase before committing. These tools instantly detect undefined names and missing imports, ensuring that new execution paths have all their required dependencies loaded.
+
+### Beware Domain Mismatch When Extracting Helpers
+
+When extracting inline logic into a reusable helper function, ensure the function name accurately reflects its implicit domain constraints. Hiding specific formatting requirements behind generic types and names often leads to silent failures when the helper is reused in a different context.
+
+**Example from this code:**
+The author extracted logic to find function names into a generically named helper with a generic signature:
+```python
+def extract_named_symbols(text: str) -> list[str]:
+    return list(dict.fromkeys(_HUNK_FUNC_RE.findall(text) + _BODY_DEF_RE.findall(text)))
+```
+
+Because the signature implies it works on any `str` text, they immediately reused it in `detect_relocation_intent` to parse a plain-English PR `description`. However, the underlying regexes (`_HUNK_FUNC_RE` and `_BODY_DEF_RE`) strictly require Git diff syntax (lines starting with `@@...@@` or `+`/`-`). Consequently, calling this on a PR description will silently return an empty list, breaking the new relocation detection logic.
+
+**Best Practice:**
+* Name functions to explicitly state their expected input format (e.g., `extract_symbols_from_git_diff(diff_text: str)`).
+* When reusing a newly extracted helper, verify that the new input data actually conforms to the assumptions baked into the implementation.
