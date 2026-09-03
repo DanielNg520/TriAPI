@@ -145,18 +145,20 @@ tier_3_debugger:
 
 tier_4_worker:
   # 2026-09-01: inverted relative to tiers 2/3 -- Tier 4 is the
-  # highest-VOLUME tier, so it defaults to the free OpenRouter Nemotron
-  # model off-peak (when cloud calls are "cheap", reusing DeepSeek's
+  # highest-VOLUME tier, so it defaults to a free OpenRouter model
+  # off-peak (when cloud calls are "cheap", reusing DeepSeek's
   # window purely as a shared clock -- Tier 4 itself never calls
   # DeepSeek) and falls back to the local Ollama model during DeepSeek's
   # peak window, when leaning on local/free-forever compute is safer than
   # hammering a shared free-tier cloud endpoint at its busiest time. See
   # budget_guard.resolve_peak_conditional.
+  # 2026-09-03: swapped from "nvidia/nemotron-3.5-lightning:free" to
+  # "minimax/minimax-m3:free" (user request).
   provider: openrouter
   endpoint: "https://openrouter.ai/api/v1"
   api_key_secret: open_router_api_key
   models:
-    default: "nvidia/nemotron-3.5-lightning:free"
+    default: "minimax/minimax-m3:free"
   default_model: default
   role: "high-volume code drafting, cmake/g++ compilation loops"
   automatable: true
