@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260904-040500-rag-design-doc-dispatched-awaiting-user-review.md",
+  "active": "20260904-114500-rag-memory-layer-implementation-complete.md",
   "history": [
+    {
+      "file": "20260904-040500-rag-design-doc-dispatched-awaiting-user-review.md",
+      "date": "2026-09-04",
+      "status": "RESOLVED",
+      "topic": "RAG/memory design doc dispatched+approved; implementation dispatch run 20260903-220300-6f7574 (Phases 1-4) then progressed to 8/9 Phase-4 items before pausing for DeepSeek peak hours with a known test-mock regression; superseded by the 114500 file once the run finished completely."
+    },
     {
       "file": "20260903-175142-minimax-swaps-plus-rag-design-plan-ready-to-dispatch.md",
       "date": "2026-09-03",
