@@ -175,3 +175,19 @@ within a few KB of the ceiling — same convention as `docs/carryover/`.**
 3. Phase 3: Update regression suite
 - [x] `tests/test_branch_features.py`: Add a new test method `test_check_staleness_false_when_hash_is_na(self) -> None` that asserts `tech_debt.check_staleness({"filepath": "missing.py", "hash": "n/a (design gap)", "reason": "test"})` returns `False`. In `test_cmd_tech_debt_builds_synthetic_state_and_skips_stale`, add a manual entry to the mocked backlog by appending `- [x] FILE: {tmp}/na.py | HASH: n/a (design gap) | REASON: test\n` to `backlog` after the existing `log_tech_debt` calls. Update the `mock.patch("sys.stdout", io.StringIO())` line to use `new_callable=io.StringIO` bound as `mock_stdout` (e.g., `mock.patch("sys.stdout", new_callable=io.StringIO) as mock_stdout`), and add an assertion that `"Skipping STALE entry:"` is present in `mock_stdout.getvalue()`. Finally, verify that the dummy path (`str((Path(tmp) / "na.py").resolve())`) is included in the dispatched `targets` list. Verification command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
 <!-- triapi:plan run_id=20260904-153223-7b117e end -->
+
+<!-- triapi:plan run_id=20260904-154839-ccfa17 start -->
+## TriAPI Plan (run 20260904-154839-ccfa17, appended 2026-09-04)
+
+1. Phase 1: Clean up corrupted tech debt backlog
+- [x] `knowledge/TECH_DEBT.md`: Hand-edit the file to remove the corrupted second entry and all the garbage test-output lines. Delete line 6 (starting with `- [x] FILE: /home/dyne/Documents/Coding/TriAPI/tests/test_branch_features.py | HASH:`) and every line after it through the end of the file. Do not alter lines 1 through 5, which contain the header, the introduction paragraph, and the original legitimate entry for `scripts/triapi.py`. Verification command: `test $(wc -l < knowledge/TECH_DEBT.md) -eq 5 && grep -q 'FILE: scripts/triapi.py' knowledge/TECH_DEBT.md`
+
+2. Phase 2: Sanitize fix-forward build output before logging
+- [x] `scripts/dispatcher.py`: In the `handle_fix_forward` function (around line 1208), update the failure path that sets `reason = f"Rebuild failed after Tier 3 rewrite: {build_output}"`. Before constructing the reason string, sanitize `build_output` to ensure it fits on a single line: strip newlines and collapse whitespace using `" ".join(build_output.split())`. If the result is longer than 300 characters, slice it to 300 characters and append `"...(truncated)"`. Then construct `reason` using this sanitized output. Verification command: `python3 -m py_compile scripts/dispatcher.py`
+
+3. Phase 3: Add regression test for truncated build output
+- [x] `tests/test_branch_features.py`: In the `DispatcherHookAndFixForwardTests` class, add a new test method `test_handle_fix_forward_truncates_long_build_output(self) -> None`. This should mirror `test_handle_fix_forward_failed_rebuild`, but set `mock_run_build.return_value = (False, "A\n" * 500)`. After calling `dispatcher.handle_fix_forward(**kwargs)`, verify that `mock_log_tech_debt` was called, and assert that the `reason` keyword argument passed to it contains `"...(truncated)"`, is less than 350 characters long in total, and contains no `\n` characters. Verification command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features.DispatcherHookAndFixForwardTests.test_handle_fix_forward_truncates_long_build_output -v`
+
+4. Phase 4: Full regression suite verification
+- [x] `AGENTS.md`: No edits needed in this phase. Run the full regression suite to confirm none of the changes broke anything, expecting zero SKIPPED tests. Verification command: `PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_*.py' -v`
+<!-- triapi:plan run_id=20260904-154839-ccfa17 end -->

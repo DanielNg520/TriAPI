@@ -1205,7 +1205,10 @@ def handle_fix_forward(item: dict, refactor_instruction: str, state: dict, task_
             reason = esc_res.get("reason") or "Tier 3 escalation did not apply the fix"
         else:
             log.info("[%s] handle_fix_forward reverted %s: rebuild failed after Tier 3 refactor rewrite", task_id, item["target"])
-            reason = f"Rebuild failed after Tier 3 rewrite: {build_output}"
+            sanitized_output = " ".join(build_output.split())
+            if len(sanitized_output) > 300:
+                sanitized_output = sanitized_output[:300] + "...(truncated)"
+            reason = f"Rebuild failed after Tier 3 rewrite: {sanitized_output}"
         tech_debt.log_tech_debt(str(target_path), reason=reason)
 
     if escalate_ok and rebuild_ok:

@@ -1331,6 +1331,60 @@ class DispatcherHookAndFixForwardTests(unittest.TestCase):
         self.assertEqual(self.target_file.read_text(encoding="utf-8"), "original content\n")
         mock_log_tech_debt.assert_called_once()
 
+    @mock.patch("subprocess.run")
+    @mock.patch("scripts.tier3_escalate.escalate", autospec=True)
+    @mock.patch("scripts.dispatcher.run_build")
+    @mock.patch("scripts.tech_debt.log_tech_debt")
+    def test_handle_fix_forward_truncates_long_build_output(self, mock_log_tech_debt, mock_run_build, mock_escalate, mock_run):
+        self.target_file.write_text("original content\n", encoding="utf-8")
+        
+        def mock_escalate_side_effect(*args, **kwargs):
+            self.target_file.write_text("tier 3 rewrite\n", encoding="utf-8")
+            return {"status": "fix_applied"}
+            
+        mock_escalate.side_effect = mock_escalate_side_effect
+        mock_run_build.return_value = (False, "A\n" * 500)
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="diff content", stderr="")
+
+        import inspect
+        sig = inspect.signature(dispatcher.handle_fix_forward)
+        kwargs = {}
+        param_mapping = {
+            "task_id": "task-test",
+            "target": str(self.target_file),
+            "snapshot": "original content\n",
+            "build_cmd": "echo 'built'",
+            "workdir": self.project_dir,
+            "description": "Test description",
+            "context_blob": "",
+            "revision_note": "",
+            "refactor_instruction": "",
+            "state": {
+                "run_id": "run-test",
+                "project_dir": self.project_dir,
+                "status": "planned",
+                "breakdown": {"phases": []},
+                "results": [],
+            },
+            "item": {
+                "description": "Test description",
+                "target": str(self.target_file.relative_to(self.project_dir)),
+                "build_cmd": "echo 'built'",
+            }
+        }
+        for name in sig.parameters:
+            if name in param_mapping:
+                kwargs[name] = param_mapping[name]
+
+        dispatcher.handle_fix_forward(**kwargs)
+
+        mock_log_tech_debt.assert_called_once()
+        call_args, call_kwargs = mock_log_tech_debt.call_args
+        reason = call_kwargs.get("reason") if "reason" in call_kwargs else call_args[1]
+        self.assertIn("...(truncated)", reason)
+        self.assertLess(len(reason), 400)
+        self.assertNotIn("\n", reason)
+
 
 class TechDebtTests(unittest.TestCase):
     def test_log_tech_debt_creates_backlog_file_with_hashed_entry(self) -> None:

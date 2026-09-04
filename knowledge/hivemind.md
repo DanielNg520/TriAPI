@@ -1720,3 +1720,56 @@ for entry in entries:
         continue
     filtered_entries.append(entry)
 ```
+
+### Sanitize and Truncate Subprocess Output for Structured Records
+When embedding arbitrary command output (e.g., from build tools, test runners, or shell scripts) into error messages, state files, or structured logs, always explicitly sanitize and truncate the text. Unbounded or highly multiline subprocess output can break downstream parsers, bloat JSON state files, and make logs unreadable.
+
+**Pattern:**
+```python
+# Flatten excessive whitespace/newlines and cap length before storing
+sanitized_output = " ".join(build_output.split())
+if len(sanitized_output) > 300:
+    sanitized_output = sanitized_output[:300] + "...(truncated)"
+reason = f"Rebuild failed: {sanitized_output}"
+```
+
+### Sanitize and Truncate Subprocess Output in State and Logs
+
+**Context:** 
+Capturing the output of a subprocess (like a compiler, test runner, or script) to use as a failure reason in a log message, state object, or tracking system (such as a tech debt registry).
+
+**Problem:** 
+Raw subprocess output is unbounded. It can easily span thousands of lines of stack traces or build errors. Embedding this raw text directly into a string field (like `reason`) can severely bloat JSON state files, break single-line log formats with embedded newlines, and overwhelm both human readers and downstream LLM context windows.
+
+**Solution:** 
+Sanitize and bound the output before embedding it. Flatten multi-line strings into a single line by collapsing whitespace (e.g., `" ".join(output.split())`), and enforce a strict character limit (e.g., 300 characters), appending a truncation marker if the limit is exceeded.
+
+**Example:**
+```python
+# Anti-pattern: Storing raw, unbounded output
+reason = f"Build failed: {build_output}"
+
+# Best practice: Flattening and truncating
+sanitized_output = " ".join(build_output.split())
+if len(sanitized_output) > 300:
+    sanitized_output = sanitized_output[:300] + "...(truncated)"
+reason = f"Build failed: {sanitized_output}"
+```
+
+### Sanitize and Truncate Command Output
+
+When embedding potentially unbounded command output (like build logs, test results, or shell errors) into state objects, summary reasons, or telemetry, always sanitize the formatting and enforce a length limit. Raw output can contain thousands of lines or excessive newlines, which can bloat state files, flood logs, or overwhelm downstream systems. 
+
+Flattening newlines (e.g., using `" ".join(output.split())`) and truncating to a reasonable length ensures the context remains useful without causing unintended side effects.
+
+**Example:**
+```python
+# Bad: embedding raw output directly
+reason = f"Rebuild failed: {build_output}"
+
+# Good: flattening whitespace and truncating
+sanitized_output = " ".join(build_output.split())
+if len(sanitized_output) > 300:
+    sanitized_output = sanitized_output[:300] + "...(truncated)"
+reason = f"Rebuild failed: {sanitized_output}"
+```
