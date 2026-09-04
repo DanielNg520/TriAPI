@@ -104,8 +104,31 @@ def apply_edit_blocks(original: str, response_text: str) -> tuple[str | None, st
     # landing literally in the file. A leaked marker is never valid output
     # for any real file, so this is a strong, cheap, format-agnostic
     # backstop regardless of the exact malformed shape that produced it.
-    for marker in ("<<<<<<<", "=======", ">>>>>>>"):
-        if marker in content and marker not in original:
-            return None, f"Applied result still contains a leaked '{marker}' marker -- response was malformed."
+    #
+    # Found for real 2026-09-03 (run 20260903-220300-6f7574, both Tier 2
+    # attempts on the same item): checking only the exact 7-char markers
+    # above misses shorter malformed dividers -- a bare "====" (4 equals)
+    # from a truncated/clipped model output leaked into orchestrator.py
+    # twice this session. It only got caught because it landed at module
+    # top level and was a syntax error; the same leak inside a string or
+    # comment would have been silently accepted. Generalize: catch any
+    # run of 3+ <, =, or > characters alone on a line, BUT ignore lines
+    # that were already present in the original (mirrors the existing
+    # "marker not in original" exemption so legitimate Markdown setext-
+    # style ==== headers in the file are not flagged as leaks) -- only a
+    # NEW such line, introduced by the patch, counts as a leak.
+    _LEAK_RE = re.compile(r"^[<=>]{3,}\s*$", re.MULTILINE)
+    leaked = []
+    for line in _LEAK_RE.findall(content):
+        # Need to confirm it's actually present in original; if it is, this
+        # is a legitimate Markdown setext divider, not a leak.
+        if line not in original:
+            leaked.append(line)
+    if leaked:
+        return None, (
+            f"Applied result contains a leaked divider-like line "
+            f"({leaked[0]!r}) -- response was malformed "
+            "(shorter/duplicated/truncated marker slipped through)."
+        )
 
     return content, ""

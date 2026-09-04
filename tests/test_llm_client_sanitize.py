@@ -1,6 +1,5 @@
 """Tests for _sanitize_for_openrouter_content_filter phone and IP cases."""
 
-import re
 import unittest
 
 from scripts.llm_client import (
