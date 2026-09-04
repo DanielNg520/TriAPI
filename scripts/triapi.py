@@ -173,6 +173,34 @@ def cmd_plan(prompt: str, project_dir: str, refactor: bool = False) -> None:
             reply = confirm
 
         if reply.lower() in APPROVE_WORDS:
+            if "- [ ] " not in turn["text"]:
+                print(
+                    "\nRefusing to approve: this response does not look like a plan "
+                    "(it contains no '- [ ] ' checklist steps). If it is a clarifying "
+                    "question, please answer it instead of approving."
+                )
+                while True:
+                    try:
+                        reply = input("Your answer/feedback (or 'cancel'): ").strip()
+                    except EOFError:
+                        print("\nNo input available. Aborting.")
+                        state["status"] = "failed"
+                        dispatcher.save_run(state)
+                        return
+                    if reply.lower() in APPROVE_WORDS:
+                        print("Cannot approve a non-plan. Please provide feedback or 'cancel'.")
+                        continue
+                    break
+                if reply.lower() in CANCEL_WORDS:
+                    state["status"] = "cancelled"
+                    dispatcher.save_run(state)
+                    log.info("[%s] Plan cancelled by user", state["run_id"])
+                    print("Cancelled.")
+                    return
+                history.append({"user": message, "assistant": turn["text"]})
+                message = reply
+                print()
+                continue
             state["plan_text"] = turn["text"]
             state["status"] = "planned"
             dispatcher.save_run(state)

@@ -1683,3 +1683,16 @@ Fetching contextâ€”like querying for relevant lessons or related file snippetsâ€
 1. **Decoupled Systems:** The execution layer no longer needs to know how to query, rank, or format specific types of context (like lessons).
 2. **Improved Testability:** You can easily test the execution logic by passing in mock context strings without needing to mock external context-retrieval dependencies.
 3. **Increased Flexibility:** The caller can decide exactly what context to include (lessons, file contents, memory) without requiring modifications to the execution function's signature or internal logic.
+
+### Guard Against Mindless Approvals in Human-in-the-Loop Systems
+
+**The Problem:**
+In conversational LLM workflows, the system often expects a specific type of structured deliverable (like an execution plan), but the LLM might instead ask a clarifying question or generate conversational filler. Human reviewers, habituated to the "happy path," can easily skim the output and reflexively type "approve," causing the system to accept an invalid payload and transition to an execution state.
+
+**The Solution:**
+Validate the structural shape of the LLM's output independently of the human's explicit approval. Even if a human says "looks good," the system should reject the state transition if the payload lacks the expected formatting markers.
+
+**Key Guidelines:**
+- **Assert Structural Markers:** Check for specific syntax that defines the expected deliverable (e.g., `- [ ] ` for checklist plans) *before* processing the user's approval.
+- **Intercept and Explain:** When an approval is rejected, clearly explain to the user *why* (e.g., "This response contains no checklist steps. If it is a clarifying question, please answer it instead of approving").
+- **Prevent Loop Escapes:** If dropping the user back into an input prompt, ensure that repeated mindless "approvals" are explicitly caught and rejected until the user provides meaningful textual feedback, answers the LLM's question, or cancels the operation.
