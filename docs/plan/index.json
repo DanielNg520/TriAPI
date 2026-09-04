@@ -25,6 +25,12 @@
       "date": "2026-09-01",
       "topic": "Former '## Session Carryover Log' section, second half: reused 'Phase N' numbering, 2026-08-22 through the 2026-08-25 tier reassignment",
       "moved_from": "PLAN.md's inline ## Session Carryover Log section (second half, colliding Phase-N numbering)"
+    },
+    {
+      "file": "20260904-145433-rag-memory-retrieval-layer.md",
+      "date": "2026-09-04",
+      "topic": "RAG and memory retrieval layer implementation (exactly-once retrieval, local Ollama embeddings, fallback to keyword search)",
+      "moved_from": "New record for run 20260903-220300-6f7574"
     }
   ]
 }

@@ -53,6 +53,7 @@ Human-readable mirror:
 | [`docs/plan/20260813-000000-phase10-through-phase22-breakdown-retries-through-hardening.md`](docs/plan/20260813-000000-phase10-through-phase22-breakdown-retries-through-hardening.md) | Phase 10 (per-phase breakdown/retries) through Phase 22 (worked-case audit/hardening), all complete |
 | [`docs/plan/20260818-000000-carryover-log-tier4-routing-through-queue-drain.md`](docs/plan/20260818-000000-carryover-log-tier4-routing-through-queue-drain.md) | Former "Session Carryover Log" section, dated entries 2026-08-18 through 2026-08-20's queue drain |
 | [`docs/plan/20260822-000000-carryover-log-phase17-through-phase33-provider-decoupling-tier-reassignment.md`](docs/plan/20260822-000000-carryover-log-phase17-through-phase33-provider-decoupling-tier-reassignment.md) | Former "Session Carryover Log" section continued, reused "Phase N" numbering, 2026-08-22 through the 2026-08-25 tier reassignment |
+| [`docs/plan/20260904-145433-rag-memory-retrieval-layer.md`](docs/plan/20260904-145433-rag-memory-retrieval-layer.md) | RAG and memory retrieval layer implementation (exactly-once retrieval, local Ollama embeddings, fallback to keyword search) |
 
 Read a file only when your task needs that specific historical detail —
 `ARCHITECTURE.md`/`AGENTS.md` cover the live current state; this index

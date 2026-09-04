@@ -6,8 +6,8 @@ TriAPI orchestrates a C++/Edge AI debugging workflow across five tiers (four aut
 
 | Tier | Surface | Cost model | Role |
 |---|---|---|---|
-| **4 — Worker** | OpenRouter nvidia/nemotron-3.5-lightning:free off-peak, local Ollama qwen2.5-coder:14b-instruct-q6_K during DeepSeek peak hours | OpenRouter API / $0 local | Drafts/fixes code, runs the build, tries repeatedly |
-| **3 — Debugger** | agy/gemini-3.1-pro (effort high) off-peak, OpenRouter nvidia/nemotron-3.5-lightning:free during DeepSeek peak hours | Subscription-billed ($0 marginal) off-peak, $0 OpenRouter during DeepSeek peak hours | Harder logic errors Tier 4 couldn't fix |
+| **4 — Worker** | minimax/minimax-m3:free off-peak, local Ollama qwen2.5-coder:14b-instruct-q6_K during DeepSeek peak hours | OpenRouter API / $0 local | Drafts/fixes code, runs the build, tries repeatedly |
+| **3 — Debugger** | agy/gemini-3.1-pro (effort high) off-peak, minimax/minimax-m3:free during DeepSeek peak hours | Subscription-billed ($0 marginal) off-peak, $0 OpenRouter during DeepSeek peak hours | Harder logic errors Tier 4 couldn't fix |
 | **2 — Manager** | DeepSeek v4 Pro off-peak, agy/gemini-3.1-pro (effort high) during DeepSeek peak hours | Metered (prefix-cache discount) off-peak, subscription-billed during DeepSeek peak hours | Second automated repair attempt |
 | **1 — Planner** | Claude Code CLI (`claude -p`) | Subscription (Pro/Max quota, $0 marginal) | Strongest, last automated repair attempt before human review (its `tier_1_planner` role, initial `triapi plan` authoring, is separate and always runs first regardless of this repair ordering) |
 | **5 — Librarian** | agy/gemini-3.8-flash (effort high) | Subscription-billed, $0 marginal cost | Doc-only repair for *.md/docs/** targets, no fallback chain -- fails fast to human handoff on any failure instead of escalating through Ollama/OpenRouter fallbacks |
@@ -90,6 +90,12 @@ shallow failures: the CLI-subprocess path uses `_CLI_TIMEOUT` (default 600s, com
 by both `_call_openai_api()` (the Ollama/OpenRouter-shaped HTTP path) and
 `_call_gemini_api()`, following the same "everything configurable" env-var convention
 as `_CLI_TIMEOUT`.
+
+## RAG and Memory Retrieval Layer
+
+Shipped on 2026-09-04, the RAG and memory retrieval subsystem provides historical and codebase context to the debugging tiers. It is enabled in `config/tiers.yaml` via the `memory_rag` block (using `nomic-embed-text:latest`). `scripts/embedding_client.py` handles the local Ollama embedding calls, while `scripts/rag_index.py` maintains an in-memory index over `knowledge/hivemind.md` and `knowledge/lessons.jsonl`.
+
+Context queries are handled by `scripts/memory_retrieval.py` (`retrieve_context()`), which performs a cosine-similarity search (top-K=3, 4096-char cap), falling back to keyword search if embeddings fail. The pipeline follows an exactly-once single-retrieval-then-thread design where `orchestrator.run_task()` computes a shared `context_blob` used by all tiers instead of each tier querying independently.
 
 ## Design decisions that changed during the build
 
