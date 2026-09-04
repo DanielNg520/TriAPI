@@ -495,3 +495,7 @@ class TierNoLongerIndependentKeywordSearchTests(unittest.TestCase):
             description="fix it",
         )
         self.assertIn(blob, result)
+
+
+if __name__ == "__main__":
+    unittest.main()
