@@ -136,7 +136,6 @@ class TestFileSizeCeilingAndOversizeEscalation(unittest.TestCase):
         patches = [
             mock.patch("scripts.tier4_worker.load_tiers", return_value=TIER4_CONFIG),
             mock.patch("scripts.tier4_worker.llm_client.execute_llm", return_value=("no fenced code here", "local", 0, 0)),
-            mock.patch("scripts.tier4_worker.hivemind_util.search_hivemind", return_value=None),
             mock.patch("scripts.tier4_worker.log_cost"),
             mock.patch("scripts.tier4_worker.content_guard.check_write", return_value={"ok": True}),
         ]
