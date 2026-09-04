@@ -1,7 +1,7 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260904-130000-semai-phase9-dispatched-planbug-fixed.md",
+  "active": "20260904-215500-agentsmd-split-back-under-ceiling-standing-practice.md",
   "history": [
     {
       "file": "20260904-114500-rag-memory-layer-implementation-complete.md",
@@ -254,6 +254,12 @@
       "date": "2026-08-28",
       "status": "RESOLVED",
       "topic": "full-week audit (no regressions found); fixing 2 audit findings via supervised dispatch caught Tier 4 deleting a function out-of-scope; root-caused+fixed the scope_guard blind spot that missed it"
+    },
+    {
+      "file": "20260904-130000-semai-phase9-dispatched-planbug-fixed.md",
+      "date": "2026-09-04",
+      "status": "RESOLVED",
+      "topic": "Pure supervision session against SemAI; found+fixed triapi plan approval-validation bug (cmd_plan accepting approve on a bare clarifying-question turn) and its own under-verified fix; recovered a lost SemAI plan.md; dispatched+verified SemAI Phase 9 for real; superseded by the 215500 file"
     }
   ]
 }
