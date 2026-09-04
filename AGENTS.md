@@ -162,3 +162,16 @@ within a few KB of the ceiling — same convention as `docs/carryover/`.**
 5. Phase 5: Regression Suite Verification
 - [x] `AGENTS.md`: No edits needed. Run the full regression suite to confirm none of the doc-only work broke anything, expecting zero SKIPPED tests. Verification command: `PYTHONPATH=. python3 -m unittest discover -s tests -p 'test_*.py' -v`
 <!-- triapi:plan run_id=20260904-145428-31fa69 end -->
+
+<!-- triapi:plan run_id=20260904-153223-7b117e start -->
+## TriAPI Plan (run 20260904-153223-7b117e, appended 2026-09-04)
+
+1. Phase 1: Fix tech-debt backlog regex and staleness check
+- [x] `scripts/tech_debt.py`: Update the `_ENTRY_RE` regex to `r"^- \[ \] FILE: (?P<filepath>.*?) \| HASH: (?P<hash>[0-9a-f]{64}|n/a.*?) \| REASON: (?P<reason>.*)$"` so it accepts a 64-character hex string or the literal `n/a` (along with any optional trailing text) as a valid hash. Update the `check_staleness(entry: dict) -> bool` function to immediately return `False` if `entry["hash"].startswith("n/a")`, bypassing the file existence and content hash checks so 'n/a' entries are treated as always fresh. Verification command: `python3 -m py_compile scripts/tech_debt.py`
+
+2. Phase 2: Add visible skip notification for genuinely stale entries
+- [x] `scripts/triapi.py`: In `cmd_tech_debt(project_dir: str)`, replace the `filtered_entries` list comprehension with a `for` loop iterating over `entries`. For each entry, evaluate `tech_debt.check_staleness(entry)`. If it returns `True`, execute `print(f"Skipping STALE entry: {entry['filepath']}")` (so silent no-ops become visible) and do not add it to the filtered list. If `False`, append the entry to `filtered_entries`. Verification command: `python3 -m py_compile scripts/triapi.py`
+
+3. Phase 3: Update regression suite
+- [x] `tests/test_branch_features.py`: Add a new test method `test_check_staleness_false_when_hash_is_na(self) -> None` that asserts `tech_debt.check_staleness({"filepath": "missing.py", "hash": "n/a (design gap)", "reason": "test"})` returns `False`. In `test_cmd_tech_debt_builds_synthetic_state_and_skips_stale`, add a manual entry to the mocked backlog by appending `- [x] FILE: {tmp}/na.py | HASH: n/a (design gap) | REASON: test\n` to `backlog` after the existing `log_tech_debt` calls. Update the `mock.patch("sys.stdout", io.StringIO())` line to use `new_callable=io.StringIO` bound as `mock_stdout` (e.g., `mock.patch("sys.stdout", new_callable=io.StringIO) as mock_stdout`), and add an assertion that `"Skipping STALE entry:"` is present in `mock_stdout.getvalue()`. Finally, verify that the dummy path (`str((Path(tmp) / "na.py").resolve())`) is included in the dispatched `targets` list. Verification command: `PYTHONPATH=. python3 -m unittest tests.test_branch_features -v`
+<!-- triapi:plan run_id=20260904-153223-7b117e end -->

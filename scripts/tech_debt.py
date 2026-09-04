@@ -15,7 +15,7 @@ from pathlib import Path
 TECH_DEBT_PATH = Path(__file__).resolve().parent.parent / "knowledge" / "TECH_DEBT.md"
 
 _ENTRY_RE = re.compile(
-    r"^- \[ \] FILE: (?P<filepath>.*?) \| HASH: (?P<hash>[0-9a-f]{64}) \| REASON: (?P<reason>.*)$"
+    r"^- \[ \] FILE: (?P<filepath>.*?) \| HASH: (?P<hash>[0-9a-f]{64}|n/a.*?) \| REASON: (?P<reason>.*)$"
 )
 
 
@@ -60,6 +60,8 @@ def read_tech_debt_entries() -> list[dict]:
 
 def check_staleness(entry: dict) -> bool:
     """True if entry's file is missing or has changed since it was logged."""
+    if entry["hash"].startswith("n/a"):
+        return False
     path = Path(entry["filepath"])
     if not path.exists():
         return True

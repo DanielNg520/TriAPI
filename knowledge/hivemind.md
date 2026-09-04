@@ -1696,3 +1696,27 @@ Validate the structural shape of the LLM's output independently of the human's e
 - **Assert Structural Markers:** Check for specific syntax that defines the expected deliverable (e.g., `- [ ] ` for checklist plans) *before* processing the user's approval.
 - **Intercept and Explain:** When an approval is rejected, clearly explain to the user *why* (e.g., "This response contains no checklist steps. If it is a clarifying question, please answer it instead of approving").
 - **Prevent Loop Escapes:** If dropping the user back into an input prompt, ensure that repeated mindless "approvals" are explicitly caught and rejected until the user provides meaningful textual feedback, answers the LLM's question, or cancels the operation.
+
+### Sentinel Values for Validation Bypasses
+
+When enforcing strict data constraints (such as a 64-character SHA-256 hash to track file staleness), you will inevitably encounter edge cases where the data cannot be generated or the validation needs to be skipped.
+
+Instead of restructuring your schema to make fields optional or introducing complex conditional logic, use an explicit **sentinel value** (e.g., an `n/a` prefix). By updating the parser to accept this sentinel and adding an early return in your validation logic, you create a safe, self-documenting "escape hatch." This allows you to gracefully bypass checks for specific edge cases while maintaining strict validation for the vast majority of the system.
+
+### Prefer Explicit Loops Over List Comprehensions for Observable Filtering
+When filtering collections, list comprehensions (`[x for x in items if condition]`) are concise but silently drop excluded items. If the user or developer needs to know *what* was skipped and *why* (e.g., dropping stale entries, skipping invalid files, or ignoring failed checks), expand the comprehension into a standard `for` loop. This allows you to log, print, or otherwise record the skipped items, significantly improving system observability and user feedback.
+
+**Anti-pattern (Silent filtering):**
+```python
+filtered_entries = [entry for entry in entries if not tech_debt.check_staleness(entry)]
+```
+
+**Best Practice (Observable filtering):**
+```python
+filtered_entries = []
+for entry in entries:
+    if tech_debt.check_staleness(entry):
+        print(f"Skipping STALE entry: {entry['filepath']}")
+        continue
+    filtered_entries.append(entry)
+```

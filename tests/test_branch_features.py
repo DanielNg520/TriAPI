@@ -1384,6 +1384,13 @@ class TechDebtTests(unittest.TestCase):
             target.unlink()
             self.assertTrue(tech_debt.check_staleness(entry))
 
+    def test_check_staleness_false_when_hash_is_na(self) -> None:
+        self.assertFalse(
+            tech_debt.check_staleness(
+                {"filepath": "missing.py", "hash": "n/a (design gap)", "reason": "test"}
+            )
+        )
+
     def test_cmd_tech_debt_builds_synthetic_state_and_skips_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fresh = Path(tmp) / "fresh.py"

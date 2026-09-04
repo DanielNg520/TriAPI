@@ -670,7 +670,12 @@ def _tech_debt_build_cmd(filepath: str) -> str:
 
 def cmd_tech_debt(project_dir: str) -> None:
     entries = tech_debt.read_tech_debt_entries()
-    filtered_entries = [entry for entry in entries if not tech_debt.check_staleness(entry)]
+    filtered_entries = []
+    for entry in entries:
+        if tech_debt.check_staleness(entry):
+            print(f"Skipping STALE entry: {entry['filepath']}")
+            continue
+        filtered_entries.append(entry)
 
     synthetic_state = {
         "run_id": str(uuid.uuid4()),
