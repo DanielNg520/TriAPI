@@ -13,6 +13,18 @@
       "date": "2026-08-28",
       "topic": "Five completed historical <!-- triapi:plan --> blocks (2026-08-25 through 2026-08-27) plus one truncated non-plan artifact, archived to bring AGENTS.md back under the 73728-char ceiling. A separate, unrelated ~71,600-char hallucinated block (run_id=20260827-130810-27dd58) was deleted outright, not archived -- see the file's own header.",
       "moved_from": "AGENTS.md's inline historical <!-- triapi:plan run_id=... --> blocks (all but the most recent, which stays inline since it's what agents_md_gate.py's find_incomplete_plan() checks)"
+    },
+    {
+      "file": "20260904-141041-file-and-dir-documentation.md",
+      "date": "2026-09-04",
+      "topic": "File, directory, and narrative documentation overflow from AGENTS.md inline sections (Conventions, Root, config, knowledge, tests, logs, samples)",
+      "moved_from": "AGENTS.md's inline sections"
+    },
+    {
+      "file": "20260904-213926-agents-md-historical-plan-blocks-archive-2.md",
+      "date": "2026-09-04",
+      "topic": "Second archive of completed historical <!-- triapi:plan --> blocks: 14 runs (20260827-132236-806da1 through 20260903-220300-6f7574), archived to bring AGENTS.md back under the 73728-char ceiling a second time.",
+      "moved_from": "AGENTS.md's inline historical <!-- triapi:plan run_id=... --> blocks (all but the most recent, which stays inline since it's what agents_md_gate.py's find_incomplete_plan() checks)"
     }
   ]
 }
