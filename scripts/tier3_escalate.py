@@ -63,13 +63,13 @@ def build_stable_context(
         editing = target_path.exists()
     else:
         editing = True
-    lessons_block = ""
-    if editing:
-        lessons_block = lessons.format_lessons_for_prompt(
-            lessons.select_relevant(target_path.name, description)
-        )
+    # Lesson context rides inside context_blob (threaded upstream by
+    # tier4_worker.build_context_blob), so we don't call
+    # lessons.select_relevant here -- that would be an independent,
+    # duplicate keyword-overlap selection per Tier 3 call instead of the
+    # single threaded selection already embedded in the stable prefix.
     header = (
-        edit_blocks.build_edit_prompt_header(target_path.name, lessons_block=lessons_block) if editing else
+        edit_blocks.build_edit_prompt_header(target_path.name, lessons_block="") if editing else
         f"You are a coding/writing assistant working on {target_path.name}. Output "
         "ONLY the complete, corrected file contents inside a single fenced code "
         "block, using the language tag appropriate for this file (or no tag for "

@@ -73,6 +73,7 @@ def build_prompt(
     target_path: Path,
     current_contents: str | None = None,
     last_stderr: str = "",
+    context_blob: str = "",
 ) -> str:
     # No JSON envelope: the model replies either with the single-line FRESH
     # escape hatch (document already accurate) or with the raw edit blocks /
@@ -90,6 +91,8 @@ def build_prompt(
         f"Task: {description}\n\n"
         f"File: {target_path.name}\n\n"
     )
+    if context_blob:
+        parts.append(context_blob)
     if current_contents is not None:
         # Existing file: a targeted SEARCH/REPLACE patch, never the whole file.
         parts.append(
@@ -149,6 +152,7 @@ def run(
     workdir: str = ".",
     verify_cmd: str | None = None,
     model_override: str | None = None,
+    context_blob: str = "",
 ) -> dict:
     config = load_tiers()
     lib_config = config.get("tier_5_librarian", {})
@@ -191,7 +195,7 @@ def run(
     models_cfg = lib_config.get("models", {})
     model = model_override or models_cfg.get("primary")
     last_stderr = ""
-    prompt = build_prompt(description, target_path, current_contents, last_stderr)
+    prompt = build_prompt(description, target_path, current_contents, last_stderr, context_blob)
 
     log.info("[%s] Librarian attempt via agy/%s", task_id, model)
 

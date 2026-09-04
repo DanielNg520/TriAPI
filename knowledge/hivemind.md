@@ -1651,3 +1651,35 @@ When extending an existing configuration file and its loader to include new, dis
 1. **Consistency (No Drift)**: Prevents "context drift" between attempts. If context retrieval (like a vector search) is performed dynamically at each tier, a retry might fetch different context, causing non-deterministic or confusing behavior. Every tier must operate on the exact same grounding information.
 2. **Efficiency**: Eliminates redundant and potentially expensive context-building operations (such as embedding generation, network requests, or repeated file I/O) across multiple retries or fallback tiers.
 3. **Adaptability**: Even if a specific sub-component or legacy function lacks a dedicated `context` parameter, the pre-computed context blob can be injected directly into its main prompt (e.g., appending it to the task description), ensuring the single-source-of-truth guarantee remains intact across heterogeneous systems.
+
+### Thread Context Upstream for Prompt Stability
+
+When passing context to an escalation tier or retry loop (especially for LLMs with prefix caching), gather dynamic context (such as relevant guidelines, lessons, or search results) **once** in the upstream caller and thread it through as a stable blob. 
+
+Do not re-compute or re-fetch this context independently within the downstream escalation tier.
+
+**Why:**
+* **Cache Hit Optimization:** Passing a threaded, stable context block ensures the prefix remains exactly identical across repeated escalation calls against the same target, maximizing prompt cache hits.
+* **Avoid Duplicate Work:** Re-evaluating context locally during every retry or escalation attempt creates redundant operations (e.g., duplicate keyword-overlap selections) that waste compute and latency.
+
+### Decouple Relevance Selection from Execution
+
+When building multi-tiered pipelines or worker agents, decouple the logic that selects relevant context (such as lessons, rules, or documentation) from the execution script itself. 
+
+Instead of having the downstream execution script compute relevance on the fly (e.g., calling `select_relevant(target, description)`), rely on the caller to inject a pre-computed `context_blob`. The execution script should simply parse and format the data already present in the provided context. 
+
+This architectural pattern provides several benefits:
+1. **Centralized Logic**: Context selection is handled in one place, making it easier to test and modify.
+2. **Consistency**: It ensures that the specific rules injected into system prompts perfectly align with the broader context presented in the user prompt.
+3. **Simplicity**: Downstream agents act as "dumb" executors that don't need to know how to query or filter metadata, reducing their complexity and preventing divergent behavior across tiers.
+
+### Hoist Context Assembly to the Caller
+
+**Pattern:** Pass pre-assembled context strings (e.g., a `context_blob`) into execution functions instead of retrieving or formatting context deep within the execution logic.
+
+**Rationale:** 
+Fetching context—like querying for relevant lessons or related file snippets—deep inside execution scripts tightly couples the execution logic to the context-retrieval mechanism. By hoisting the context assembly up the call stack and passing it down as a generic string, you achieve several benefits:
+
+1. **Decoupled Systems:** The execution layer no longer needs to know how to query, rank, or format specific types of context (like lessons).
+2. **Improved Testability:** You can easily test the execution logic by passing in mock context strings without needing to mock external context-retrieval dependencies.
+3. **Increased Flexibility:** The caller can decide exactly what context to include (lessons, file contents, memory) without requiring modifications to the execution function's signature or internal logic.
