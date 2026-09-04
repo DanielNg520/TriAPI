@@ -1622,3 +1622,32 @@ def test_watcher_consults_default_rules_path(tmp_path, monkeypatch):
     result = watcher.process_message("user@example.com")
     assert result == "archived"  
 ```
+
+### Explicit Feature Flags and Model Configuration for AI Capabilities
+
+When integrating new AI capabilities—such as Memory or Retrieval-Augmented Generation (RAG)—encapsulate the configuration in a dedicated block. Always include an explicit `enabled` toggle and define the exact models being used (e.g., `embedding_model: "nomic-embed-text:latest"`) in the configuration file rather than hardcoding them in the application logic.
+
+**Why this is a best practice:**
+- **Instant Feature Toggling:** The explicit `enabled` flag allows you to turn the feature on or off globally without touching code. This is crucial for safe testing, staged rollouts, or gracefully disabling the feature if the underlying model API goes down.
+- **Seamless Model Swapping:** AI models iterate quickly. By extracting model identifiers into configuration files, you can easily swap models (e.g., upgrading to a new local embedding model) without a code redeploy.
+- **Consistency:** It aligns with a configuration-driven architecture where behavior, routing, and model selection are centralized, making the system easier to audit and debug.
+
+### Pattern: Expanding Configuration Scope and Validation
+
+**Context:** 
+When extending an existing configuration file and its loader to include new, distinct top-level blocks (e.g., adding a `memory_rag` configuration to a file originally dedicated to `tiers`).
+
+**Best Practices:**
+1. **Explicit Structural Validation:** Do not just append the new key to a required list. Explicitly validate the internal structure of the new block (e.g., ensure it is a dictionary and contains all required sub-keys) immediately after parsing. This fails fast and prevents obscure `KeyError` or `AttributeError` exceptions deep in downstream code.
+2. **Semantic Naming & Backward Compatibility:** If the loader's original function name implies a narrow, specific scope (e.g., `load_tiers`), but it now returns a broader, multi-purpose configuration object, introduce a semantically accurate alias or rename the function (e.g., `load_config`). This clarifies the function's broader purpose for future callers while maintaining backward compatibility for existing integrations.
+
+### Unified Context Threading for Agent Pipelines
+
+**Context**: In multi-tier workflows or AI pipelines, a single task often passes through several retries, escalation layers, or specialized sub-agents, all of which require the same background context (e.g., RAG retrieval results, reference file contents).
+
+**Pattern**: Build the complete, unified context payload exactly *once* at the orchestration entry point, and thread this single blob down through all subsequent pipeline components and retries. 
+
+**Why it matters**:
+1. **Consistency (No Drift)**: Prevents "context drift" between attempts. If context retrieval (like a vector search) is performed dynamically at each tier, a retry might fetch different context, causing non-deterministic or confusing behavior. Every tier must operate on the exact same grounding information.
+2. **Efficiency**: Eliminates redundant and potentially expensive context-building operations (such as embedding generation, network requests, or repeated file I/O) across multiple retries or fallback tiers.
+3. **Adaptability**: Even if a specific sub-component or legacy function lacks a dedicated `context` parameter, the pre-computed context blob can be injected directly into its main prompt (e.g., appending it to the task description), ensuring the single-source-of-truth guarantee remains intact across heterogeneous systems.

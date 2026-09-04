@@ -186,6 +186,10 @@ tier_5_librarian:
 
 
 
+memory_rag:
+  enabled: true
+  embedding_model: "nomic-embed-text:latest"
+
 escalation_rules:
   # Claude (Tier 1) is deliberately last in the automated chain, after
   # Gemini (Tier 2) -- reserved as the strongest/last-resort automated

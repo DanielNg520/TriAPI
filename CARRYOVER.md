@@ -94,3 +94,5 @@ understanding why a past decision was made).
 7. This is the same convention `AGENTS.md`'s own top-of-file index and
    `docs/agents/index.json` follow for file/dir documentation overflow —
    see `AGENTS.md`'s index section.
+
+

@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts import content_guard, edit_blocks, hivemind_util, lessons, llm_client
+from scripts import content_guard, edit_blocks, llm_client
 from scripts.config_loader import load_tiers
 from scripts.budget_guard import resolve_peak_conditional
 from scripts.secrets_loader import load_secrets
@@ -93,12 +93,7 @@ def build_context_blob(paths: list[str], workdir: str, max_chars_per_file: int =
 def build_prompt(description: str, target_path: Path, last_stderr: str, context_blob: str = "") -> str:
     editing = target_path.exists()
     if editing:
-        lessons_text = lessons.format_lessons_for_prompt(
-            lessons.select_relevant(target_path.name, description)
-        )
-        header = edit_blocks.build_edit_prompt_header(
-            target_path.name, lessons_block=lessons_text
-        )
+        header = edit_blocks.build_edit_prompt_header(target_path.name)
     else:
         header = (
             f"You are a coding/writing assistant working on {target_path.name}. Output "
@@ -173,14 +168,6 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     state = read_state(task_id)
     prompt = build_prompt(description, target_path, state.get("last_stderr", ""), context_blob)
 
-    hivemind_code = hivemind_util.search_hivemind(description, target_path.suffix)
-    if hivemind_code is not None:
-        prompt += (
-            "\n\n[HIVEMIND REFERENCE PATTERN]\n"
-            "Adapt this structure for your solution:\n"
-            f"{hivemind_code}"
-        )
-
     log.info("[%s] Tier 4 (%s/%s) drafting %s", task_id, tier4.get('provider', 'ollama'), model, target_path)
 
     secrets = load_secrets()
@@ -188,16 +175,26 @@ def run(task_id: str, description: str, target: str, workdir: str = ".", build_c
     # must NOT be downgraded to an ordinary build_failed/escalate result --
     # orchestrator.run_task()'s caller wraps this function specifically to
     # crash the pipeline (raise) on any exception, matching how tiers 1-3
-    # fail hard on the same class of error. Do not add a try/except here.
-    response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
-        provider=tier4.get('provider', 'ollama'),
-        endpoint=tier4.get('endpoint'),
-        api_key=secrets.get(tier4.get('api_key_secret', 'open_router_api_key')),
-        model=model,
-        prompt=prompt,
-        system_prompt='',
-        is_tier4=True
-    )
+    # fail hard on the same class of error. Do not add a try/except here
+    # (except for transparent retries like 429 Rate Limit which still raise on exhaustion).
+    for attempt in range(3):
+        try:
+            response_text, billing_type, input_tokens, output_tokens = llm_client.execute_llm(
+                provider=tier4.get('provider', 'ollama'),
+                endpoint=tier4.get('endpoint'),
+                api_key=secrets.get(tier4.get('api_key_secret', 'open_router_api_key')),
+                model=model,
+                prompt=prompt,
+                system_prompt='',
+                is_tier4=True
+            )
+            break
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                log.warning("[%s] Tier 4 rate limited (429), retrying in 5s...", task_id)
+                time.sleep(5)
+            else:
+                raise
 
     log_cost({
         "timestamp": time.time(),

@@ -15,6 +15,7 @@ REQUIRED_KEYS = [
     "tier_4_worker",
     "escalation_rules",
     "tier_5_librarian",
+    "memory_rag",
 ]
 
 
@@ -42,7 +43,24 @@ def load_tiers(path: Path = TIERS_PATH) -> dict:
     if not isinstance(models, dict) or "primary" not in models:
         raise ValueError(f"{path} 'tier_5_librarian' must contain models.primary")
 
+    # Validate memory_rag block
+    memory_rag = config.get("memory_rag")
+    if memory_rag is None:
+        raise ValueError(f"{path} is missing required key 'memory_rag'")
+    if not isinstance(memory_rag, dict):
+        raise ValueError(f"{path} 'memory_rag' must be a mapping")
+    for subkey in ("enabled", "embedding_model"):
+        if subkey not in memory_rag:
+            raise ValueError(f"{path} 'memory_rag' missing required sub-key '{subkey}'")
+
     return config
+
+
+def load_config(path: Path = TIERS_PATH) -> dict:
+    """Alias for load_tiers(); returns the full parsed tiers config including
+    the memory_rag block (and every other top-level block) so callers can
+    access memory_rag via .get('memory_rag', {}).get('embedding_model')."""
+    return load_tiers(path)
 
 
 def load_resource_guard_services(path: Path = RESOURCE_GUARD_PATH) -> list[str]:

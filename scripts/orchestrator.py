@@ -33,6 +33,7 @@ from scripts.tri_logging import get_logger
 from scripts import critique
 from scripts import lessons
 from scripts import librarian_escalate
+from scripts import memory_retrieval
 
 log = get_logger("orchestrator")
 
@@ -359,6 +360,34 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     deepseek_tier = resolve_deepseek_tier(tiers_config)
     build_cmd = build_cmd or " && ".join(tiers_config["tier_4_worker"]["build_commands"])
 
+    # Build the shared context blob first: other repo files referenced by
+    # the task description plus, when enabled, the memory-RAG retrieval
+    # markdown. librarian routing below and every escalation tier downstream
+    # must consume this same unified blob (for librarian, folded into its
+    # description, since its run() signature does not take a context_blob
+    # argument).
+    context_blob = build_context_blob(context_files or [], workdir)
+
+    # Memory-RAG retrieval: when enabled in tiers.yaml, embed the task
+    # description once, run cosine-similarity search against the unified
+    # RAG index (with a keyword fallback to hivemind_util + lessons), and
+    # append the resulting 4,096-char-capped markdown payload to the
+    # context_blob. All tiers downstream (4, 3, 2, 1, librarian) thread
+    # this single unified blob so every prompt sees the same retrieved
+    # context -- no per-tier re-retrieval, no drift between attempts.
+    memory_rag_cfg = tiers_config.get("memory_rag", {})
+    rag_context = ""
+    if memory_rag_cfg.get("enabled", False):
+        try:
+            rag_context = memory_retrieval.retrieve_context(
+                description, target, model=tier4_model or "",
+            )
+        except Exception as exc:
+            log.warning("[%s] memory_rag retrieve_context failed; continuing without it: %s", task_id, exc)
+            rag_context = ""
+        if rag_context:
+            context_blob = (context_blob + "\n\n" + rag_context).strip() if context_blob else rag_context
+
     # Tier 5 (librarian): for standalone single-target runs whose target is a
     # doc file matched by tier_5_librarian.target_globs, delegate entirely to
     # librarian_escalate.run() -- which handles the full doc-fix pipeline with
@@ -367,8 +396,16 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     librarian_cfg = tiers_config.get("tier_5_librarian")
     if librarian_cfg and librarian_cfg.get("enabled", True) and _is_doc_target(target, librarian_cfg.get("target_globs", [])):
         log.info("[%s] Tier 5 (librarian) routing for doc target %s", task_id, target)
+        # librarian_escalate.run() has no context_blob parameter, so fold the
+        # unified context blob (reference files + memory-RAG retrieval) into
+        # the description, preserving the same payload every other tier sees.
+        description_for_lib = description
+        if context_blob and description.find(context_blob) == -1:
+            description_for_lib = description + "\n\n" + context_blob
         result = librarian_escalate.run(
-            task_id, description, target, workdir=workdir
+            task_id, description_for_lib, target, workdir=workdir,
+            verify_cmd=None,
+            model_override=None,
         )
         cost_rep = report(task_id)
         return {
@@ -381,13 +418,6 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
     # take a workdir argument, so resolve once here and pass the full path.
     target_arg = Path(target)
     resolved_target = str(target_arg if target_arg.is_absolute() else Path(workdir) / target_arg)
-
-    # Built once and reused across every tier attempt: other repo files the
-    # item's description references (e.g. "seeded from X"), read in read-only
-    # so drafting is grounded in what's actually in the repo instead of
-    # guessing. Content is fixed per item, so this is fine to reuse across
-    # Tier 4 retries and every escalation tier without re-reading each time.
-    context_blob = build_context_blob(context_files or [], workdir)
 
     resolved_by = None
     log.info("[%s] run_task starting: target=%s workdir=%s context_files=%s skip_tier4=%s", task_id, target, workdir, context_files, skip_tier4)
