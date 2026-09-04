@@ -118,7 +118,7 @@ def detect_relocation_intent(description: str) -> set[str]:
     the edit, or it doesn't).
     """
     lowered = description.lower()
-    if not any(verb in lowered for verb in _RELOCATION_VERBS):
+    if not any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in _RELOCATION_VERBS):
         return set()
     return extract_named_symbols(description)
 
