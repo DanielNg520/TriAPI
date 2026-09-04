@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260904-114500-rag-memory-layer-implementation-complete.md",
+  "active": "20260904-130000-semai-phase9-dispatched-planbug-fixed.md",
   "history": [
+    {
+      "file": "20260904-114500-rag-memory-layer-implementation-complete.md",
+      "date": "2026-09-04",
+      "status": "RESOLVED",
+      "topic": "RAG/memory layer Phases 1-4 fully complete (run 20260903-220300-6f7574), 15/15 items, full suite green, merged to main; 4 real bugs found+fixed (scope_guard relocation-guard false positive, stale test mock, 3 bugs in the dispatch's own generated output including a tier1_escalate crash-on-every-real-edit); superseded same-session by the 130000 file once SemAI Phase 9 supervision + a real triapi plan approval bug were handled."
+    },
     {
       "file": "20260904-040500-rag-design-doc-dispatched-awaiting-user-review.md",
       "date": "2026-09-04",
