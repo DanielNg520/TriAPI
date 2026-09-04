@@ -95,9 +95,7 @@ def escalate(
         description=description,
     )
     if editing:
-        selected = lessons.select_relevant(target_path.name, description)
-        lessons_block = lessons.format_lessons_for_prompt(selected)
-        system_prompt = edit_blocks.build_edit_prompt_header(target_path.name, lessons_block=lessons_block)
+        system_prompt = edit_blocks.build_edit_prompt_header(target_path.name, lessons_block="")
     else:
         system_prompt = f"You are a coding/writing assistant working on {target_path.name}. Output " \
             "ONLY the complete, corrected file contents inside a single fenced code " \

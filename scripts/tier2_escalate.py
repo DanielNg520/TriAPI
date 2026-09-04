@@ -123,12 +123,7 @@ def escalate(
         description=description,
     )
     system_instruction = (
-        edit_blocks.build_edit_prompt_header(
-            target_path.name,
-            lessons_block=lessons.format_lessons_for_prompt(
-                lessons.select_relevant(target_path.name, description)
-            ),
-        ) if editing else
+        edit_blocks.build_edit_prompt_header(target_path.name, lessons_block="") if editing else
         f"You are a coding/writing assistant working on {target_path.name}. Output "
         "ONLY the complete, corrected file contents inside a single fenced code "
         "block, using the language tag appropriate for this file (or no tag for "
