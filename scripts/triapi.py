@@ -671,11 +671,86 @@ def _tech_debt_build_cmd(filepath: str) -> str:
 def cmd_tech_debt(project_dir: str) -> None:
     entries = tech_debt.read_tech_debt_entries()
     filtered_entries = []
+    skipped_stale = []
     for entry in entries:
         if tech_debt.check_staleness(entry):
-            print(f"Skipping STALE entry: {entry['filepath']}")
+            # Stale-hashed entries used to be silently dropped here, with no
+            # log line, no exit-code change, and no removal of the entry from
+            # TECH_DEBT.md -- so if the underlying bug was fixed out-of-band
+            # (hand-fix, a different dispatch, etc.) the entry sat in
+            # TECH_DEBT.md forever and `triapi tech-debt` produced zero output
+            # for it run after run. Try the entry's own verify condition
+            # (if it names one) before giving up: if the verify command now
+            # passes, treat the underlying bug as resolved and remove the
+            # entry from TECH_DEBT.md. Either way, surface a clear human-
+            # visible line so a stale no-op is never silent again -- confirmed
+            # live 2026-09-04 that the AGENTS.md narrow-test-command entry
+            # (already fixed in commit d6ab54c) was skipped with no output.
+            verify_cmd = entry.get("verify_cmd")
+            if verify_cmd:
+                import shlex
+                try:
+                    verify_proc = subprocess.run(
+                        shlex.split(verify_cmd),
+                        cwd=project_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+                except (OSError, ValueError) as exc:
+                    print(
+                        f"Skipping STALE entry: {entry['filepath']} "
+                        f"(hash mismatch, verify failed to launch: {exc})"
+                    )
+                    log.warning(
+                        "tech-debt: stale entry %s verify failed to launch: %s",
+                        entry["filepath"], exc,
+                    )
+                    skipped_stale.append(entry)
+                    continue
+                if verify_proc.returncode == 0:
+                    print(
+                        f"Resolving STALE entry: {entry['filepath']} "
+                        f"(hash mismatch, but verify command now passes)"
+                    )
+                    log.info(
+                        "tech-debt: stale entry %s resolved via verify command "
+                        f"(rc=0) -- removing from TECH_DEBT.md",
+                        entry["filepath"],
+                    )
+                    tech_debt.remove_resolved_entries({entry["filepath"]})
+                    continue
+                print(
+                    f"Skipping STALE entry: {entry['filepath']} "
+                    f"(hash mismatch, verify still fails rc={verify_proc.returncode})"
+                )
+                log.warning(
+                    "tech-debt: stale entry %s verify rc=%d -- needs manual review",
+                    entry["filepath"], verify_proc.returncode,
+                )
+                skipped_stale.append(entry)
+                continue
+            print(
+                f"Skipping STALE entry: {entry['filepath']} "
+                f"(hash mismatch -- no verify_cmd set, needs manual review)"
+            )
+            log.warning(
+                "tech-debt: stale entry %s skipped with no verify_cmd -- needs manual review",
+                entry["filepath"],
+            )
+            skipped_stale.append(entry)
             continue
         filtered_entries.append(entry)
+
+    if not filtered_entries and not skipped_stale:
+        # Distinguish "nothing in TECH_DEBT.md" from "everything is stale"
+        # so a fully-stale run can't silently no-op.
+        print("No tech-debt entries to process (TECH_DEBT.md is empty or all entries were filtered out).")
+    elif not filtered_entries and skipped_stale:
+        print(
+            f"No entries dispatched: all {len(skipped_stale)} tech-debt "
+            f"entr(y/ies) were stale and skipped. Review the lines above and "
+            f"either update or remove them from TECH_DEBT.md by hand."
+        )
 
     synthetic_state = {
         "run_id": str(uuid.uuid4()),

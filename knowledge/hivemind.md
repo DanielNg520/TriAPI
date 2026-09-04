@@ -1773,3 +1773,11 @@ if len(sanitized_output) > 300:
     sanitized_output = sanitized_output[:300] + "...(truncated)"
 reason = f"Rebuild failed: {sanitized_output}"
 ```
+
+### Active Recovery of Stale Tracked State
+
+When tracking tasks or issues that might be modified out-of-band (e.g., tech debt entries tied to file hashes), do not simply ignore or permanently skip "stale" items. If an item becomes stale, it often means the underlying problem was fixed manually or by another process, which can lead to permanent, silent no-ops if ignored.
+
+**Best Practices:**
+1. **Attempt Auto-Recovery:** Before giving up on a stale item, run its associated verification condition (e.g., a test command). If the verification passes, assume the issue was resolved out-of-band and automatically clean up the tracking state.
+2. **Prevent Silent Batch No-ops:** When a batch process skips items (due to staleness, invalidity, etc.), track the skipped items. If the entire batch is skipped, surface a clear, actionable summary at the end so the user knows that no work was performed and manual cleanup is required.
