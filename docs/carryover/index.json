@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260903-175142-minimax-swaps-plus-rag-design-plan-ready-to-dispatch.md",
+  "active": "20260904-040500-rag-design-doc-dispatched-awaiting-user-review.md",
   "history": [
+    {
+      "file": "20260903-175142-minimax-swaps-plus-rag-design-plan-ready-to-dispatch.md",
+      "date": "2026-09-03",
+      "status": "SUPERSEDED",
+      "topic": "tier_3_debugger peak_alt and tier_4_worker off-peak default both swapped nemotron -> minimax/minimax-m3:free (user request, verified live + full suite green after each); RAG/memory design plan drafted+approved via triapi plan (run `20260903-104712-c4164e`); superseded by the 20260904-040500 file once dispatched."
+    },
     {
       "file": "20260903-162623-relocation-guard-hardfail-plus-p0-crash-found-fixed.md",
       "date": "2026-09-03",

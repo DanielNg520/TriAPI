@@ -57,7 +57,7 @@ Separate disk stores (`knowledge/hivemind.md` for XML-tagged reusable code snipp
           |                        |                        |
           v                        v                        v
     Tier 4 Worker           Tier 3 Debugger          Tier 2 Manager
-    (Ollama/Nemotron)      (DeepSeek/Nemotron)      (DeepSeek/Gemini)
+ (OpenRouter/Minimax-M3)   (agy/Gemini-3.1-Pro)        (DeepSeek)
           |                        |                        |
           +------------------------+------------------------+
                                    |
