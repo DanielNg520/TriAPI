@@ -41,7 +41,12 @@ class TestTriapiFlaggedApprovalGate(unittest.TestCase):
             mock.patch.object(triapi.dispatcher, "new_run", return_value=self._new_run()),
             mock.patch.object(
                 triapi.planner, "plan_turn",
-                return_value={"status": "ok", "text": "ok", "session_id": "s", "notional_cost_usd": 0.0},
+                # Short enough to stay flagged by detect_degenerate_plan()
+                # (< _MIN_PLAN_TEXT_CHARS) but still contains a checklist
+                # marker, so this test exercises ONLY the flagged-content
+                # double-confirm gate, not the separate checklist-shape
+                # gate added 2026-09-04 (see test_triapi_plan_approval_checklist_gate.py).
+                return_value={"status": "ok", "text": "- [ ] x", "session_id": "s", "notional_cost_usd": 0.0},
             ),
             mock.patch("builtins.input", side_effect=["approve", "approve"]),
             mock.patch.object(triapi.dispatcher, "save_run"),
