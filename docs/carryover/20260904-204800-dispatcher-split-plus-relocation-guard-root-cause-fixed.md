@@ -91,7 +91,22 @@ All in `scripts/scope_guard.py`'s `detect_relocation_intent()` /
 
 Both `knowledge/TECH_DEBT.md` entries for these bugs are removed --
 genuinely resolved, not just worked around. `TECH_DEBT.md` is back to
-just its header, no open entries.
+just its header, no open entries. Self-fix backlog also empty (no
+unqueued bug reports, no drafted-awaiting-approve runs).
+
+## On-hold items (re-carried, not touched this session)
+
+Per standing practice, explicitly re-carrying these so they don't
+silently drop out of tracking:
+
+- `VIRTUAL_CODEBASE_PLAN.md` -- Tiered Planner-Materializer design for
+  large-file Tier 4 edits. Status: queued design reference, not started.
+  User wants to work on this together personally -- never start solo.
+- `docs/TUI_plan.md` -- confirmed `triapi tui` subcommand spec. Status:
+  not planned/dispatched yet; the blocker that originally deferred it
+  (an in-flight tier-flip dispatch) cleared long ago. Open design
+  questions still need the user before running this through `triapi
+  plan`.
 
 ## Reference
 

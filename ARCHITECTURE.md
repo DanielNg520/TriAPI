@@ -60,14 +60,14 @@ Human handoff writes `logs/escalations.jsonl` (one line per escalation) and a re
 
 DeepSeek uses automatic disk-based prefix caching: the first call against a given file is a cold cache-miss (full price, `$0.14`/MTok on Flash), but a second call with a byte-identical stable prefix (system instructions + unchanged file contents) hits the cache at a 98% discount (`$0.0028`/MTok). `tier3_escalate.py` is deliberately structured so the large, stable part of the prompt (instructions + file contents) comes first and the small, volatile part (this attempt's stderr) comes last — any instability in the "stable" part (timestamps, non-deterministic ordering) silently kills the hit rate. Verified in Phase 3 testing: cache-hit ratio went from 0% (cold) to ~52% on a repeat call against the same file content, and both real test calls together cost under $0.0001.
 
-**DeepSeek's pricing block in `config/tiers.yaml` is a cache of a fact that will go stale** — verify against DeepSeek's live pricing page periodically. `logs/cost_log.jsonl` always stores raw token counts (not just computed dollars), so historical cost can be recomputed if the pricing on file was wrong at call time. The same caveat applies to Google AI Studio's `free_tier_rpm`/`free_tier_rpd` values in `tiers.yaml`, which are conservative unverified placeholders `budget_guard.py` treats as a hard cap.
+**DeepSeek's pricing block in `config/tiers.yaml` is a cache of a fact that will go stale** — verify against DeepSeek's live pricing page periodically. `logs/cost_log.jsonl` always stores raw token counts (not just computed dollars), so historical cost can be recomputed if the pricing on file was wrong at call time.
 
 ## Budget guard — never pay for what should be free
 
 The whole premise of this pipeline is conserving paid quota, so Tier 1 and Tier 2 have pre-flight checks (`scripts/budget_guard.py`) that are hard stops, not warnings:
 
 - **Tier 1**: refuses if `ANTHROPIC_API_KEY` is set in the environment. Its presence routes `claude -p` to metered API billing instead of the Pro/Max subscription — the opposite of the goal. (Also documented: never pass `--bare` to `claude -p`, since that flag forces API-key auth and never reads the subscription OAuth login, silently defeating this guard.)
-- **Tier 2**: tracks call timestamps in `logs/gemini_usage.jsonl` and refuses if the next call would exceed the configured free-tier RPM/RPD limits.
+
 
 `scripts/cost_report.py` aggregates `logs/cost_log.jsonl` per task and clearly separates **actual dollars spent** (DeepSeek, metered) from **notional cost** (what Tier 1 would have cost on metered billing, but was actually covered by the subscription at $0 real cost) — so the user always knows exactly what a task cost.
 
