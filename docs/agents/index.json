@@ -25,6 +25,12 @@
       "date": "2026-09-04",
       "topic": "Second archive of completed historical <!-- triapi:plan --> blocks: 14 runs (20260827-132236-806da1 through 20260903-220300-6f7574), archived to bring AGENTS.md back under the 73728-char ceiling a second time.",
       "moved_from": "AGENTS.md's inline historical <!-- triapi:plan run_id=... --> blocks (all but the most recent, which stays inline since it's what agents_md_gate.py's find_incomplete_plan() checks)"
+    },
+    {
+      "file": "20260905-000000-known-recurring-pipeline-problems.md",
+      "date": "2026-09-05",
+      "topic": "Known recurring pipeline problems backlog (session audit): false-success/false-failure verification, doc/file-size ceiling churn, tier scope creep, free-model instability, dispatch bugs caught only by later audit, state/resume bookkeeping bugs. Not yet fixed as of this entry -- fix work queued next.",
+      "moved_from": "New record, not a relocation -- logged directly per user request ahead of fix work"
     }
   ]
 }

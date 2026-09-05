@@ -2006,3 +2006,58 @@ When writing unit tests for routing or dispatcher logic, it is critical to accur
 
 1. **Mock Exact Data Shapes:** Ensure that fake or mocked objects return data in the exact structure expected by the consuming system. If a system expects a list of tuples (e.g., `[(tool_name, proposal_object)]`), returning just a list of objects (e.g., `[proposal_object]`) will cause unpacking errors or silent failures in the tested code. 
 2. **Avoid Tautological Assertions:** When verifying that a dispatcher calls a downstream component with a specific routing key, assert against the literal expected string (e.g., `"remember_fact"`) rather than a property of the payload itself (e.g., `proposal.action`). This explicitly verifies the dispatcher's routing logic rather than just echoing back the mock's internal state.
+
+### Pattern: Network Fan-Out Resilience Configuration
+
+When implementing parallel network operations (such as opening multiple concurrent connections for a fast upload or download fan-out), it is essential to configure connection phase resilience to handle transient network issues and prevent overwhelming the target server.
+
+**Best Practices:**
+1. **Expose Stagger/Jitter:** Introduce a stagger delay (e.g., `connect_stagger_s`) between parallel connection attempts. This prevents a "thundering herd" scenario where all concurrent workers attempt to handshake simultaneously, which could otherwise trigger rate limits or DDoS protections on the remote server.
+2. **Configurable Timeouts and Retries:** Expose specific timeouts for the TCP/TLS handshake phase and a maximum number of retries per connection attempt.
+3. **Enforce Safety Boundaries at Load Time:** When parsing these values from environment variables or configuration files, strictly enforce type casting and minimum/maximum safety boundaries (e.g., `min_value=0.0` for stagger, `min_value=0.1` for timeouts). This ensures the application fails fast on bad configuration, guaranteeing that the core network logic can safely rely on valid parameters without defensive checks.
+
+**Example Implementation:**
+```python
+fast_upload_connect_timeout_s = env.opt_float("FAST_UPLOAD_CONNECT_TIMEOUT_S", 8.0, min_value=0.1)
+fast_upload_connect_retries   = env.opt_int("FAST_UPLOAD_CONNECT_RETRIES", 2, min_value=0)
+fast_upload_connect_stagger_s = env.opt_float("FAST_UPLOAD_CONNECT_STAGGER_S", 0.1, min_value=0.0)
+```
+
+### Declarative Tuple-Based Subcommand Dispatch
+
+When building complex command-line interfaces with `argparse` that feature nested subparsers, routing the parsed arguments to the correct execution function can lead to messy `if/elif` chains or convoluted `set_defaults(func=...)` bindings scattered throughout the parser definition.
+
+A cleaner, more scalable pattern is to decouple the parser definition from the execution routing by using a declarative dispatch table keyed by `(command, subcommand)` tuples.
+
+**Example Pattern:**
+```python
+# 1. Define a centralized routing table mapping commands to functions
+_DISPATCHERS = {
+    ("start", None):                cmd_start,
+    ("status", None):               cmd_status,
+    ("burner", "login"):            cmd_burner_login,
+    ("burner", "chats"):            cmd_burner_chats,
+    ("queue", "list"):              cmd_queue_list,
+}
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+
+    # 2. Extract the primary command and any active nested subcommand
+    # (argparse stores subparser destinations as attributes on the namespace)
+    sub = getattr(args, "queue_command", None) \
+          or getattr(args, "burner_command", None)
+          
+    # 3. Resolve and execute the handler via dictionary lookup
+    handler = _DISPATCHERS.get((args.command, sub))
+    if handler is None:
+        log.error("cli: no handler for %s/%s", args.command, sub)
+        return 2
+        
+    return handler(args)
+```
+
+**Why this is a best practice:**
+1. **Separation of Concerns:** The parser construction code remains strictly responsible for defining arguments and help text, while the dictionary owns the execution routing.
+2. **Centralized Visibility:** All available commands, subcommands, and their corresponding entry points are listed in a single, easily scannable data structure.
+3. **Simplified Routing:** It replaces deep, nested conditional logic with a simple, robust `O(1)` dictionary lookup.

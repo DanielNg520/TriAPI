@@ -68,6 +68,7 @@ Human-readable mirror:
 | [logs/](#logs) | Pointer only — full reference moved to [`docs/agents/20260904-141041-file-and-dir-documentation.md`](docs/agents/20260904-141041-file-and-dir-documentation.md) |
 | [samples/](#samples) | Pointer only — full reference moved to [`docs/agents/20260904-141041-file-and-dir-documentation.md`](docs/agents/20260904-141041-file-and-dir-documentation.md) |
 | [Historical `triapi:plan` blocks](#historical-completed-triapiplan-blocks-2026-08-25-through-2026-09-04) | Pointer only — 19 completed plan runs across two archives: [`docs/agents/20260828-044229-agents-md-historical-plan-blocks-archive.md`](docs/agents/20260828-044229-agents-md-historical-plan-blocks-archive.md) (2026-08-28, 5 runs) and [`docs/agents/20260904-213926-agents-md-historical-plan-blocks-archive-2.md`](docs/agents/20260904-213926-agents-md-historical-plan-blocks-archive-2.md) (2026-09-04, 14 runs) |
+| [Known recurring pipeline problems (2026-09-05 audit)](docs/agents/20260905-000000-known-recurring-pipeline-problems.md) | Backlog of systemic pipeline issues (false-success/failure verification, doc-ceiling churn, tier scope creep, free-model instability, audit-only-caught bugs, resume/state bugs) logged ahead of fix work -- not yet fixed |
 
 **Convention for moving a section to `docs/agents/` (same shape as
 `docs/carryover/`'s convention in `CARRYOVER.md`):** filename
