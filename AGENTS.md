@@ -32,9 +32,11 @@ Once work is done, its record can stay in `docs/` as frozen archive — we don't
 - Design principle now explicit: hub-and-spoke, not waterfall — every worker result routes through Claude before the next step, see `## Current architecture` above.
 - OpenRouter: recommended against adding for now — shared rate-limit pool, content-filter false positives, free-tier hallucination were all real problems in the old pipeline.
 - If OpenRouter is added later, the right slot is a Phase-4 escalation fallback leg, not a peer to DeepSeek.
-- SemAI: `Agentic_Audit.md` diagnosed 3 real bugs — templated tool description, over-restrictive system prompt, a tool-call telemetry bug.
-- SemAI Path B fixes not yet applied — waiting on rebuild core to prove itself, or a decision to hand-fix sooner.
-- All rebuild commits pushed to origin/main as of `173f52e`.
+- SemAI Path B fixes applied via the rebuild pipeline (commit `e512904` in SemAI, local on branch `migration-clean-up`, not yet pushed — user hasn't confirmed the push).
+- Found+fixed a real bug in our own `verify.py` while dispatching against SemAI: stdout+stderr naive concatenation let stderr's unrelated unittest noise mask the real pytest result. Fixed in commit `3edebee`, regression-tested.
+- SemAI's own docs purged to the same single-AGENTS.md policy (commit `c9861fa` in SemAI, same branch).
+- Doc policy is now GLOBAL — applies to every repo, not just TriAPI.
+- All rebuild commits pushed to origin/main as of `ee262c0`.
 
 ## Future plans (queued, not started)
 
