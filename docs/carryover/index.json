@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260904-204800-dispatcher-split-plus-relocation-guard-root-cause-fixed.md",
+  "active": "20260904-213000-session-end-clean-handoff-doc-audit-complete.md",
   "history": [
+    {
+      "file": "20260904-204800-dispatcher-split-plus-relocation-guard-root-cause-fixed.md",
+      "date": "2026-09-04",
+      "status": "RESOLVED",
+      "topic": "scripts/dispatcher.py split (run 20260904-172545-dd6087, commit 1bb3c7c) and the original false-build_failed bug root-caused+fixed in scope_guard.py (detect_relocation_intent matched \"split\" inside .split() method calls); 3 more relocation-guard false-positive variants found+fixed; TECH_DEBT.md both entries removed; superseded by the 213000 file once the doc audit landed too."
+    },
     {
       "file": "20260904-165751-tech-debt-corruption-incident-and-false-buildfail-bug.md",
       "date": "2026-09-04",
