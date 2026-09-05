@@ -37,6 +37,15 @@ def main() -> int:
     if llm_client.is_deepseek_peak_hours():
         print("[WARN] DeepSeek peak billing window (01:00-04:00 UTC) -- costs elevated", file=sys.stderr)
 
+    limit = llm_client.load_model_config()["deepseek"]["spend_limit_usd"]
+    budget = cost.check_budget(limit)
+    if not budget["under_limit"]:
+        print(
+            f"[BLOCKED] Cumulative spend ${budget['total_cost_usd']:.4f} exceeds limit ${limit:.2f}",
+            file=sys.stderr,
+        )
+        return 1
+
     secrets = secrets_loader.load_secrets()
     response, in_tok, out_tok = llm_client.execute_deepseek(
         prompt, system_prompt, secrets["deepseek_api_key"]

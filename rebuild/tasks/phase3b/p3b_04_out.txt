@@ -1,0 +1,54 @@
+```python
+from scripts.cost import calculate_cost, log_cost, read_cost_summary, check_budget
+
+
+def test_check_budget_under_limit(tmp_path):
+    config = tmp_path / "pricing.yaml"
+    config.write_text("cache_miss_per_mtok_usd: 0.14\noutput_per_mtok_usd: 0.14\n")
+    log = tmp_path / "cost.jsonl"
+    log.write_text('{"input_tokens": 100, "output_tokens": 100}\n')
+
+    result = check_budget(5.0, log_path=str(log), config_path=str(config))
+
+    assert result.under_limit is True
+    assert result.total_cost_usd > 0
+    assert result.remaining_usd == pytest.approx(5.0 - result.total_cost_usd)
+
+
+def test_check_budget_over_limit(tmp_path):
+    config = tmp_path / "pricing.yaml"
+    config.write_text("cache_miss_per_mtok_usd: 0.14\noutput_per_mtok_usd: 0.14\n")
+    log = tmp_path / "cost.jsonl"
+    log.write_text('{"input_tokens": 1000000, "output_tokens": 1000000}\n')
+
+    result = check_budget(0.0001, log_path=str(log), config_path=str(config))
+
+    assert result.under_limit is False
+    assert result.remaining_usd < 0
+
+
+def test_check_budget_exact_limit(tmp_path):
+    config = tmp_path / "pricing.yaml"
+    config.write_text("cache_miss_per_mtok_usd: 0.14\noutput_per_mtok_usd: 0.14\n")
+    input_tokens = 1000000
+    output_tokens = 1000000
+    log = tmp_path / "cost.jsonl"
+    log.write_text(f'{{"input_tokens": {input_tokens}, "output_tokens": {output_tokens}}}\n')
+
+    limit = calculate_cost(
+        {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        config_path=str(config),
+    )
+    result = check_budget(limit, log_path=str(log), config_path=str(config))
+
+    assert result.under_limit is True
+    assert result.remaining_usd == pytest.approx(0.0)
+
+
+def test_check_budget_missing_and_empty_log(tmp_path):
+    result = check_budget(5.0, log_path=str(tmp_path / "nope.jsonl"))
+
+    assert result.under_limit is True
+    assert result.total_cost_usd == 0.0
+    assert result.remaining_usd == pytest.approx(5.0)
+```

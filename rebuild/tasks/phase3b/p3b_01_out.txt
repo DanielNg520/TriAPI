@@ -1,0 +1,15 @@
+```python
+def check_budget(
+    limit_usd: float,
+    log_path: str | None = None,
+    config_path: str | None = None,
+) -> dict:
+    summary = read_cost_summary(log_path=log_path, config_path=config_path)
+    total = summary["total_cost_usd"]
+    return {
+        "under_limit": total <= limit_usd,
+        "total_cost_usd": total,
+        "limit_usd": limit_usd,
+        "remaining_usd": limit_usd - total,
+    }
+```

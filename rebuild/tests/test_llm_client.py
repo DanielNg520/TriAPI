@@ -1,0 +1,33 @@
+from scripts.llm_client import extract_code_block
+import pytest
+
+
+def test_extract_code_block_exact_language():
+    response = "some text\n```python\ndef f():\n    return 1\n```\nmore text"
+    assert extract_code_block(response) == "def f():\n    return 1"
+
+
+def test_extract_code_block_bare_fallback():
+    response = "text\n```\nkey: value\n```\n"
+    assert extract_code_block(response, language="yaml") == "key: value"
+
+
+def test_extract_code_block_preserves_content_whitespace():
+    response = "```python\n    a = 1\n\n    b = 2   \n```"
+    expected = "    a = 1\n\n    b = 2   "
+    assert extract_code_block(response) == expected
+
+
+def test_extract_code_block_first_block_priority():
+    response = "```python\nfirst = 1\n```\n```python\nsecond = 2\n```"
+    assert extract_code_block(response) == "first = 1"
+
+
+def test_extract_code_block_custom_language():
+    response = "text\n```yaml\nkey: value\n```\n"
+    assert extract_code_block(response, language="yaml") == "key: value"
+
+
+def test_extract_code_block_missing_raises_value_error():
+    with pytest.raises(ValueError):
+        extract_code_block("no code blocks here at all")

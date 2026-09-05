@@ -8,6 +8,7 @@ real incidents in the old pipeline, see docstrings below).
 """
 
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from typing import Tuple
@@ -122,3 +123,20 @@ def execute_agy(prompt: str, system_prompt: str | None = None) -> str:
             f"agy status={data.get('status')!r} stderr_tail={result.stderr[-200:]!r}"
         )
     return data["response"]
+
+
+def extract_code_block(
+    response: str,
+    language: str = "python",
+) -> str:
+    language_pattern = rf"```{re.escape(language)}\n(.*?)\n```"
+    match = re.search(language_pattern, response, re.DOTALL)
+    if match:
+        return match.group(1)
+
+    bare_pattern = r"```\n(.*?)\n```"
+    match = re.search(bare_pattern, response, re.DOTALL)
+    if match:
+        return match.group(1)
+
+    raise ValueError("no fenced code block found")

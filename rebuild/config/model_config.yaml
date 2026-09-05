@@ -11,6 +11,9 @@ deepseek:
   # DeepSeek peak billing is 01:00-04:00 UTC daily -- costs are elevated in
   # that window. call_deepseek.py warns (does not block) when called inside it.
   peak_hours_utc: [1, 4]
+  # Hard cap on cumulative logged spend (rebuild/logs/cost_log.jsonl). Over
+  # this, call_deepseek.py refuses the call before it happens -- no bypass flag.
+  spend_limit_usd: 5.0
 
 agy:
   # Local CLI, no API key. --dangerously-skip-permissions --mode plan are

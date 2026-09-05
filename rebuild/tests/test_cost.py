@@ -3,7 +3,7 @@ import json
 import pytest
 import yaml
 
-from scripts.cost import calculate_cost, log_cost, read_cost_summary
+from scripts.cost import calculate_cost, check_budget, log_cost, read_cost_summary
 
 
 def test_calculate_cost_basic(tmp_path):
@@ -105,3 +105,58 @@ def test_read_cost_summary_multiple_entries(tmp_path):
     assert summary["total_cost_usd"] == pytest.approx(
         calculate_cost(300, 100, config_path=str(pricing_yaml))
     )
+
+
+def _write_pricing_yaml(path, cache_miss=0.14, output=0.14):
+    path.write_text(yaml.safe_dump({
+        "deepseek_reference_pricing": {
+            "cache_miss_per_mtok_usd": cache_miss,
+            "output_per_mtok_usd": output,
+        }
+    }))
+
+
+def test_check_budget_under_limit(tmp_path):
+    config = tmp_path / "pricing.yaml"
+    _write_pricing_yaml(config)
+    log = tmp_path / "cost.jsonl"
+    log_cost("t", 100, 100, log_path=str(log))
+
+    result = check_budget(5.0, log_path=str(log), config_path=str(config))
+
+    assert result["under_limit"] is True
+    assert result["total_cost_usd"] > 0
+    assert result["remaining_usd"] == pytest.approx(5.0 - result["total_cost_usd"])
+
+
+def test_check_budget_over_limit(tmp_path):
+    config = tmp_path / "pricing.yaml"
+    _write_pricing_yaml(config)
+    log = tmp_path / "cost.jsonl"
+    log_cost("t", 1_000_000, 1_000_000, log_path=str(log))
+
+    result = check_budget(0.0001, log_path=str(log), config_path=str(config))
+
+    assert result["under_limit"] is False
+    assert result["remaining_usd"] < 0
+
+
+def test_check_budget_exact_limit(tmp_path):
+    config = tmp_path / "pricing.yaml"
+    _write_pricing_yaml(config)
+    log = tmp_path / "cost.jsonl"
+    log_cost("t", 1_000_000, 1_000_000, log_path=str(log))
+
+    limit = calculate_cost(1_000_000, 1_000_000, config_path=str(config))
+    result = check_budget(limit, log_path=str(log), config_path=str(config))
+
+    assert result["under_limit"] is True
+    assert result["remaining_usd"] == pytest.approx(0.0)
+
+
+def test_check_budget_missing_and_empty_log(tmp_path):
+    result = check_budget(5.0, log_path=str(tmp_path / "nope.jsonl"))
+
+    assert result["under_limit"] is True
+    assert result["total_cost_usd"] == 0.0
+    assert result["remaining_usd"] == pytest.approx(5.0)
