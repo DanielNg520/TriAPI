@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260904-213000-session-end-clean-handoff-doc-audit-complete.md",
+  "active": "20260905-050517-semai-phase8-false-success-audit-fixed.md",
   "history": [
+    {
+      "file": "20260904-213000-session-end-clean-handoff-doc-audit-complete.md",
+      "date": "2026-09-04",
+      "status": "RESOLVED",
+      "topic": "Session-end clean handoff and doc audit complete; superseded by the 20260905-050517 file once SemAI Phase 8 was dispatched and audited."
+    },
     {
       "file": "20260904-204800-dispatcher-split-plus-relocation-guard-root-cause-fixed.md",
       "date": "2026-09-04",
