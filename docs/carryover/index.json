@@ -1,8 +1,14 @@
 {
   "$schema": "carryover-index-v1",
   "instructions": "Machine-readable index of docs/carryover/. Read 'active' file first, always -- it is the only required read to resume work. Read a 'history' entry only if the current task specifically needs that topic. Never read every file. To resume: jq -r '.active' docs/carryover/index.json, then read that file.",
-  "active": "20260904-165751-tech-debt-corruption-incident-and-false-buildfail-bug.md",
+  "active": "20260904-204800-dispatcher-split-plus-relocation-guard-root-cause-fixed.md",
   "history": [
+    {
+      "file": "20260904-165751-tech-debt-corruption-incident-and-false-buildfail-bug.md",
+      "date": "2026-09-04",
+      "status": "RESOLVED",
+      "topic": "Resolved queued cmd_tech_debt() stale-entry no-op bug (run 20260904-153223-7b117e, commit 5316e79); knowledge/TECH_DEBT.md corruption caught and repaired (run 20260904-154839-ccfa17, commit e8d68a2); pipeline false-positive build_failed bug state-patched and queued (commit 15056ff); triapi tech-debt resolved design-gap entry (commit 6e56fdc); false-build_failed investigation hit scripts/dispatcher.py 73,728-char ceiling and queued for file split; superseded by the 204800 file."
+    },
     {
       "file": "20260904-150600-full-doc-audit-rag-layer-documented.md",
       "date": "2026-09-04",
