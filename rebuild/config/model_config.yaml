@@ -1,0 +1,28 @@
+# Model config for the rebuild's two call targets. Everything a caller
+# needs to know about DeepSeek/agy lives here, not hardcoded in scripts --
+# see feedback_everything_configurable_no_hardcoding memory. Change a
+# model/endpoint/effort here, not in code.
+
+deepseek:
+  provider: deepseek
+  endpoint: "https://api.deepseek.com"
+  api_key_secret: deepseek_api_key   # key name in config/secrets.enc.yaml
+  model: "deepseek-v4-pro"
+  # DeepSeek peak billing is 01:00-04:00 UTC daily -- costs are elevated in
+  # that window. call_deepseek.py warns (does not block) when called inside it.
+  peak_hours_utc: [1, 4]
+
+agy:
+  # Local CLI, no API key. --dangerously-skip-permissions --mode plan are
+  # always set by call_agy.py (mandatory, not configurable): without
+  # --mode plan, agy is a fully agentic CLI that can write the target repo
+  # directly instead of returning text for review -- see llm_client.py's
+  # _call_agy_cli docstring in the old pipeline for the incident this
+  # guards against.
+  model: null        # omit --model to use agy's own default
+  effort: "medium"
+
+# Subprocess timeouts (seconds).
+timeouts:
+  http: 600
+  agy_cli: 600

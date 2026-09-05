@@ -1,0 +1,93 @@
+```python
+def verify_task(
+    file_path: str | None = None,
+    before_content: str | None = None,
+    expected_content: str | None = None,
+    search_replace_blocks: list[tuple[str, str]] | None = None,
+    allowed_function_name: str | None = None,
+    allowed_line_range: tuple[int, int] | None = None,
+    test_cmd: str | list[str] | None = None,
+    cwd: str | None = None,
+    timeout: int = 120,
+) -> dict:
+    checks_run = 0
+    evidence = {}
+    all_passed = True
+
+    if test_cmd is not None:
+        checks_run += 1
+        evidence["test_run"] = run_test_command(test_cmd, cwd=cwd, timeout=timeout)
+        if not evidence["test_run"]["passed"]:
+            all_passed = False
+
+    if file_path is not None and (expected_content is not None or search_replace_blocks is not None):
+        checks_run += 1
+        evidence["content_check"] = verify_file_content(
+            file_path, expected_content, search_replace_blocks
+        )
+        if not evidence["content_check"]["passed"]:
+            all_passed = False
+
+    if before_content is not None and (
+        allowed_function_name is not None or allowed_line_range is not None
+    ):
+        with open(file_path, encoding="utf-8") as f:
+            after_content = f.read()
+        checks_run += 1
+        evidence["scope_check"] = verify_scope_boundaries(
+            before_content,
+            after_content,
+            allowed_function_name,
+            allowed_line_range,
+        )
+        if not evidence["scope_check"]["passed"]:
+            all_passed = False
+
+    if checks_run == 0:
+        return {
+            "passed": False,
+            "summary": "Verification failed: no checks were supplied",
+            "evidence": evidence,
+        }
+
+    details = []
+
+    if "test_run" in evidence:
+        test_run = evidence["test_run"]
+        if test_run["passed"]:
+            counts = test_run.get("counts") or {}
+            passed_count = counts.get("passed")
+            if isinstance(passed_count, int):
+                details.append(f"tests: {passed_count} passed")
+            else:
+                details.append("tests: passed")
+        elif test_run.get("zero_executed"):
+            details.append("tests: FAILED (Zero tests executed)")
+        else:
+            details.append("tests: FAILED")
+
+    if "content_check" in evidence:
+        if evidence["content_check"]["passed"]:
+            details.append("file content: matched")
+        else:
+            details.append("file content: MISMATCH")
+
+    if "scope_check" in evidence:
+        if evidence["scope_check"]["passed"]:
+            details.append("scope: intact")
+        else:
+            details.append("scope: VIOLATED")
+
+    summary_detail = "; ".join(details)
+
+    if all_passed:
+        summary = f"All checks passed: {summary_detail}"
+    else:
+        summary = f"Verification failed: {summary_detail}"
+
+    return {
+        "passed": all_passed,
+        "summary": summary,
+        "evidence": evidence,
+    }
+```

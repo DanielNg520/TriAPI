@@ -1,0 +1,64 @@
+```python
+def run_test_command(
+    command: str | list[str],
+    cwd: str | None = None,
+    timeout: int = 120,
+) -> dict:
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=isinstance(command, str),
+            cwd=cwd,
+            timeout=timeout,
+            text=True,
+            capture_output=True,
+        )
+        stdout = result.stdout
+        stderr = result.stderr
+        returncode = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        counts = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "total_executed": 0}
+        return {
+            "passed": False,
+            "returncode": -1,
+            "counts": counts,
+            "zero_executed": True,
+            "stdout": stdout,
+            "stderr": stderr,
+            "error_message": f"Process timed out after {timeout}s",
+        }
+
+    counts = parse_test_output(stdout + "\n" + stderr)
+    zero_executed = counts["total_executed"] == 0
+    passed = (
+        returncode == 0
+        and counts["failed"] == 0
+        and counts["errors"] == 0
+        and counts["total_executed"] > 0
+    )
+
+    if passed:
+        error_message = None
+    elif zero_executed:
+        error_message = "Zero tests executed"
+    else:
+        error_message = f"Exit code {returncode} with {counts['failed']} failures, {counts['errors']} errors"
+
+    return {
+        "passed": passed,
+        "returncode": returncode,
+        "counts": counts,
+        "zero_executed": zero_executed,
+        "stdout": stdout,
+        "stderr": stderr,
+        "error_message": error_message,
+    }
+```

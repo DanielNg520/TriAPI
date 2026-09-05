@@ -1,0 +1,46 @@
+```python
+import difflib
+from pathlib import Path
+
+def verify_file_content(
+    file_path: str,
+    expected_content: str | None = None,
+    search_replace_blocks: list[tuple[str, str]] | None = None,
+) -> dict:
+    path = Path(file_path)
+    if not path.exists():
+        return {
+            "passed": False,
+            "file_exists": False,
+            "diff": "",
+            "violations": [f"File not found: {file_path}"],
+        }
+
+    actual_content = path.read_text(encoding="utf-8")
+    violations: list[str] = []
+    diff = ""
+
+    if expected_content is not None and actual_content != expected_content:
+        diff = "\n".join(
+            difflib.unified_diff(
+                actual_content.splitlines(),
+                expected_content.splitlines(),
+                lineterm="",
+            )
+        )
+        violations.append("Content mismatch")
+
+    if search_replace_blocks is not None:
+        for search_text, replace_text in search_replace_blocks:
+            if search_text in actual_content:
+                violations.append(f"Search block still present: {search_text!r}")
+            if replace_text not in actual_content:
+                violations.append(f"Replace block missing: {replace_text!r}")
+
+    return {
+        "passed": not violations,
+        "file_exists": True,
+        "diff": diff,
+        "violations": violations,
+    }
+```

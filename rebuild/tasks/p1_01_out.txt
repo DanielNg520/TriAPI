@@ -1,0 +1,38 @@
+```python
+import re
+
+def parse_test_output(output: str) -> dict[str, int]:
+    ran = re.search(r'\bRan\s+(\d+)\s+tests?\b', output)
+    if ran:
+        total_run = int(ran.group(1))
+        failures = errors = skipped = 0
+        for kind, value in re.findall(r'\b(failures|errors|skipped)=(\d+)', output):
+            if kind == "failures":
+                failures = int(value)
+            elif kind == "errors":
+                errors = int(value)
+            else:
+                skipped = int(value)
+        passed = max(0, total_run - failures - errors - skipped)
+        return {
+            "passed": passed,
+            "failed": failures,
+            "errors": errors,
+            "skipped": skipped,
+            "total_executed": passed + failures + errors,
+        }
+
+    counts = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+    for count, kind in re.findall(r'\b(\d+)\s+(passed|failed|errors?|skipped)\b', output):
+        count = int(count)
+        if kind == "passed":
+            counts["passed"] += count
+        elif kind == "failed":
+            counts["failed"] += count
+        elif kind in {"error", "errors"}:
+            counts["errors"] += count
+        elif kind == "skipped":
+            counts["skipped"] += count
+    counts["total_executed"] = counts["passed"] + counts["failed"] + counts["errors"]
+    return counts
+```

@@ -1,0 +1,11 @@
+# Rebuild phases
+
+From `../SALVAGE_PLAN.md`'s sequence. One phase at a time, each usable on its own.
+
+1. **Ground-truth verify layer** — real test pass/fail, real file-diff/state checks. No substring grep, no py_compile-only. Root fix for the old pipeline's core bug.
+2. **Minimal single-task dispatcher** — apply one task's change, call phase-1 verify, report true result. No tiers, no escalation, no self-fix.
+3. **Reattach kept infra** — cost tracking, config/secrets plumbing, resource_guard, wired into phase-2 dispatcher.
+4. **Reattach tier escalation ladder** — tier1-4 files, re-audited one at a time, now backed by phase-1 verify.
+5. **Deferred** — self-fix loop, RAG/memory, doc-management. Not started until 1-4 run clean for a while. Each is a deliberate later decision, not automatic carry-forward.
+
+Status: Phase 1 done (`scripts/verify.py` + `tests/test_verify.py`, 9/9 real tests passing). Phase 2 next.

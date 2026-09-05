@@ -1,0 +1,73 @@
+```python
+import ast
+
+def verify_scope_boundaries(
+    before_content: str,
+    after_content: str,
+    allowed_function_name: str | None = None,
+    allowed_line_range: tuple[int, int] | None = None,
+) -> dict:
+    before_lines = before_content.splitlines()
+    after_lines = after_content.splitlines()
+
+    allowed_range = None
+    if allowed_function_name is not None:
+        try:
+            tree = ast.parse(before_content)
+        except SyntaxError:
+            allowed_range = None
+        else:
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == allowed_function_name:
+                    allowed_range = (node.lineno, node.end_lineno)
+                    break
+    elif allowed_line_range is not None:
+        allowed_range = allowed_line_range
+
+    if before_content == after_content:
+        return {
+            "passed": True,
+            "allowed_range": allowed_range,
+            "modified_lines": [],
+            "violations": [],
+            "diff": "\n".join(
+                difflib.unified_diff(
+                    before_lines,
+                    after_lines,
+                    fromfile="before",
+                    tofile="after",
+                    lineterm="",
+                )
+            ),
+        }
+
+    modified_lines = []
+    matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("insert", "replace"):
+            modified_lines.extend(range(j1 + 1, j2 + 1))
+
+    violations = []
+    if allowed_range is not None:
+        for line in modified_lines:
+            if not (allowed_range[0] <= line <= allowed_range[1]):
+                violations.append(f"Line {line} modified outside allowed span {allowed_range}")
+
+    diff = "\n".join(
+        difflib.unified_diff(
+            before_lines,
+            after_lines,
+            fromfile="before",
+            tofile="after",
+            lineterm="",
+        )
+    )
+
+    return {
+        "passed": not violations,
+        "allowed_range": allowed_range,
+        "modified_lines": modified_lines,
+        "violations": violations,
+        "diff": diff,
+    }
+```
