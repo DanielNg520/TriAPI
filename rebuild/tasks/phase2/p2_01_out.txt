@@ -1,0 +1,32 @@
+```python
+from pathlib import Path
+
+def apply_change(
+    file_path: str,
+    new_content: str | None = None,
+    search_replace_blocks: list[tuple[str, str]] | None = None,
+) -> str:
+    if (new_content is None) == (search_replace_blocks is None):
+        raise ValueError("exactly one of new_content or search_replace_blocks must be provided")
+
+    path = Path(file_path)
+    original = path.read_text(encoding="utf-8")
+
+    if new_content is not None:
+        final_content = new_content
+    else:
+        assert search_replace_blocks is not None
+        for search_text, _ in search_replace_blocks:
+            count = original.count(search_text)
+            if count != 1:
+                raise ValueError(
+                    f"search_text must appear exactly once, found {count}: {search_text!r}"
+                )
+
+        final_content = original
+        for search_text, replace_text in search_replace_blocks:
+            final_content = final_content.replace(search_text, replace_text, 1)
+
+    path.write_text(final_content, encoding="utf-8")
+    return original
+```

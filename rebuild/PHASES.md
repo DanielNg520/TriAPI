@@ -8,4 +8,4 @@ From `../SALVAGE_PLAN.md`'s sequence. One phase at a time, each usable on its ow
 4. **Reattach tier escalation ladder** — tier1-4 files, re-audited one at a time, now backed by phase-1 verify.
 5. **Deferred** — self-fix loop, RAG/memory, doc-management. Not started until 1-4 run clean for a while. Each is a deliberate later decision, not automatic carry-forward.
 
-Status: Phase 1 done (`scripts/verify.py` + `tests/test_verify.py`, 9/9 real tests passing). Phase 2 next.
+Status: Phase 1 done (`scripts/verify.py`). Phase 2 done (`scripts/dispatch.py` — apply_change/restore_file/dispatch_task, atomic apply + auto-rollback on failed verification). 16/16 real tests passing (`tests/test_verify.py` + `tests/test_dispatch.py`). Phase 3 next.

@@ -1,0 +1,42 @@
+```python
+from scripts.verify import verify_task
+
+
+def dispatch_task(
+    file_path: str,
+    new_content: str | None = None,
+    search_replace_blocks: list[tuple[str, str]] | None = None,
+    allowed_function_name: str | None = None,
+    allowed_line_range: tuple[int, int] | None = None,
+    test_cmd: str | list[str] | None = None,
+    cwd: str | None = None,
+    timeout: int = 120,
+) -> dict:
+    try:
+        original_content = apply_change(file_path, new_content, search_replace_blocks)
+    except (ValueError, FileNotFoundError) as err:
+        return {
+            "passed": False,
+            "summary": f"Dispatch error: {err}",
+            "evidence": {"dispatch_error": str(err)},
+            "rolled_back": False,
+        }
+
+    result = verify_task(
+        file_path=file_path,
+        before_content=original_content,
+        expected_content=new_content,
+        search_replace_blocks=search_replace_blocks,
+        allowed_function_name=allowed_function_name,
+        allowed_line_range=allowed_line_range,
+        test_cmd=test_cmd,
+        cwd=cwd,
+        timeout=timeout,
+    )
+
+    if result["passed"] is False:
+        restore_file(file_path, original_content)
+        return {**result, "rolled_back": True}
+
+    return {**result, "rolled_back": False}
+```
