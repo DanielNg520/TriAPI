@@ -17,11 +17,17 @@ import yaml
 from pathlib import Path
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_config.yaml"
+_RULES_PATH = Path(__file__).resolve().parent.parent / "RULES.md"
 
 
 def load_model_config() -> dict:
     with open(_CONFIG_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def load_rules() -> str:
+    """Hard rules shared by every DeepSeek/agy call -- see RULES.md."""
+    return _RULES_PATH.read_text(encoding="utf-8")
 
 
 def is_deepseek_peak_hours(cfg: dict | None = None) -> bool:

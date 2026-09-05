@@ -32,7 +32,7 @@ def main() -> int:
     args = ap.parse_args()
 
     prompt = args.prompt_file.read_text() if args.prompt_file else sys.stdin.read()
-    system_prompt = args.system_file.read_text()
+    system_prompt = llm_client.load_rules() + "\n\n" + args.system_file.read_text()
 
     if llm_client.is_deepseek_peak_hours():
         print("[WARN] DeepSeek peak billing window (01:00-04:00 UTC) -- costs elevated", file=sys.stderr)

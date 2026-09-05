@@ -27,7 +27,8 @@ def main() -> int:
     args = ap.parse_args()
 
     prompt = args.prompt_file.read_text() if args.prompt_file else sys.stdin.read()
-    system_prompt = args.system_file.read_text() if args.system_file else None
+    task_system = args.system_file.read_text() if args.system_file else ""
+    system_prompt = llm_client.load_rules() + "\n\n" + task_system
 
     response = llm_client.execute_agy(prompt, system_prompt)
     print(response)
