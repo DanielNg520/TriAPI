@@ -15,3 +15,4 @@ samples/*/build/
 logs/rejected_writes/
 logs/triapi_bugs/*
 !logs/triapi_bugs/.gitkeep
+rebuild/logs/*.jsonl

@@ -1,0 +1,53 @@
+```python
+def read_cost_summary(
+    log_path: str | None = None,
+    config_path: str | None = None,
+) -> dict:
+    path = (
+        Path(log_path)
+        if log_path is not None
+        else Path(__file__).resolve().parents[1] / "logs" / "cost_log.jsonl"
+    )
+
+    if not path.exists():
+        return {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost_usd": 0.0,
+            "entry_count": 0,
+        }
+
+    total_input_tokens = 0
+    total_output_tokens = 0
+    entry_count = 0
+
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            total_input_tokens += entry["input_tokens"]
+            total_output_tokens += entry["output_tokens"]
+            entry_count += 1
+
+    if entry_count == 0:
+        return {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost_usd": 0.0,
+            "entry_count": 0,
+        }
+
+    total_cost_usd = calculate_cost(
+        total_input_tokens,
+        total_output_tokens,
+        config_path=config_path,
+    )
+
+    return {
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_cost_usd": total_cost_usd,
+        "entry_count": entry_count,
+    }
+```

@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts import llm_client, secrets_loader
+from scripts import cost, llm_client, secrets_loader
 
 
 def main() -> int:
@@ -28,6 +28,7 @@ def main() -> int:
         required=True,
         help="System prompt file (the strict instructions/constraints for this task)",
     )
+    ap.add_argument("--task-id", default=None, help="Task id for cost log (default: prompt filename or 'stdin')")
     args = ap.parse_args()
 
     prompt = args.prompt_file.read_text() if args.prompt_file else sys.stdin.read()
@@ -41,7 +42,9 @@ def main() -> int:
         prompt, system_prompt, secrets["deepseek_api_key"]
     )
     print(response)
-    print(f"[tokens] in={in_tok} out={out_tok}", file=sys.stderr)
+    task_id = args.task_id or (args.prompt_file.stem if args.prompt_file else "stdin")
+    cost.log_cost(task_id, in_tok, out_tok)
+    print(f"[tokens] in={in_tok} out={out_tok} cost_usd={cost.calculate_cost(in_tok, out_tok):.6f}", file=sys.stderr)
     return 0
 
 

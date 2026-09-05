@@ -1,0 +1,29 @@
+```python
+import json
+from datetime import datetime, timezone
+
+
+def log_cost(
+    task_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    log_path: str | None = None,
+) -> dict:
+    if log_path is None:
+        log_path = Path(__file__).resolve().parents[1] / "logs" / "cost_log.jsonl"
+
+    record = {
+        "task_id": task_id,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+    return record
+```

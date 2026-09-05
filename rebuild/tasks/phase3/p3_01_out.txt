@@ -1,0 +1,24 @@
+```python
+import yaml
+from pathlib import Path
+
+
+def calculate_cost(
+    input_tokens: int,
+    output_tokens: int,
+    config_path: str | None = None,
+) -> float:
+    if config_path is None:
+        config_path = Path(__file__).resolve().parents[2] / "config" / "tiers.yaml"
+
+    pricing = yaml.safe_load(Path(config_path).read_text())["deepseek_reference_pricing"]
+
+    cache_miss_rate = pricing["cache_miss_per_mtok_usd"]
+    output_rate = pricing.get("output_per_mtok_usd")
+    if output_rate is None:
+        output_rate = cache_miss_rate
+
+    return (input_tokens / 1_000_000 * cache_miss_rate) + (
+        output_tokens / 1_000_000 * output_rate
+    )
+```
