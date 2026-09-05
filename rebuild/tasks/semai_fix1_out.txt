@@ -1,0 +1,9 @@
+```python
+_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "research": "Performs a live internet web search for current events, prices, facts, or anything outside the user's local data or your own knowledge."
+}
+```
+
+```python
+"description": _TOOL_DESCRIPTIONS.get(kind, f"Work with the user's {kind.replace('_', ' ')}."),
+```

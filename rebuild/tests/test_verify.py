@@ -17,6 +17,38 @@ def test_parse_test_output_pytest_style():
     }
 
 
+def test_parse_test_output_mixed_format_last_wins():
+    # A wrapping script prints an early unittest sub-suite summary, then the
+    # real final pytest summary later -- the later one must win, not the
+    # unittest branch just because it matched first (real bug found live
+    # against SemAI's run_tests.sh, 2026-09-05).
+    mixed = "Ran 5 tests\nOK\n\nsome other output\n\n10 passed, 2 failed in 1.0s"
+    assert parse_test_output(mixed) == {
+        "passed": 10,
+        "failed": 2,
+        "errors": 0,
+        "skipped": 0,
+        "total_executed": 12,
+    }
+
+
+def test_run_test_command_prefers_stdout_over_noisy_stderr(tmp_path):
+    # stderr can carry an unrelated "Ran N tests / OK" line (e.g. a
+    # subprocess using unittest's default runner for logging) even though
+    # stdout has the real, authoritative final result -- naive
+    # stdout+stderr concatenation would let stderr's noise win just because
+    # it comes last in the combined string. stdout must be tried first.
+    script = tmp_path / "noisy.py"
+    script.write_text(
+        "import sys\n"
+        "print('3 passed in 0.01s')\n"
+        "print('Ran 99 tests\\n\\nOK', file=sys.stderr)\n"
+    )
+    result = run_test_command(["python3", str(script)])
+    assert result["counts"]["passed"] == 3
+    assert result["passed"] is True
+
+
 def test_parse_test_output_unittest_style():
     assert parse_test_output(
         "Ran 6 tests in 0.05s\n\nFAILED (failures=1, errors=1, skipped=1)"

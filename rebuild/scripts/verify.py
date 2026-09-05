@@ -5,9 +5,22 @@ import subprocess
 from pathlib import Path
 
 def parse_test_output(output: str) -> dict[str, int]:
-    ran = re.search(r'\bRan\s+(\d+)\s+tests?\b', output)
-    if ran:
-        total_run = int(ran.group(1))
+    ran_matches = list(re.finditer(r'\bRan\s+(\d+)\s+tests?\b', output))
+    pytest_matches = list(re.finditer(r'\b(\d+)\s+(passed|failed|errors?|skipped)\b', output))
+
+    ran_last_pos = ran_matches[-1].start() if ran_matches else -1
+    pytest_last_pos = pytest_matches[-1].start() if pytest_matches else -1
+
+    if ran_last_pos == -1 and pytest_last_pos == -1:
+        return {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "total_executed": 0}
+
+    use_unittest = False
+    if ran_last_pos != -1:
+        if pytest_last_pos == -1 or ran_last_pos > pytest_last_pos:
+            use_unittest = True
+
+    if use_unittest:
+        total_run = int(ran_matches[-1].group(1))
         failures = errors = skipped = 0
         for kind, value in re.findall(r'\b(failures|errors|skipped)=(\d+)', output):
             if kind == "failures":
@@ -75,7 +88,9 @@ def run_test_command(
             "error_message": f"Process timed out after {timeout}s",
         }
 
-    counts = parse_test_output(stdout + "\n" + stderr)
+    counts = parse_test_output(stdout)
+    if counts["total_executed"] == 0:
+        counts = parse_test_output(stdout + "\n" + stderr)
     zero_executed = counts["total_executed"] == 0
     passed = (
         returncode == 0

@@ -1,0 +1,4 @@
+```python
+    "You have tools that read two different kinds of sources: the user's own local systems, and outside "
+    "sources such as live web search for current events, prices, or facts outside the user's data or your own knowledge. Use whichever tool the question actually needs rather than guessing or refusing; answer directly only when no tool is needed.\n\n"
+```
