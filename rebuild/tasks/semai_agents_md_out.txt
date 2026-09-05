@@ -1,0 +1,27 @@
+# AGENTS.md
+SemAI: local-first assistant with Telegram, CLI, and TUI front-ends on a worker-and-intent architecture. Read this file first; it is the only doc kept live.
+
+## Current architecture
+`src/semai/` is the active worker-based architecture; `src/semai/adapters/cli.py`'s `build_registry()` wires intents to workers.
+`ohmyllama/` consolidation into `src/semai/` is fully complete (both wobbly-yawning-seal and capability tracks finished).
+`.state/` holds ohmyllama's legacy database; `.state-semai/` is SemAI's separate runtime state directory (never shared).
+
+## Doc policy
+One file only: AGENTS.md. Carryover lives here; hard cap 1000 lines, max 30 words per line.
+Entries are precise reports only without play-by-play narrative; completed work stays frozen in docs.
+
+## Carryover (current state, 2026-09-05)
+- Run tests via `bash run_tests.sh` (wraps script suite and pytest; `python tests/test_X.py` silently misses pytest files).
+- Target-repo code changes must use TriAPI's rebuild pipeline (DeepSeek writes, Claude audits and verifies with tests), avoiding hand-edits.
+- Consolidation complete: ohmyllama retired into `src/semai/`; wobbly-yawning-seal (phases 0-8) and capability (phases 1-9) tracks finished as of 2026-09-05.
+- Three agentic bugs in `src/semai/agent.py` fixed via rebuild pipeline (research tool doc, prompt tool restriction, empty telemetry bug); 114/114 tests pass.
+- Services `oh-my-llama.service`, `oh-my-llama-telegram.service`, and `openclaw.service` stopped 2026-09-05 to free memory; `miki-sorter.service` running. Check with `systemctl --user is-active`.
+- Known debt: `.state-semai/*.sqlite3` files are tracked in git causing test binary diffs (flagged, not urgent).
+- Known debt: `openclaw-todoist` plugin remains enabled with live token although Todoist integration was cut from SemAI.
+
+## Future plans (queued, not started)
+None currently queued; next session must ask user what to work on next rather than assuming a phase.
+
+## Archive
+`MAPPING.md` and `docs/Agent/AGENT_GUIDE.md` are frozen in place and not migrated; full history remains recoverable in git.
+
