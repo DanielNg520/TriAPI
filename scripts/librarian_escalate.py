@@ -131,6 +131,16 @@ def _escalate_to_human(task_id: str, target_path: Path, reason: str, detail: str
 
 
 def run_command(cmd: str, workdir: str, timeout: int = 300) -> tuple[bool, str]:
+    # TriAPI has no pyproject.toml/lockfile; `uv run` builds a bare ephemeral
+    # venv without requirements.txt installed, crashing with ModuleNotFoundError
+    # (e.g. scripts/llm_client.py imports `requests`). TriAPI scripts are meant
+    # to run with plain system python3 (see triapi CLI shebang and the
+    # in-process imports in dispatcher.py) -- never via `uv run`. If a plan,
+    # breakdown, verify_cmd, or any other string reaching this function ever
+    # prefixes a TriAPI script invocation with `uv run`, strip it here so the
+    # command runs under plain python3 instead. Lookahead keeps the rest of
+    # the command intact.
+    cmd = re.sub(r"\buv\s+run\s+(?=.*?scripts/\S+\.py\b)", "", cmd)
     try:
         result = subprocess.run(
             cmd, shell=True, cwd=workdir, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL

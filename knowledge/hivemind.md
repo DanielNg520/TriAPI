@@ -1781,3 +1781,228 @@ When tracking tasks or issues that might be modified out-of-band (e.g., tech deb
 **Best Practices:**
 1. **Attempt Auto-Recovery:** Before giving up on a stale item, run its associated verification condition (e.g., a test command). If the verification passes, assume the issue was resolved out-of-band and automatically clean up the tracking state.
 2. **Prevent Silent Batch No-ops:** When a batch process skips items (due to staleness, invalidity, etc.), track the skipped items. If the entire batch is skipped, surface a clear, actionable summary at the end so the user knows that no work was performed and manual cleanup is required.
+
+### Safely Introducing Heavy Features with Feature Flags and Local Imports
+
+**Context:** You are migrating from a simple, lightweight system (e.g., a single-shot command dispatcher) to a complex, heavy system (e.g., an LLM-powered agent) within the same application component.
+
+**Pattern/Lesson:**
+When implementing an experimental or opt-in heavy feature, combine a configuration-driven feature flag with local (inline) imports. 
+
+1. **Fail-Safe Feature Flags:** Use `getattr(config, "feature_flag", False)` to ensure the new execution path is strictly opt-in. Providing `False` as a default ensures the application won't break if the new configuration key is missing from existing deployment environments.
+2. **Local Imports for Performance:** Place the `import` statements for the heavy dependencies (like `Agent` and `OllamaProvider`) *inside* the feature-flagged `if` block. This ensures that users who have the feature disabled do not pay the penalty of startup latency, memory overhead, or potential import errors associated with the new dependencies.
+3. **Unified Output Handling:** Ensure both the legacy and new code paths converge on the same interface for side effects (like sending messages and rendering approval keyboards). This keeps the adapter layer clean and focused on I/O rather than business logic duplication.
+
+**Example from code:**
+```python
+if getattr(self.cfg, "agent_enabled", False):
+    # Local imports prevent loading heavy LLM dependencies if disabled
+    from semai.agent import Agent
+    from semai.providers.ollama import OllamaProvider
+    
+    llm = OllamaProvider(self.cfg.ollama_base_url)
+    agent = Agent(self.cfg, llm, self._dispatcher.registry)
+    # ... execute heavy new logic ...
+else:
+    # ... execute fast legacy logic ...
+```
+
+### Prefer Stateful Fakes Over Complex Mocks
+
+**Context:**  
+When testing systems with complex interactions, side effects, or non-deterministic dependencies like LLM Agents, external message dispatchers, or APIs.
+
+**Pattern:**  
+Instead of relying heavily on generic mocking libraries (e.g., `unittest.mock.MagicMock`) which can result in verbose setup and fragile assertions, define minimal, explicit "Fake" classes or inline functions. These fakes should implement just enough of the required interface and record interactions into simple, stateful data structures (like lists or dicts) for later assertion.
+
+**How it is applied in this diff:**  
+To test the new agent-enabled routing logic without actually invoking an LLM, the author introduces lightweight fakes rather than complex mock setups:
+1. **`FakeAgent` / `FakeAgentResponse`:** Instead of patching `Agent.run` to return a mocked object, the author defines a simple class that records inputs to `self.calls` and returns a predictable `FakeAgentResponse`. 
+2. **`FakeApprovalStore`:** A minimal class that implements `create()`, yields an incrementing ID, and records the calls into a `self.created` list.
+3. **`fake_send`:** An inline async function replacing the adapter's `_send` method that simply appends the call arguments to a `sent_messages` list for straightforward inspection.
+
+**Benefits:**  
+- **Readability:** The contract and behavior of the mocked dependencies are explicit and easy to understand right where they are used.
+- **Maintainability:** Stateful fakes are often less brittle than `mock.assert_called_with`. Asserting against captured state (e.g., `assert len(sent_messages) == 2`) is robust and won't unexpectedly break if an unrelated keyword argument is added to the real method signature.
+- **Debuggability:** When a test fails, inspecting a standard Python list of recorded calls is usually much easier than parsing a `Mock.call_args_list`.
+
+### Integration Testing Real Agent Tool Schemas
+
+**Context & Problem:** 
+When unit testing agent workflows, it is best practice to use mock tool registries (e.g., registering simple, fake tools to test the agent's reasoning loop in isolation). However, because tool schemas for LLMs are often generated dynamically via reflection, type hints, or decorators, a codebase refactoring can easily break the schema generation or accidentally omit a critical tool from the default application registry. If this happens, unit tests using mock tools will pass, but the agent will silently lose capabilities in production because the LLM never receives the tool schema.
+
+**Pattern/Best Practice:** 
+Implement a "parity" or boundary integration test that wires the agent up with the *real* application tool registry (the one used by the main application or CLI) to guarantee that actual production tools are successfully loaded and structured correctly.
+
+**Implementation:**
+1. Construct the agent using the actual application registry builder (e.g., `build_registry()`) rather than a test fixture.
+2. Extract the list of tools that the agent intends to expose to the LLM (e.g., via `agent.tools()`).
+3. Assert that the names of all mission-critical tools (like command execution, file writing, or research capabilities) are present.
+4. Verify that each critical tool carries a valid, well-formed JSON schema (e.g., ensuring `parameters.properties` exists), which proves the underlying introspection mechanism successfully parsed the real tool's signature.
+
+**Example:**
+```python
+def test_agent_tools_parity(settings):
+    # 1. Instantiate the real registry used in production
+    registry = build_registry(settings)
+    agent = Agent(settings, FakeLLM([]), registry)
+    
+    # 2. Extract generated schemas
+    tools = agent.tools()
+    by_name = {t["function"]["name"]: t for t in tools}
+    
+    # 3. Verify presence and schema validity for mission-critical tools
+    for required in ("propose_run_command", "read_research", "propose_write_file"):
+        assert required in by_name, f"Missing critical tool: {required}"
+        
+        tool = by_name[required]
+        params = tool["function"].get("parameters")
+        
+        # 4. Prove the schema introspection actually worked
+        assert isinstance(params, dict) and "properties" in params, (
+            f"{required} must expose a valid JSON schema"
+        )
+```
+
+### Pattern: Preserving Provenance in Aggregated Data
+
+When aggregating items (like tasks, proposed actions, or results) from multiple distinct sources or subsystems into a central collection, bundle the source context (such as the generator's domain, type, or ID) alongside the item itself, typically using a tuple or a small wrapper class.
+
+**Context:** 
+In the provided diff, a flat list of `ProposedAction` objects was upgraded to a list of `tuple[str, ProposedAction]`, where the string captures the `kind` of intent (the domain/worker) that generated the proposal.
+
+**Why this is a best practice:**
+* **Traceability:** Downstream consumers (like an execution engine or a user approval UI) instantly know exactly where the item originated without having to reverse-engineer it from the item's internal payload.
+* **Routing and Presentation:** UI layers often need to display domain-specific context, icons, or group items by their source. Retaining the origin `kind` makes this trivial.
+* **Separation of Concerns:** The item payload (`ProposedAction`) remains clean and doesn't need to be polluted with metadata about who orchestrated its creation, keeping domain objects cleanly separated from orchestration logic.
+
+### Context-Aware Approvals and Interface Encapsulation
+
+**Lessons Learned:**
+1. **Provide Context in Approval Prompts:** When asking a user to confirm or reject an automated action (such as an agent's proposal), always include a human-readable description of the action. Updating opaque messages like `"Approval #123 needed"` to include contextual details (e.g., `f"Approval #{approval_id} needed: {getattr(action, 'description', '')}"`) significantly reduces friction and helps users make informed decisions without needing to look up the ID elsewhere.
+2. **Encapsulate Payload Unpacking:** The caller should not be responsible for safely unpacking generic objects using fallback values. The refactor removes manual attribute extraction (e.g., `getattr(action, "kind", None)` and `getattr(action, "payload", {})`) from the calling loop. Instead, the generator now explicitly yields `(kind, action)` tuples, and the `create` method was updated to accept the `action` object directly. This pushes the data processing logic down to the component that actually owns it, resulting in cleaner and less fragile caller code.
+
+### Avoid Over-Mocking Data Stores in Integration Tests
+
+**Context:** 
+When testing components that communicate through a persistent store (e.g., an approval queue, event bus, or database), it's tempting to use a lightweight mock or fake (such as a simple class that accepts `**kwargs` and appends them to an in-memory list) to simplify setup.
+
+**The Pitfall:** 
+Overly permissive fakes can silently hide integration bugs and schema mismatches. Because a fake store accepts arbitrary data without validation, it masks errors where a producer writes data in a format, type, or "kind" that the real schema rejects, or that downstream consumers cannot resolve. Your tests might pass because the fake faithfully returns the bad data, but the real system will fail in production.
+
+**The Solution:**
+Use the real data store implementation backed by an isolated, lightweight local database (like an in-memory or temporary SQLite file) for integration testing. 
+
+* **Guarantees Data Round-Tripping:** Ensures payloads are correctly serialized on write and deserialized on read.
+* **Enforces Schema Constraints:** A real local database will immediately catch missing fields, nullability violations, or type mismatches.
+* **Validates Integration:** Ensures that the data retrieved from the store can genuinely be used by the rest of the system (for example, correctly mapping a stored string back to a real registered worker instance).
+
+### [Testing Complex Async Routing via Hand-Rolled Fakes and Manual Source Patching]
+
+**Context:**
+Testing functions that perform late/local imports (e.g., executing `from some_module import SomeClass` inside the function body) and orchestrate complex asynchronous behavior. Standard `unittest.mock.patch` decorators can struggle to intercept local imports properly and often make async mocking opaque.
+
+**Pattern / Best Practice:**
+1. **Patch the Source Module directly:** Because the target function imports the dependency at call time, patching it in the consumer's module namespace will not work. You must patch the dependency at its original source module (e.g., patching `semai.agent.Agent` directly rather than `cli.Agent`).
+2. **Use Hand-Rolled Fakes over `MagicMock`:** Define explicit fake classes (`_FakeAgent`, `_FakeAgentResult`) to stand in for complex objects. This keeps the duck-typed shape transparent. A simple `calls` list on the fake can record inputs for test assertions, bypassing the cognitive overhead and potential async pitfalls of mock objects.
+3. **Manual Patching via `try/finally`:** Swap the dependency manually using a `try/finally` block instead of a patch decorator. This keeps the test setup localized and explicitly shows the scope of the patch.
+
+**Example:**
+```python
+# The consumer has a late/local import:
+# def repl():
+#     from semai.agent import Agent
+#     ...
+
+# 1. Define transparent, hand-rolled fakes
+class _FakeAgentResult:
+    def __init__(self, answer, proposals):
+        self.answer = answer
+        self.proposals = proposals
+
+class _FakeAgent:
+    def __init__(self, *args, **kwargs):
+        self.calls = []
+        self._result = getattr(self, "_result", None)
+
+    async def run(self, text):
+        self.calls.append(text)
+        return self._result
+
+# 2. Import the source module directly
+import semai.agent as agent_module
+
+fake_agent = _FakeAgent()
+fake_agent._result = _FakeAgentResult(answer="Done", proposals=[])
+
+# 3. Manually patch the source module with a try/finally block
+orig_Agent = agent_module.Agent
+agent_module.Agent = lambda *args, **kwargs: fake_agent
+try:
+    # Run the test against the consumer
+    asyncio.run(repl(...))
+    
+    # Assert against the fake's recorded state
+    assert fake_agent.calls == ["expected user input"]
+finally:
+    # Restore the original class
+    agent_module.Agent = orig_Agent
+```
+
+---
+
+### [Bypassing Frozen Pydantic Model Immutability in Tests]
+
+**Context:**
+When testing legacy or alternate paths, you may need to override specific configuration flags on a Pydantic `Settings` model that is configured as immutable (`frozen=True`). 
+
+**Pattern / Best Practice:**
+While `model.model_copy(update={"field": new_value})` works well for strongly declared fields, it will fail if the test needs to mock a dynamically-resolved attribute (e.g., a flag accessed via `getattr(settings, "feature_flag", True)` that isn't explicitly defined on the model). To safely force the override on a frozen model without altering the original instance, duplicate the model and use `object.__setattr__` to inject the override.
+
+**Example:**
+```python
+# Safely duplicate the frozen config without mutating the shared instance
+settings_disabled = settings.model_copy()
+
+# Force-set the attribute, bypassing Pydantic's frozen validation.
+# This ensures it works even if the attribute isn't a declared pydantic field.
+object.__setattr__(settings_disabled, "agent_enabled", False)
+
+# Run test with `settings_disabled` ...
+```
+
+### Correct Sequence Unpacking for Compound Returns
+
+**Context:**
+When consuming properties or methods that return a collection of compound structures, such as a list of tuples (e.g., `[(kind, payload)]`), a common pitfall is forgetting to unpack the elements when retrieving them.
+
+**The Pitfall:**
+Assigning a tuple to a single variable and attempting to access the underlying object's attributes directly on the tuple will result in a runtime `AttributeError` (e.g., `'tuple' object has no attribute '...'`). This often happens when an API is refactored to return a tuple instead of a single object, but the consuming code is not fully updated.
+
+**Incorrect:**
+```python
+# If result.proposals is a list of tuples: [(kind, proposed_obj)]
+if result.proposals:
+    proposed = result.proposals[0] 
+    # 'proposed' is now a tuple. Calling proposed.action will raise an AttributeError!
+    record_id = store.create(proposed.action, proposed)
+```
+
+**Correct:**
+```python
+if result.proposals:
+    # Explicitly unpack the tuple into its constituent parts
+    kind, proposed = result.proposals[0]
+    # Now 'proposed' is the actual object and 'kind' is correctly extracted
+    record_id = store.create(kind, proposed)
+```
+
+**Takeaway:**
+Always verify the exact shape of data structures returned by your APIs. When a contract yields a collection of tuples or iterables, use explicit sequence unpacking to isolate the constituent objects before attempting to access their properties or pass them along to other functions.
+
+### Explicit Mock Data Shapes and Avoid Tautological Assertions
+
+When writing unit tests for routing or dispatcher logic, it is critical to accurately represent the expected data structures and avoid self-fulfilling assertions:
+
+1. **Mock Exact Data Shapes:** Ensure that fake or mocked objects return data in the exact structure expected by the consuming system. If a system expects a list of tuples (e.g., `[(tool_name, proposal_object)]`), returning just a list of objects (e.g., `[proposal_object]`) will cause unpacking errors or silent failures in the tested code. 
+2. **Avoid Tautological Assertions:** When verifying that a dispatcher calls a downstream component with a specific routing key, assert against the literal expected string (e.g., `"remember_fact"`) rather than a property of the payload itself (e.g., `proposal.action`). This explicitly verifies the dispatcher's routing logic rather than just echoing back the mock's internal state.
