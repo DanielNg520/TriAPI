@@ -12,6 +12,9 @@ See `SALVAGE_PLAN.md` for the keep/rewrite/drop decision.
 Active work lives in `rebuild/`: DeepSeek writes code, agy writes docs, Claude plans+audits every response.
 Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RULES.md` (hard rules shared by every call).
 
+Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
+No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
+
 Test command: `cd rebuild && python3 -m pytest -v tests/`
 
 ## Doc policy
