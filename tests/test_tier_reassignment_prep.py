@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
 
-from scripts import budget_guard, dispatcher, llm_client
+from scripts import budget_guard, dispatcher, dispatcher_breakdown, llm_client
 
 
 def _make_config(tier_deepseek, tier_google, deepseek_peak=None):
@@ -136,7 +136,7 @@ class TestBreakdownPhaseAttemptRouting(unittest.TestCase):
                     "scripts.llm_client.execute_llm",
                     return_value=('{"name": "p", "items": []}', provider, 0, 0),
                 ) as mock_execute:
-                    dispatcher._breakdown_phase_attempt(
+                    dispatcher_breakdown._breakdown_phase_attempt(
                         phase_text="test", models=["m"], tier2=tier2, secrets=secrets
                     )
                     mock_execute.assert_called_once()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from scripts import budget_guard, dispatcher
+from scripts import budget_guard, dispatcher, dispatcher_breakdown
 
 
 class IsDeepseekPeakHoursTests(unittest.TestCase):
@@ -75,38 +75,38 @@ class BreakdownPhaseResolvesPeakConditionalTests(unittest.TestCase):
 
     def test_off_peak_uses_primary_block(self) -> None:
         with (
-            mock.patch.object(dispatcher, "load_tiers", return_value=self._config()),
-            mock.patch.object(dispatcher, "load_secrets", return_value={}),
-            mock.patch.object(dispatcher, "check_tier2_ok", return_value={"ok": True}),
+            mock.patch.object(dispatcher_breakdown, "load_tiers", return_value=self._config()),
+            mock.patch.object(dispatcher_breakdown, "load_secrets", return_value={}),
+            mock.patch.object(dispatcher_breakdown, "check_tier2_ok", return_value={"ok": True}),
             mock.patch.object(
                 budget_guard, "check_tier3_peak_hours_ok", return_value={"ok": True}
             ),
             mock.patch.object(
-                dispatcher,
+                dispatcher_breakdown,
                 "_breakdown_phase_attempt",
                 return_value={"status": "ok", "phase": {"name": "p", "items": []}},
             ) as mock_attempt,
         ):
-            dispatcher.breakdown_phase("some phase text")
+            dispatcher_breakdown.breakdown_phase("some phase text")
 
         used_tier2 = mock_attempt.call_args[0][2]
         self.assertEqual(used_tier2["provider"], "deepseek")
 
     def test_peak_hours_resolves_to_peak_alt_block(self) -> None:
         with (
-            mock.patch.object(dispatcher, "load_tiers", return_value=self._config()),
-            mock.patch.object(dispatcher, "load_secrets", return_value={}),
-            mock.patch.object(dispatcher, "check_tier2_ok", return_value={"ok": True}),
+            mock.patch.object(dispatcher_breakdown, "load_tiers", return_value=self._config()),
+            mock.patch.object(dispatcher_breakdown, "load_secrets", return_value={}),
+            mock.patch.object(dispatcher_breakdown, "check_tier2_ok", return_value={"ok": True}),
             mock.patch.object(
                 budget_guard, "check_tier3_peak_hours_ok", return_value={"ok": False}
             ),
             mock.patch.object(
-                dispatcher,
+                dispatcher_breakdown,
                 "_breakdown_phase_attempt",
                 return_value={"status": "ok", "phase": {"name": "p", "items": []}},
             ) as mock_attempt,
         ):
-            dispatcher.breakdown_phase("some phase text")
+            dispatcher_breakdown.breakdown_phase("some phase text")
 
         used_tier2 = mock_attempt.call_args[0][2]
         self.assertEqual(used_tier2["provider"], "agy")
@@ -123,7 +123,7 @@ class BreakdownPhaseAttemptAgyNoEndpointTests(unittest.TestCase):
     (tier2_escalate.py, tier3_escalate.py both already use .get())."""
 
     def test_agy_block_with_no_endpoint_key_does_not_raise(self) -> None:
-        from scripts.dispatcher import _breakdown_phase_attempt
+        from scripts.dispatcher_breakdown import _breakdown_phase_attempt
 
         tier2 = {"provider": "agy", "models": {"default": "gemini-3.1-pro"}}
         with mock.patch(
@@ -142,7 +142,7 @@ class BreakdownPhaseAttemptAgyNoEndpointTests(unittest.TestCase):
         _breakdown_phase_attempt() never read tier2.get("effort") -- every
         other real agy call site in this repo (tier2_escalate.py,
         tier3_escalate.py) already threads it through."""
-        from scripts.dispatcher import _breakdown_phase_attempt
+        from scripts.dispatcher_breakdown import _breakdown_phase_attempt
 
         tier2 = {"provider": "agy", "models": {"default": "gemini-3.1-pro"}, "effort": "high"}
         with mock.patch(

@@ -1,6 +1,6 @@
 import unittest
 
-from scripts import dispatcher
+from scripts import dispatcher_breakdown
 
 
 class TestBreakdownPromptSkipGuidance(unittest.TestCase):
@@ -14,7 +14,7 @@ class TestBreakdownPromptSkipGuidance(unittest.TestCase):
     follows it (that's a live-verification concern, not a unit test one)."""
 
     def test_prompt_warns_against_bare_skipped_grep(self):
-        prompt = dispatcher.BREAKDOWN_SYSTEM_INSTRUCTION
+        prompt = dispatcher_breakdown.BREAKDOWN_SYSTEM_INSTRUCTION
         self.assertIn("skipped", prompt.lower())
         self.assertIn("bare substring", prompt.lower())
         # The anchored unittest syntax it should steer toward.

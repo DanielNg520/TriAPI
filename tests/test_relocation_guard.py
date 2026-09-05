@@ -29,6 +29,21 @@ class RelocationIntentDetectionTests(unittest.TestCase):
         result = scope_guard.detect_relocation_intent("Fix a bug in TestBeta")
         self.assertEqual(result, set())
 
+    def test_method_call_named_after_verb_is_not_relocation_intent(self) -> None:
+        # Root cause of the ORIGINAL false build_failed bug this guard's
+        # own bug-hunt was for (run 20260904-154839-ccfa17, tracked in
+        # knowledge/TECH_DEBT.md): an item description that used
+        # `" ".join(build_output.split())` was misread as naming a "split"
+        # relocation, and `build_output` (a local variable, not a def/
+        # class) was then reported "missing," permanently failing three
+        # genuinely successful tier attempts in a row.
+        description = (
+            "Sanitize build_output so it fits on a single line: strip "
+            'newlines and collapse whitespace using " ".join(build_output.split()).'
+        )
+        result = scope_guard.detect_relocation_intent(description)
+        self.assertEqual(result, set())
+
 
 class SymbolExistsInProjectTests(unittest.TestCase):
     def test_symbol_present_in_some_file_returns_true(self) -> None:

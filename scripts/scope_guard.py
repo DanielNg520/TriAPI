@@ -93,7 +93,15 @@ def extract_named_symbols(text: str) -> set[str]:
     """
     symbols = set()
     for token in _IDENTIFIER_RE.findall(text):
-        if "_" in token or any(c.isupper() for c in token[1:]):
+        # A PascalCase-shaped token also needs a lowercase letter somewhere,
+        # not just internal uppercase -- otherwise a bare all-caps acronym
+        # used as ordinary prose (e.g. "NOT", "LLM", "PLAN") would qualify
+        # too. Confirmed live 2026-09-04 (run 20260904-172545-dd6087):
+        # detect_relocation_intent() flagged "NOT"/"LLM"/"PLAN" as missing
+        # relocation targets even though they were never named as such.
+        if "_" in token or (
+            any(c.isupper() for c in token[1:]) and any(c.islower() for c in token)
+        ):
             symbols.add(token)
     return symbols
 
@@ -117,29 +125,63 @@ def detect_relocation_intent(description: str) -> set[str]:
     named as a relocation target either still exists somewhere after
     the edit, or it doesn't).
     """
+    # (?<!\.) excludes a method call named after a relocation verb (e.g.
+    # `build_output.split()`, `text.split(...)`) from counting as relocation
+    # intent -- this is the root cause of the ORIGINAL false build_failed
+    # bug this whole investigation was for (run 20260904-154839-ccfa17,
+    # tracked in knowledge/TECH_DEBT.md): an item description that used
+    # `" ".join(build_output.split())` was flagged as naming a "split"
+    # relocation, and `build_output` (a local variable, not a def/class)
+    # was then reported "missing," permanently failing three genuinely
+    # successful tier attempts in a row (tier_4, tier_3, tier_2).
     lowered = description.lower()
-    if not any(re.search(rf"\b{re.escape(verb)}\b", lowered) for verb in _RELOCATION_VERBS):
+    if not any(re.search(rf"(?<!\.)\b{re.escape(verb)}\b", lowered) for verb in _RELOCATION_VERBS):
         return set()
-    return extract_named_symbols(description)
+    # A "Verify: `...`" clause is a shell command, and a parenthetical
+    # aside (an "out of scope"/"do NOT" caveat, an "e.g." example) is
+    # commentary, not a relocation target -- strip both before extracting.
+    # A token named as "<token>.py" or "scripts.<token>" is also a module
+    # being referenced by its own name (a file path or package-qualified
+    # import target), not a def/class expected to still exist under
+    # symbol_exists_in_project()'s check. Confirmed live 2026-09-04 (run
+    # 20260904-172545-dd6087) across three separate items: "py_compile",
+    # "dispatcher_git.py"/"scripts.dispatcher_git", and then
+    # "HTTPError"/"PLAN"/"tier2_escalate" (all from one parenthetical
+    # caveat) were each wrongly flagged as missing, failing otherwise
+    # genuinely successful moves.
+    scoped = description.split("Verify:", 1)[0]
+    scoped = re.sub(r"\([^()]*\)", " ", scoped)
+    candidates = extract_named_symbols(scoped)
+    return {
+        sym for sym in candidates
+        if f"{sym}.py" not in description and f"scripts.{sym}" not in description
+    }
 
 
 _SKIP_DIR_NAMES = {".git", "logs", "__pycache__", ".venv", "venv"}
 
 
 def symbol_exists_in_project(project_dir: str, symbol_name: str) -> bool:
-    """Returns True if `symbol_name` is defined (`def NAME(` or
-    `class NAME:` / `class NAME(`) in any .py file under `project_dir`
-    (excluding .git/, logs/, __pycache__/, and venv dirs), False if no
-    file defines it anywhere. Used to confirm a symbol an item's own
-    description named as a relocation target actually landed
-    somewhere in the project, not just in whatever the item's own
-    `target` file happened to be.
+    """Returns True if `symbol_name` is defined (`def NAME(`, `class NAME:`
+    / `class NAME(`, or a module-level constant assignment `NAME = ` /
+    `NAME: `) in any .py file under `project_dir` (excluding .git/, logs/,
+    __pycache__/, and venv dirs), False if no file defines it anywhere.
+    Used to confirm a symbol an item's own description named as a
+    relocation target actually landed somewhere in the project, not just
+    in whatever the item's own `target` file happened to be. The constant
+    forms matter: confirmed live 2026-09-04 (run 20260904-172545-dd6087)
+    -- an item named `BREAKDOWN_SYSTEM_INSTRUCTION` (a plain module-level
+    constant, not a def/class) as a relocation target, and this check
+    couldn't see it defined anywhere, wrongly failing a correct move that
+    had actually reused an existing import rather than duplicating it.
     """
     root = Path(project_dir)
     needles = (
         f"def {symbol_name}(",
         f"class {symbol_name}:",
         f"class {symbol_name}(",
+        f"{symbol_name} = ",
+        f"{symbol_name}: ",
     )
     for path in root.rglob("*.py"):
         if any(part in _SKIP_DIR_NAMES for part in path.relative_to(root).parts):
