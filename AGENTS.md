@@ -21,7 +21,11 @@ Test command: `cd rebuild && python3 -m pytest -v tests/`
 
 One file only: this one. Carryover is the section below, not a separate file.
 Hard cap: 1000 lines, 30 words per line. Precise, worth-noting entries only, no narrative.
-Once work is done, its record can stay in `docs/` as frozen archive — we don't keep expanding it.
+Once work is done, delete its line entirely — don't move it to an archive file. Git history has it.
+A removed/retired feature gets zero doc trace: no "X removed" line, no rationale footnote, nothing.
+A pending removal task states the action only ("delete file X"), never the reasoning for removing it.
+This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
+This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
 
 ## Carryover (current state, 2026-09-05)
 
