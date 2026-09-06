@@ -1,7 +1,7 @@
 # AGENTS.md
 
 TriAPI: multi-tier LLM dispatch pipeline. Read this file first, it is the only doc kept live.
-Everything else in `docs/`/`CARRYOVER.md` is frozen history, not maintained.
+Everything else, including `docs/artifact/`, is frozen history, not maintained.
 
 ## Current architecture
 
@@ -25,7 +25,7 @@ Once work is done, its record can stay in `docs/` as frozen archive — we don't
 
 ## Carryover (current state, 2026-09-05)
 
-- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 32/32 real tests passing.
+- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 34/34 real tests passing.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
 - Efficiency additions done: spend cap (`cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag) and code-block extractor (`llm_client.extract_code_block`).
 - One DeepSeek-written test batch (P3B-04) failed audit — wrong return type assumed, missing yaml key, bad call signature. Rewritten by Claude directly rather than re-dispatched.
@@ -74,6 +74,6 @@ Status: blocker cleared long ago, never dispatched. Needs the user's input on th
 
 ## Archive
 
-Old bloated `AGENTS.md`, `CARRYOVER.md`, `docs/carryover/*`, `docs/agents/*` are left in place, frozen.
+Old bloated docs moved into `docs/artifact/` (`docs/artifact/carryover/*`, `docs/artifact/agents/*`), frozen, not indexed here.
 Covers plan-block history, file/dir doc overflow, old tier-escalation session notes — not indexed here.
 Full detail recoverable via git history if ever needed.
