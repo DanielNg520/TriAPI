@@ -78,6 +78,5 @@ Status: blocker cleared long ago, never dispatched. Needs the user's input on th
 
 ## Archive
 
-Old bloated docs moved into `docs/artifact/` (`docs/artifact/carryover/*`, `docs/artifact/agents/*`), frozen, not indexed here.
-Covers plan-block history, file/dir doc overflow, old tier-escalation session notes — not indexed here.
-Full detail recoverable via git history if ever needed.
+Old bloated docs (plan-block history, file/dir doc overflow, old tier-escalation notes) removed from the tree entirely.
+Recoverable via `git show 82e81f8:docs/artifact/<path>` (last commit before removal) if ever needed.
