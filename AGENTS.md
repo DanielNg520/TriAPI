@@ -41,6 +41,8 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - SemAI's own docs purged to the same single-AGENTS.md policy (commit `c9861fa` in SemAI, same branch).
 - Doc policy is now GLOBAL — applies to every repo, not just TriAPI.
 - All rebuild commits pushed to origin/main as of `ee262c0`.
+- Salvaged DeepSeek peak-hour guard from old `scripts/budget_guard.py` into `rebuild/scripts/llm_client.is_deepseek_peak_hours` (Beijing weekend bypass) + `call_deepseek.py` (WARN→hard BLOCKED, no bypass). Old `resolve_peak_conditional`/`peak_alt` provider-swap not ported — rebuild has no alt-provider config to swap to.
+- Second hallucination-from-partial-excerpt incident (first was P3B-04): asked DeepSeek for a "full corrected `main()`" from a 2-block excerpt, it invented a different function signature entirely. Fixed by hand (user-approved exception to fully-dispatch-only). Rule now codified in `rebuild/RULES.md` — never request full-function regeneration from a fragment.
 
 ## Future plans (queued, not started)
 

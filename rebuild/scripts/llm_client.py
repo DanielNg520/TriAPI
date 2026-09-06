@@ -12,6 +12,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from typing import Tuple
+from zoneinfo import ZoneInfo
 
 import requests
 import yaml
@@ -19,6 +20,7 @@ from pathlib import Path
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_config.yaml"
 _RULES_PATH = Path(__file__).resolve().parent.parent / "RULES.md"
+_BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def load_model_config() -> dict:
@@ -32,11 +34,13 @@ def load_rules() -> str:
 
 
 def is_deepseek_peak_hours(cfg: dict | None = None) -> bool:
-    """DeepSeek peak billing window (UTC), configurable in model_config.yaml."""
+    """DeepSeek peak billing window (UTC), configurable in model_config.yaml; Beijing weekends are off-peak."""
     cfg = cfg or load_model_config()
+    now = datetime.now(timezone.utc)
+    if now.astimezone(_BEIJING_TZ).weekday() >= 5:
+        return False
     start, end = cfg["deepseek"]["peak_hours_utc"]
-    hour = datetime.now(timezone.utc).hour
-    return start <= hour < end
+    return start <= now.hour < end
 
 
 def execute_deepseek(prompt: str, system_prompt: str, api_key: str) -> Tuple[str, int, int]:

@@ -1,3 +1,11 @@
+### TASK-P3-PEAK-TEST-02: Test for call_deepseek.py hard block
+
+Goal: add a new test file asserting that `main()` refuses (returns 1, no API call attempted) during DeepSeek peak hours. No test file exists for this script today.
+
+New file: TriAPI/rebuild/tests/test_call_deepseek.py
+
+Full current source of the module under test, `TriAPI/rebuild/scripts/call_deepseek.py`:
+```python
 #!/usr/bin/env python3
 """CLI: send a code-writing task to DeepSeek, print the raw response.
 
@@ -60,3 +68,23 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+```
+
+Reference — existing test file's mocking style, `TriAPI/rebuild/tests/test_dispatch.py` (for convention only, do not copy its content):
+```python
+from unittest.mock import patch
+...
+with patch("scripts.dispatch.verify_task") as mock_verify:
+    mock_verify.return_value = {"passed": True, "summary": "ok", "evidence": {}}
+    result = dispatch_task(path, new_content="new\n")
+```
+
+Required test: `test_main_returns_1_and_skips_call_during_peak_hours`
+- Patch `scripts.call_deepseek.llm_client.is_deepseek_peak_hours` to return `True`.
+- Patch `sys.argv` (via `monkeypatch.setattr("sys.argv", [...])`) to `["call_deepseek.py", "--system-file", str(tmp_path / "system.md")]`; create that file with `tmp_path.write_text` (via a `tmp_path` fixture) containing placeholder text, since argparse requires it to exist as a path but `main()` should return before reading it in this code path... note `system_prompt` IS built before the peak-hours check, so the system file must actually exist and be readable, and stdin must not block: also patch `sys.stdin` (e.g. `monkeypatch.setattr("sys.stdin", io.StringIO(""))`) so `prompt = ... sys.stdin.read()` doesn't hang, since no `--prompt-file` is given.
+- Also patch `scripts.call_deepseek.cost.check_budget` and `scripts.call_deepseek.secrets_loader.load_secrets` to raise `AssertionError("should not be called")` if invoked, proving the function returned before reaching them.
+- Call `call_deepseek.main()` directly (import `from scripts import call_deepseek`) and assert it returns `1`.
+
+Needed imports: `io`, `from pathlib import Path` (via `tmp_path` fixture, no direct import needed), `from unittest.mock import patch`, `from scripts import call_deepseek`. Use `pytest`'s built-in `tmp_path` and `monkeypatch` fixtures as test function parameters.
+
+Scope: only this one test function in this one new file.
