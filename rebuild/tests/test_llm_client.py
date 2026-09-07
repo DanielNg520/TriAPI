@@ -1,14 +1,8 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from scripts.llm_client import (
-    _IP_LIKE_RE,
-    _PHONE_LIKE_RE,
-    _sanitize_for_openrouter_content_filter,
-    execute_openrouter,
-    extract_code_block,
-    is_deepseek_peak_hours,
-)
+from scripts.llm_client import execute_openrouter, extract_code_block, is_deepseek_peak_hours
+from scripts.openrouter_sanitizer import _PHONE_LIKE_RE
 import pytest
 
 
@@ -133,32 +127,3 @@ def test_execute_openrouter_sanitizes_prompt_and_system_prompt():
     sent_prompt = sent_payload["messages"][1]["content"]
     assert phone not in sent_prompt
     assert _PHONE_LIKE_RE.search(sent_prompt) is None
-
-
-def test_sanitize_phone_like_is_redacted():
-    phone = "555" + "-" + "555" + "-" + "5555"
-    result = _sanitize_for_openrouter_content_filter(phone)
-    assert result != phone
-    assert _PHONE_LIKE_RE.search(result) is None
-
-
-def test_sanitize_run_id_timestamp_unchanged():
-    run_id = "20260824" + "-" + "153000" + "-" + "a1b2c3"
-    assert _sanitize_for_openrouter_content_filter(run_id) == run_id
-
-
-def test_sanitize_hex_hash_unchanged():
-    hex_hash = "deadbeef1234"
-    assert _sanitize_for_openrouter_content_filter(hex_hash) == hex_hash
-
-
-def test_sanitize_ipv4_like_is_redacted():
-    ip = "192" + "." + "168" + "." + "1" + "." + "1"
-    result = _sanitize_for_openrouter_content_filter(ip)
-    assert result != ip
-    assert _IP_LIKE_RE.search(result) is None
-
-
-def test_sanitize_version_string_not_mangled():
-    version = "1" + "." + "2" + "." + "3"
-    assert _sanitize_for_openrouter_content_filter(version) == version

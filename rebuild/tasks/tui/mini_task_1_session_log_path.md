@@ -1,4 +1,6 @@
 Mini-task 1 (deepseek) — `new_session_log_path`. See rebuild/tasks/triapi_tui_plan.md.
+DONE 2026-09-06 — landed in `rebuild/scripts/tui_session_log.py` (module split out of the
+original monolithic tui.py after this task was applied; prompt below is the original, pre-split).
 
 Skeleton already exists at `rebuild/scripts/tui.py` (Claude-authored: module
 docstring, imports, SESSIONS_DIR/FRAMING_PREFIX constants, the TriapiTUI class,

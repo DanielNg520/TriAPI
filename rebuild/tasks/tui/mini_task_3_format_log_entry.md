@@ -1,4 +1,6 @@
 Mini-task 3 (deepseek) — `format_log_entry`. See rebuild/tasks/triapi_tui_plan.md.
+DONE 2026-09-06 — landed in `rebuild/scripts/tui_session_log.py` (module split out of the
+original monolithic tui.py after this task was applied; prompt below is the original, pre-split).
 
 Paste current `rebuild/scripts/tui.py` verbatim, ask for only this:
 

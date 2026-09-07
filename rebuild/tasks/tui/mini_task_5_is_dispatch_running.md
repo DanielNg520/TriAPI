@@ -1,6 +1,8 @@
 Mini-task 5 (deepseek) — `is_dispatch_running`. See rebuild/tasks/triapi_tui_plan.md.
 
-Paste current `rebuild/scripts/tui.py` verbatim, ask for only this:
+Code now lives in rebuild/scripts/tui_dispatch_status.py (split out of the
+original monolithic tui.py, one small module per concern -- see AGENTS.md).
+Paste current `rebuild/scripts/tui_dispatch_status.py` verbatim, ask for only this:
 
 Replace `is_dispatch_running`'s body per its existing docstring contract: if
 `not DB_PATH.exists()`, return False. Otherwise `conn =
@@ -10,6 +12,6 @@ top of the file), query
 close the connection in a `finally` block, and return `True` if a row was
 found, `False` otherwise.
 
-Do not touch any other function or the class. Return the complete updated file.
+Do not touch anything else in the file. Return the complete updated file.
 
-Checkpoint: `pytest -v rebuild/tests/test_tui.py -k is_dispatch_running` passes.
+Checkpoint: `pytest -v rebuild/tests/test_tui_dispatch_status.py -k is_dispatch_running` passes.

@@ -17,8 +17,12 @@ process, only task status — so the check becomes "warn if any task's status is
 
 ## Architecture
 
-New module `rebuild/scripts/tui.py`, imported by `task_queue.py`'s new `tui` subparser (one-line
-addition to `build_parser`/`main`, done directly — trivial CLI wiring, not dispatched).
+`rebuild/scripts/tui.py` holds only the `TriapiTUI` App class + `main()`, imported by
+`task_queue.py`'s new `tui` subparser (one-line addition to `build_parser`/`main`, done
+directly — trivial CLI wiring, not dispatched). It imports its per-call logic from four small
+sibling modules, one per concern (2026-09-06 restructure: the original single-file skeleton
+below was split out module-by-module, mirroring `openrouter_sanitizer.py`'s split out of
+`llm_client.py` the same day — see AGENTS.md).
 
 Textual (`textual==8.2.8`, already present in the environment; added to `requirements.txt`) for
 the UI: a `RichLog` output pane plus a single-line `Input`. One `App` subclass, `TriapiTUI`,
@@ -27,17 +31,18 @@ API, not a clean isolated contract, so it's Claude-authored directly rather than
 (same reasoning `task_queue.py`'s argparse/schema/`main` got: infra where a wrong signature or a
 hallucinated Textual API call would cost more to review than to just write).
 
-Five standalone helper functions carry the actual per-call logic. Each has a precise
-input/output contract with no Textual dependency, so each is unit-testable in isolation and
-dispatched to DeepSeek exactly like `task_queue.py`'s five `cmd_*` bodies were:
+Five standalone helper functions carry the actual per-call logic, split across four modules by
+concern. Each has a precise input/output contract with no Textual dependency, so each is
+unit-testable in isolation and dispatched to DeepSeek exactly like `task_queue.py`'s five
+`cmd_*` bodies were:
 
-1. `new_session_log_path() -> Path` — one fresh per-session log path, `rebuild/tasks/tui_sessions/<UTC timestamp>.md`.
-2. `build_framed_prompt(raw_prompt: str) -> str` — prefixes the user's raw prompt with a fixed reminder of TriAPI's supervisor role, per the "inject minimal framing" decision.
-3. `format_log_entry(prompt: str, response: str, ts: str) -> str` — renders one markdown carryover-log section.
-4. `append_session_log(log_path: Path, entry: str) -> None` — appends that section to the session's log file, creating it on first write.
-5. `is_dispatch_running() -> bool` — queries `queue.sqlite3` for any `in_progress` task.
+1. `tui_session_log.new_session_log_path() -> Path` — one fresh per-session log path, `rebuild/tasks/tui_sessions/<UTC timestamp>.md`.
+2. `tui_framing.build_framed_prompt(raw_prompt: str) -> str` — prefixes the user's raw prompt with a fixed reminder of TriAPI's supervisor role, per the "inject minimal framing" decision.
+3. `tui_session_log.format_log_entry(prompt: str, response: str, ts: str) -> str` — renders one markdown carryover-log section.
+4. `tui_session_log.append_session_log(log_path: Path, entry: str) -> None` — appends that section to the session's log file, creating it on first write.
+5. `tui_dispatch_status.is_dispatch_running() -> bool` — queries `queue.sqlite3` for any `in_progress` task.
 
-`stream_claude_output(prompt: str) -> Iterator[str]` (subprocess wrapper around `claude -p`,
+`tui_stream.stream_claude_output(prompt: str) -> Iterator[str]` (subprocess wrapper around `claude -p`,
 streaming stdout line by line) is a sixth function with the same isolated-contract shape — also
 dispatched, listed last since it is the one most worth a careful manual read before trusting
 (subprocess handling is exactly the kind of thing DeepSeek has fabricated signatures for before,
@@ -54,9 +59,11 @@ for the human, not an input to the next call).
 
 ## Verification plan
 
-- `rebuild/tests/test_tui.py`: real tests for all six helper functions, written now (will fail
-  with `NotImplementedError` until each mini-task lands — this is intentional, same shape as
-  `test_task_queue.py`'s tests before `task_queue.py`'s five bodies were filled).
+- One test file per module (`test_tui_session_log.py`, `test_tui_framing.py`,
+  `test_tui_dispatch_status.py`, `test_tui_stream.py`): real tests for all six helper functions,
+  written now (will fail with `NotImplementedError` until each mini-task lands — this is
+  intentional, same shape as `test_task_queue.py`'s tests before `task_queue.py`'s five bodies
+  were filled).
 - `stream_claude_output` is tested against a fake `subprocess.Popen` (monkeypatched), not a real
   `claude` invocation — no live API calls from the test suite.
 - Manual end-to-end check once all six land: launch `triapi tui`, type one prompt, confirm the
