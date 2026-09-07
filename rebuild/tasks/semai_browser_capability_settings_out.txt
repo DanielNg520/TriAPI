@@ -1,0 +1,70 @@
+```python
+import ipaddress
+import socket
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
+from urllib.parse import urlparse
+
+from semai.security.path_guard import _allowed_roots, _is_allowed_path
+from semai.workers.base import ProposedAction
+
+if TYPE_CHECKING:
+    from semai.config.schema import Settings
+```
+
+```python
+class BrowserCapability:
+    name = "browser"
+    requires_llm_postprocessing = False  # read() returns usable output without requiring a local LLM service.
+
+    def __init__(self, settings: "Settings | None" = None) -> None:
+        self.settings = settings
+
+    def available(self) -> bool:
+        return True
+
+    def export_pdf(
+        self,
+        url: str,
+        output_path: str,
+        timeout_ms: int = 20_000,
+    ) -> str:
+        """Export the page at the target url as a PDF file, validating path safety."""
+        try:
+            file_path = Path(output_path).expanduser().resolve()
+        except Exception as e:
+            return f"Error resolving output path: {e}"
+
+        if not _is_allowed_path(file_path, self.settings):
+            allowed = ", ".join(str(r) for r in _allowed_roots(self.settings))
+            return (
+                f"Security Error: Access to {file_path} is forbidden. "
+                f"Only the following roots are allowed: {allowed}"
+            )
+
+        ok, err = validate_destination_url(url)
+        if not ok:
+            return err or "Security Error"
+
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return "Error: playwright not installed. Cannot execute JS-heavy browsing."
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page()
+                    page.goto(url, timeout=timeout_ms)
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    page.pdf(path=str(file_path))
+                    return f"OK: exported PDF to {file_path}"
+                finally:
+                    try:
+                        browser.close()
+                    except Exception:
+                        pass
+        except Exception as e:
+            return f"Browser error: {e}"
+```

@@ -1,0 +1,90 @@
+```python
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from semai.security.path_guard import _allowed_roots, _is_allowed_path
+from semai.core.intents import Intent
+from semai.core.results import Result
+from semai.workers.base import ApprovalRequiredWorker, ProposedAction
+
+if TYPE_CHECKING:
+    from semai.config.schema import Settings
+
+_ENCODING = "utf-8"
+
+
+class FileWriteWorker(ApprovalRequiredWorker):
+    """Approval‑required worker that writes text to a user file."""
+    name = "write_file"
+
+    def __init__(self, settings: "Settings | None" = None) -> None:
+        self.settings = settings
+
+    def propose(self, intent: Intent) -> list[ProposedAction]:
+        """
+        Return a ProposedAction describing the write operation.
+        The action is only proposed if the path is inside an allowed root
+        and both `path` and `content` attributes are present.
+        """
+        # Extract required fields from intent; ignore if missing
+        path = getattr(intent, "path", None)
+        content = getattr(intent, "content", "")
+        if not path:
+            return []
+
+        try:
+            file_path = Path(path).expanduser().resolve()
+        except Exception:
+            return []
+
+        if not _is_allowed_path(file_path, self.settings):
+            return []
+
+        desc = f"Write text to {file_path}"
+        payload = {"path": str(file_path), "content": content}
+        return [ProposedAction(action="write_file", description=desc, payload=payload)]
+
+    def execute(self, action: ProposedAction) -> Result:
+        """
+        Perform the approved file write.
+        Re‑validates the path and writes UTF‑8 encoded text.
+        """
+        if action.action != "write_file":
+            return Result(ok=False, message=f"Unsupported action: {action.action}")
+
+        payload = action.payload
+        path_str = payload.get("path")
+        content = payload.get("content", "")
+        if not path_str:
+            return Result(ok=False, message="Missing file path in payload")
+
+        try:
+            file_path = Path(path_str).expanduser().resolve()
+        except Exception as e:
+            return Result(ok=False, message=f"Error resolving file path: {e}")
+
+        # Security check
+        if not _is_allowed_path(file_path, self.settings):
+            allowed = ", ".join(str(r) for r in _allowed_roots(self.settings))
+            return Result(
+                ok=False,
+                message=(
+                    f"Security Error: Access to {file_path} is forbidden. "
+                    f"Only the following roots are allowed: {allowed}"
+                ),
+            )
+
+        try:
+            # Ensure parent directories exist
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            # Write content as UTF‑8
+            file_path.write_text(content, encoding=_ENCODING)
+            byte_count = len(content.encode(_ENCODING))
+        except Exception as e:
+            return Result(ok=False, message=f"Failed to write file: {e}")
+
+        return Result(
+            ok=True,
+            message=f"Successfully wrote {byte_count} bytes to {file_path}",
+        )
+```

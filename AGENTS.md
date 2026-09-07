@@ -69,6 +69,13 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
 - `triapi tui` done: all 6 helper functions landed, `tui` subcommand wired into `task_queue.py`, end-to-end verified (Textual `App.run_test()`, real `claude -p` call, session log correct).
 - Doc audit (2026-09-07): deleted `triapi_tui_plan.md` + its 6 mini-task specs, feature done and tested (git has them); fixed stale test count/dangling refs in `PHASES.md` and `tui_*.py`.
+- Queue drained 2026-09-06: 2 placeholder test entries found done; 1 real bug fixed (SemAI `Settings.load()`
+  dropped 2 env vars); 2 mis-scoped tasks (WebUI teardown — already fully removed per ADR 0014, no-op; "full
+  config port" — assumed dead openclaw architecture) closed with findings, not dispatched as worded.
+- Done 2026-09-06: SemAI `ghostwriter_dir` threaded through the path-allow-list security boundary (7 files,
+  8 DeepSeek calls, each diffed+applied+full-suite-verified individually; 2 test fallouts found+fixed along
+  the way). Registry wiring in `cli.py` was the piece that would've made it a no-op in prod — caught before
+  declaring done. 114/114 tests pass throughout. Detail: SemAI's own `AGENTS.md`.
 
 ## Future plans (queued, not started)
 
