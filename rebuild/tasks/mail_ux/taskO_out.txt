@@ -1,0 +1,21 @@
+```python
+from semai.workers.mail import (
+    AddEmailRuleWorker,
+    CreateGoogleTaskWorker,
+    GetMailFullWorker,
+    ListMailWorker,
+    MarkMailReadWorker,
+    SummarizeMailWorker,
+    TrashMailWorker,
+)
+```
+
+```python
+    registry.register("list_mail", ListMailWorker(settings))
+    registry.register_approval_required("trash_mail", TrashMailWorker(settings))
+    registry.register("mark_mail_read", MarkMailReadWorker())
+    registry.register("get_mail_full", GetMailFullWorker())
+    registry.register("summarize_mail", SummarizeMailWorker(settings))
+    registry.register("create_google_task", CreateGoogleTaskWorker())
+    registry.register_approval_required("add_email_rule", AddEmailRuleWorker(settings))
+```

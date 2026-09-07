@@ -1,0 +1,46 @@
+```python
+_SHOW_FULL_EMAIL_PATTERN = re.compile(r"^show full email (?P<msg_id>[A-Za-z0-9]+)$")
+_SUMMARIZE_EMAIL_PATTERN = re.compile(r"^summarize email (?P<msg_id>[A-Za-z0-9]+)$")
+_REMIND_ME_ABOUT_EMAIL_PATTERN = re.compile(r"^remind me about email (?P<msg_id>[A-Za-z0-9]+)$")
+_ADD_TASK_FROM_EMAIL_PATTERN = re.compile(r"^add task from email (?P<msg_id>[A-Za-z0-9]+)$")
+```
+
+```python
+    m = _SHOW_FULL_EMAIL_PATTERN.match(text)
+    if m:
+        return {
+            "kind": "get_mail_full",
+            "confidence": 1.0,
+            "raw_utterance": utterance,
+            "msg_id": m.group("msg_id"),
+        }
+
+    m = _SUMMARIZE_EMAIL_PATTERN.match(text)
+    if m:
+        return {
+            "kind": "summarize_mail",
+            "confidence": 1.0,
+            "raw_utterance": utterance,
+            "msg_id": m.group("msg_id"),
+        }
+
+    m = _REMIND_ME_ABOUT_EMAIL_PATTERN.match(text)
+    if m:
+        return {
+            "kind": "create_reminder",
+            "confidence": 1.0,
+            "raw_utterance": utterance,
+            "text": f"Email {m.group('msg_id')}",
+            "due_at": _default_due_at(),
+            "source_platform": "telegram",
+        }
+
+    m = _ADD_TASK_FROM_EMAIL_PATTERN.match(text)
+    if m:
+        return {
+            "kind": "create_google_task",
+            "confidence": 1.0,
+            "raw_utterance": utterance,
+            "msg_id": m.group("msg_id"),
+        }
+```

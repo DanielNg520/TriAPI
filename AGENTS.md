@@ -67,9 +67,10 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - Always diff the full response, not just the requested function, on OpenRouter-fallback calls — a real `deepseek-v4-pro` call came back clean (n=1, still worth diffing, just less suspicion).
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` — was `null`, silently inheriting from `~/.gemini/antigravity-cli/settings.json`, shared with other projects.
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
-- SemAI Telegram bug-fix session (2026-09-07): real production bugs found+fixed (auth error logging,
-  mail-keyboard UX, `callback_query`/forum-topic wiring never connected, a topic-table schema crash).
-  Detail: SemAI's own `AGENTS.md` and git history.
+- SemAI Telegram session (2026-09-07): auth error logging, mail-keyboard UX, `callback_query`/forum-topic
+  wiring (was never connected), a topic-table schema crash, then made mail-action buttons actually work
+  (2 new intents+workers, deterministic rule_parser rules, topic-aware replies). One known blocker: Google
+  Tasks needs an OAuth re-consent (scope gap, confirmed via live 403). Detail: SemAI's own `AGENTS.md`.
 
 ## Future plans (queued, not started)
 

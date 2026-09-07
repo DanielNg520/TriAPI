@@ -1,0 +1,10 @@
+```python
+                chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+                topic_id = callback_query.get("message", {}).get("message_thread_id")
+                route = build_route(chat_id, topic_id) if chat_id is not None else None
+                result = await asyncio.to_thread(self._dispatcher.dispatch, utterance)
+                if not result or not hasattr(result, "message") or not getattr(result, "ok", True):
+                    dispatch_failed = True
+                if route and result and hasattr(result, "message"):
+                    await self._send(route, result.message)
+```

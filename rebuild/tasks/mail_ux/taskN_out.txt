@@ -1,0 +1,30 @@
+```python
+from semai.workers.mail_watcher import MailWatcher
+
+
+class CreateGoogleTaskWorker:
+    def __call__(self, intent) -> Result:
+        token = gmail_access_token()
+        gmail_url = (
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/"
+            f"{intent.msg_id}?format=metadata&metadataHeaders=Subject"
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            resp = httpx.get(gmail_url, headers=headers, timeout=10.0)
+            resp.raise_for_status()
+            message: dict[str, Any] = resp.json()
+            subject = MailWatcher._extract_subject(message)
+
+            tasks_url = "https://tasks.googleapis.com/tasks/v1/lists/@default/tasks"
+            task_resp = httpx.post(
+                tasks_url,
+                headers=headers,
+                json={"title": subject},
+                timeout=10.0,
+            )
+            task_resp.raise_for_status()
+            return Result(ok=True, message=f"Created Google Task: {subject}")
+        except Exception as exc:
+            return Result(ok=False, message=str(exc))
+```
