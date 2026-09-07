@@ -1,0 +1,131 @@
+```OLD
+class GhostwriterDraft(BaseIntent):
+    kind: Literal["ghostwriter"]
+    prompt: str = Field(min_length=1)
+    url: str = ""
+    job_dir: str = ""
+
+
+_AnyIntent = Union[
+    RememberFact, RecallMemory,
+    Confirm,
+    SystemStatus, CreateReminder, CheckReminders,
+    Chat, Unknown, RunCommand,
+    IngestDocument,
+    WriteFile,
+    ListMail,
+    TrashMail,
+    MarkMailRead,
+    GetMailFull,
+    ListCalendarEvents,
+    CreateCalendarEvent,
+    DeleteCalendarEvent,
+    GhostwriterDraft,
+    TriggerN8n,
+    BrowserAction,
+    AddEmailRule,
+]
+Intent = Annotated[_AnyIntent, Field(discriminator="kind")]
+
+INTENT_KINDS = (
+    "remember_fact",
+    "recall_memory",
+    "confirm",
+    "system_status",
+    "create_reminder",
+    "check_reminders",
+    "chat",
+    "ingest_document",
+    "write_file",
+    "unknown",
+    "run_command",
+    "trigger_n8n",
+    "list_mail",
+    "trash_mail",
+    "mark_mail_read",
+    "get_mail_full",
+    "list_calendar_events",
+    "create_calendar_event",
+    "delete_calendar_event",
+    "ghostwriter",
+    "browser_action",
+    "add_email_rule",
+)
+```
+
+```NEW
+class GhostwriterDraft(BaseIntent):
+    kind: Literal["ghostwriter"]
+    prompt: str = Field(min_length=1)
+    url: str = ""
+    job_dir: str = ""
+
+
+class WebSearch(BaseIntent):
+    kind: Literal["web_search"]
+    query: str = Field(min_length=1)
+
+
+_AnyIntent = Union[
+    RememberFact, RecallMemory,
+    Confirm,
+    SystemStatus, CreateReminder, CheckReminders,
+    Chat, Unknown, RunCommand,
+    IngestDocument,
+    WriteFile,
+    ListMail,
+    TrashMail,
+    MarkMailRead,
+    GetMailFull,
+    ListCalendarEvents,
+    CreateCalendarEvent,
+    DeleteCalendarEvent,
+    GhostwriterDraft,
+    TriggerN8n,
+    BrowserAction,
+    AddEmailRule,
+    WebSearch,
+]
+Intent = Annotated[_AnyIntent, Field(discriminator="kind")]
+
+INTENT_KINDS = (
+    "remember_fact",
+    "recall_memory",
+    "confirm",
+    "system_status",
+    "create_reminder",
+    "check_reminders",
+    "chat",
+    "ingest_document",
+    "write_file",
+    "unknown",
+    "run_command",
+    "trigger_n8n",
+    "list_mail",
+    "trash_mail",
+    "mark_mail_read",
+    "get_mail_full",
+    "list_calendar_events",
+    "create_calendar_event",
+    "delete_calendar_event",
+    "ghostwriter",
+    "browser_action",
+    "add_email_rule",
+    "web_search",
+)
+```
+
+```OLD
+    "ghostwriter": GhostwriterDraft,
+    "browser_action": BrowserAction,
+    "add_email_rule": AddEmailRule,
+}
+```
+
+```NEW
+    "ghostwriter": GhostwriterDraft,
+    "browser_action": BrowserAction,
+    "add_email_rule": AddEmailRule,
+    "web_search": WebSearch,
+}
+```

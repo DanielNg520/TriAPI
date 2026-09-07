@@ -1,0 +1,20 @@
+OLD:
+```python
+from semai.workers.terminal import TerminalWorker
+```
+NEW:
+```python
+from semai.workers.terminal import TerminalWorker
+from semai.workers.web_search import WebSearchWorker
+```
+OLD:
+```python
+    registry.register("ghostwriter", GhostwriterWorker(settings))
+    return registry
+```
+NEW:
+```python
+    registry.register("ghostwriter", GhostwriterWorker(settings))
+    registry.register("web_search", WebSearchWorker(settings))
+    return registry
+```

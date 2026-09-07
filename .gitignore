@@ -16,3 +16,4 @@ logs/rejected_writes/
 logs/triapi_bugs/*
 !logs/triapi_bugs/.gitkeep
 rebuild/logs/*.jsonl
+rebuild/queue.sqlite3

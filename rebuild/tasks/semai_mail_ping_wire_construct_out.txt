@@ -1,0 +1,32 @@
+```python
+async for payload in self._mail_watcher.poll():
+    # Validate that payload is a well-formed "mail_ping:" JSON string.
+    try:
+        # Parse the JSON after the "mail_ping:" prefix.
+        ...
+        # Extract msg_id and sender for logging/title purposes only.
+        ...
+    except ...:
+        # Handle malformed payload without forwarding it.
+        ...
+    else:
+        # Forward the entire original payload string unchanged.
+        await deliver(self.settings, store, "mail", message=payload)
+```
+
+```python
+if text.startswith("mail_ping:"):
+    # Parse the JSON object with keys msg_id, sender, subject, snippet.
+    try:
+        ...
+    except ...:
+        # Handle malformed JSON payload.
+        ...
+    else:
+        # Build human-readable message from parsed fields.
+        ...
+        # Build 5-button inline keyboard keyed off msg_id.
+        ...
+        # Send the message with the inline keyboard.
+        ...
+```

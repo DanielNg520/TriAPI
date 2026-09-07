@@ -17,6 +17,35 @@ No worker-to-worker handoff, ever — that chain shape is what let bugs propagat
 
 Test command: `cd rebuild && python3 -m pytest -v tests/`
 
+### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
+
+Not a universal default — one trial (`task_queue.py`, 5/5 clean, one spec-gap follow-up)
+isn't enough to say it beats plain one-function dispatch generally, only that it removes
+the "builder infers structure from a fragment" failure mode. Use it when:
+- A new file has 3+ functions sharing infra (schema, connection, argparse) where a wrong
+  early signature would force rework in every later call.
+- Interface precision matters (exact return codes, error text, status transitions).
+
+Skip it (plain one-function-per-call dispatch on the live file) for single-function tasks,
+small edits to an existing file, or anything where writing a skeleton first is pure overhead.
+Either way: write tests from the function's *intent*, not just its docstring — that's what
+caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
+
+### Hub-loop supervisor (queue-driven, doc only — loop not yet turned on)
+
+- Task store: `rebuild/scripts/task_queue.py` (SQLite+WAL, `rebuild/queue.sqlite3`, gitignored).
+- Global command: `triapi` (thin `~/.local/bin/triapi` wrapper, any cwd) — `add`, `list`,
+  `approve`, `claim`, `complete`. See the file's own docstrings for each subcommand's contract.
+- Intended loop, not yet started: a persistent `ScheduleWakeup`/`/loop` dynamic-mode session
+  (not a fresh `claude -p` per cycle) calls `triapi claim` → dispatches to DeepSeek/agy per
+  `rebuild/RULES.md` → Claude audits the result → `triapi complete`, rescheduling around
+  `llm_client.is_deepseek_peak_hours()`.
+- Context hygiene for that loop: `/compact` once each cycle's result is durably in the
+  store; `/clear` before a long scheduled gap (prompt-cache TTL ~1hr won't survive a
+  multi-hour peak-hour wait anyway); push any individually heavy dispatch into a fork
+  rather than absorbing its transcript into the hub session directly.
+- Textual TUI control panel remains a separate, future, not-yet-scoped follow-up.
+
 ## Doc policy
 
 One file only: this one. Carryover is the section below, not a separate file.
@@ -27,22 +56,16 @@ A pending removal task states the action only ("delete file X"), never the reaso
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
 
-## Carryover (current state, 2026-09-05)
+## Carryover (current state, 2026-09-06)
 
-- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 34/34 real tests passing.
+- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 48/48 real tests passing.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
-- Efficiency additions done: spend cap (`cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag) and code-block extractor (`llm_client.extract_code_block`).
-- One DeepSeek-written test batch (P3B-04) failed audit — wrong return type assumed, missing yaml key, bad call signature. Rewritten by Claude directly rather than re-dispatched.
-- Design principle now explicit: hub-and-spoke, not waterfall — every worker result routes through Claude before the next step, see `## Current architecture` above.
-- OpenRouter: recommended against adding for now — shared rate-limit pool, content-filter false positives, free-tier hallucination were all real problems in the old pipeline.
-- If OpenRouter is added later, the right slot is a Phase-4 escalation fallback leg, not a peer to DeepSeek.
-- SemAI Path B fixes applied via the rebuild pipeline (commit `e512904` in SemAI, local on branch `migration-clean-up`, not yet pushed — user hasn't confirmed the push).
-- Found+fixed a bug in `verify.py` while dispatching against SemAI: stdout+stderr concatenation let stderr's unittest noise mask the real pytest result. Commit `3edebee`, regression-tested.
-- SemAI's own docs purged to the same single-AGENTS.md policy (commit `c9861fa` in SemAI, same branch).
-- Doc policy is now GLOBAL — applies to every repo, not just TriAPI.
-- All rebuild commits pushed to origin/main as of `ee262c0`.
-- Salvaged DeepSeek peak-hour guard from old `scripts/budget_guard.py` into `rebuild/scripts/llm_client.is_deepseek_peak_hours` (Beijing weekend bypass) + `call_deepseek.py` (WARN→hard BLOCKED, no bypass). Old `resolve_peak_conditional`/`peak_alt` provider-swap not ported — rebuild has no alt-provider config to swap to.
-- Second hallucination-from-partial-excerpt incident (first was P3B-04): asked DeepSeek for a "full corrected `main()`" from a 2-block excerpt, it invented a different function signature entirely. Fixed by hand (user-approved exception to fully-dispatch-only). Rule now codified in `rebuild/RULES.md` — never request full-function regeneration from a fragment.
+- Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site (2026-09-06 audit).
+- DeepSeek peak-hour guard (`llm_client.is_deepseek_peak_hours`, Beijing weekend bypass) hard-blocks in `call_deepseek.py`, no bypass flag.
+- OpenRouter: recommended against adding now — shared rate-limit pool, content-filter false positives, free-tier hallucination were real old-pipeline problems.
+  If added later, slot it as a Phase-4 escalation fallback, not a DeepSeek peer.
+- Full audit (2026-09-06) of `rebuild/`'s own claims vs live code — queue lifecycle, task/commit cross-check — all accurate.
+  No disconnect-from-live-path bugs here (two found+fixed in SemAI instead — see its own `AGENTS.md`).
 
 ## Future plans (queued, not started)
 
@@ -61,22 +84,6 @@ A cloud model then integrates the draft into the real file precisely.
 - Known building block: `scripts/edit_blocks.py` (old pipeline) already does Search/Replace materialization — reuse/extend, don't rebuild.
 - Tree-sitter itself is a new dependency, not used anywhere in TriAPI today.
 - Status: design reference only. User wants to work on this together personally — do not start solo.
-
-### 2. `triapi tui` — interactive terminal driver
-
-Goal: a `triapi tui` subcommand as an alternative entry point.
-Each typed prompt triggers a fresh, independent `claude -p` call — explicitly no session continuity.
-Instead, each call's outcome gets logged to this file's carryover section so the next call has context.
-Streams output live as it's generated, not buffered.
-
-Open questions, unresolved:
-- Curses vs. a TUI library (textual/rich) — no dependency choice made yet.
-- One log entry per call, or per session (multiple prompts)?
-- Whether to inject fixed system framing around the raw prompt, or send it verbatim.
-- Whether to block/warn if a dispatch is already running in the background.
-
-Predates the rebuild and the new doc policy — needs re-scoping against whichever pipeline is live when planned.
-Status: blocker cleared long ago, never dispatched. Needs the user's input on the open questions first.
 
 ## Archive
 

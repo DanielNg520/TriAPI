@@ -1,0 +1,71 @@
+```python
+import json
+```
+
+```python
+    async def poll(self):
+        """Yield mail_ping payloads for unread messages matching no rules."""
+        rules_text = self._load_rules()
+        token = await asyncio.to_thread(gmail_access_token)
+        headers = {"Authorization": f"Bearer {token}"}
+        base_url = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+
+        params = {"q": "is:unread"}
+        resp = await asyncio.to_thread(
+            self.client.get, base_url, headers=headers, params=params, timeout=10.0
+        )
+        resp.raise_for_status()
+        results = resp.json()
+        messages = list(results.get("messages") or [])
+
+        while results.get("nextPageToken"):
+            params["pageToken"] = results["nextPageToken"]
+            resp = await asyncio.to_thread(
+                self.client.get, base_url, headers=headers, params=params, timeout=10.0
+            )
+            resp.raise_for_status()
+            results = resp.json()
+            messages.extend(results.get("messages") or [])
+
+        for message in messages:
+            msg_id = message["id"]
+            if self._is_processed(msg_id):
+                continue
+
+            try:
+                msg_resp = await asyncio.to_thread(
+                    self.client.get,
+                    f"{base_url}/{msg_id}",
+                    headers=headers,
+                    params={"format": "metadata", "metadataHeaders": ["From", "Subject"]},
+                    timeout=10.0,
+                )
+                msg_resp.raise_for_status()
+                msg = msg_resp.json()
+                sender = self._extract_sender(msg)
+                subject = self._extract_subject(msg)
+                snippet = msg.get("snippet", "")
+            except Exception:
+                continue
+
+            if rules_text and self._matches_rules(rules_text, sender):
+                self._mark_processed(msg_id)
+                continue
+
+            if self._has_default(sender):
+                self._mark_processed(msg_id)
+                continue
+
+            self._mark_processed(msg_id)
+            yield "mail_ping:" + json.dumps({"msg_id": msg_id, "sender": sender, "subject": subject, "snippet": snippet})
+```
+
+```python
+    @staticmethod
+    def _extract_subject(message: dict) -> str:
+        headers = {
+            header.get("name", "").lower(): header.get("value", "")
+            for header in message.get("payload", {}).get("headers", [])
+        }
+        return headers.get("subject", "(no subject)")
+```

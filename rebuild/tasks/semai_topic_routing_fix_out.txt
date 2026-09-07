@@ -1,0 +1,1 @@
+    _FORUM_TOPICS = ("reminders", "mail", "ghostwriter", "agent", "dispatch")
