@@ -1,6 +1,5 @@
-"""Per-session carryover log for `triapi tui` (see rebuild/tasks/triapi_tui_plan.md,
-"Per-session carryover logging"). One file per TUI session, one appended
-section per prompt/response round-trip.
+"""Per-session carryover log for `triapi tui`. One file per TUI session,
+one appended section per prompt/response round-trip.
 """
 
 from datetime import datetime, timezone

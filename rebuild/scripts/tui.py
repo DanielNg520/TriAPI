@@ -1,14 +1,11 @@
-"""Interactive TUI driver for TriAPI (see AGENTS.md, "triapi tui", and
-rebuild/tasks/triapi_tui_plan.md for the full design).
+"""Interactive TUI driver for TriAPI (see AGENTS.md, "triapi tui").
 
 Each submitted prompt triggers a fresh, independent `claude -p` call --
 no session continuity. Continuity instead comes from a per-session
 carryover log file under rebuild/tasks/tui_sessions/.
 
-This module holds only the Textual App wiring (Claude-authored, infra --
-see rebuild/tasks/triapi_tui_plan.md, "Architecture"). The per-call logic
-lives in its own small module per concern, each filled in by a separate
-DeepSeek call per rebuild/tasks/tui/mini_task_{1..6}_*.md:
+This module holds only the Textual App wiring (Claude-authored, infra).
+The per-call logic lives in its own small module per concern:
   - scripts.tui_session_log: new_session_log_path, format_log_entry, append_session_log
   - scripts.tui_framing: build_framed_prompt
   - scripts.tui_dispatch_status: is_dispatch_running
@@ -32,7 +29,7 @@ from scripts.tui_stream import stream_claude_output
 class TriapiTUI(App):
     """Textual app: a scrolling output log plus a single-line input box.
     Glue code wiring the four helper modules above together -- infra,
-    not dispatched (see rebuild/tasks/triapi_tui_plan.md, "Architecture")."""
+    not dispatched (Claude-authored directly, see AGENTS.md)."""
 
     CSS = """
     RichLog { border: solid $accent; height: 1fr; }

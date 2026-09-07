@@ -1,6 +1,5 @@
 """Streams a fresh `claude -p` call's output line by line for `triapi tui`
-(see rebuild/tasks/triapi_tui_plan.md, "Architecture" -- no session
-continuity, one subprocess per submitted prompt).
+-- no session continuity, one subprocess per submitted prompt.
 """
 
 import subprocess

@@ -1,6 +1,6 @@
 """Fixed supervisor-role framing prepended to every `triapi tui` prompt
-before it's sent to `claude -p` (see rebuild/tasks/triapi_tui_plan.md,
-"inject minimal framing").
+before it's sent to `claude -p` -- each call is fresh and memory-less, so
+this reminds it it's operating as TriAPI's supervisor.
 """
 
 FRAMING_PREFIX = (

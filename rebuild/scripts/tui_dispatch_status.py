@@ -1,5 +1,6 @@
 """Checks whether a `triapi claim` is currently in flight, for `triapi tui`'s
-startup warning (see rebuild/tasks/triapi_tui_plan.md, re-scoping note).
+startup warning (warns, doesn't block -- the queue has no dispatch process
+to check for, only task status).
 """
 
 import sqlite3

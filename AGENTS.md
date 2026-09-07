@@ -56,22 +56,19 @@ A pending removal task states the action only ("delete file X"), never the reaso
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
 
-## Carryover (current state, 2026-09-06)
+## Carryover (current state, 2026-09-07)
 
 - TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
-- Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site (2026-09-06 audit).
-- DeepSeek peak-hour guard (`llm_client.is_deepseek_peak_hours`, Beijing weekend bypass): `call_deepseek.py` now falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) instead of blocking (2026-09-06, user-approved override of the prior no-OpenRouter stance).
-- OpenRouter otherwise still not added as a general DeepSeek peer — shared rate-limit pool, content-filter false positives, free-tier hallucination were real old-pipeline problems; the peak-hours fallback above is the sole call site.
-- OpenRouter content-filter sanitizer (email/phone/IP redaction) ported into `openrouter_sanitizer.py`, wired into `execute_openrouter` — was missing when the fallback first landed, added same day after being flagged.
-- Nemotron fallback quirk (2026-09-06): 3/3 real dispatch calls through it made an unrequested edit to an unrelated line despite explicit "don't touch anything else" instructions (caught and reverted each time — see `triapi_tui_plan.md`'s mini-tasks). Always diff the full response against the untouched file, not just the requested function, when a call fell back to OpenRouter.
-- Real `deepseek-v4-pro` (2026-09-07, off-peak, same "don't touch anything else" scope test): 1/1 clean, byte-identical elsewhere. No sign of the nemotron pattern above, but n=1 — keep diffing every DeepSeek response too, just with less suspicion than an OpenRouter-fallback one.
-- agy model pinned explicitly (2026-09-07): `model_config.yaml`'s `agy.model` was `null` (agy's own default), which actually resolved to whatever `~/.gemini/antigravity-cli/settings.json` says — a file shared with other projects (ECE111, oh-my-llama, SemAI), so a change there for an unrelated project would've silently changed TriAPI's docs-tier model. Now pinned to `"gemini-3.8-flash-medium"` (same model that was actually running).
-- `rebuild/README.md` rewritten by agy (2026-09-07, first live use of the pinned model) to reflect the current architecture (task_queue.py CLI, tui + its 4 helper modules, OpenRouter fallback, sanitizer). One factual error caught in review — not agy's fault, a wrong path I gave it in the prompt (`tasks/queue.sqlite3` vs. the real `queue.sqlite3`) — fixed before applying.
-- Per-concern module split (2026-09-06): `tui.py`'s helpers moved into `tui_session_log.py`/`tui_framing.py`/`tui_dispatch_status.py`/`tui_stream.py`; `llm_client.py`'s sanitizer moved into `openrouter_sanitizer.py`. Convention going forward: split by concern while a file is still small, don't wait for a size ceiling.
-- `triapi tui` (design in `rebuild/tasks/triapi_tui_plan.md`) done 2026-09-06/07: all 6 mini-tasks landed, `tui` subcommand wired, 66/66 tests pass, end-to-end verified via Textual's `App.run_test()` harness with a real `claude -p` call (streamed output, session log file written and formatted correctly, second launch gets a distinct file).
-- Full audit (2026-09-06) of `rebuild/`'s own claims vs live code — queue lifecycle, task/commit cross-check — all accurate.
-  No disconnect-from-live-path bugs here (two found+fixed in SemAI instead — see its own `AGENTS.md`).
+- Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site.
+- `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking — sanitized via `openrouter_sanitizer.py` (content filter blocks email/phone/IP-shaped tokens).
+- OpenRouter still not a general DeepSeek peer — shared rate-limit pool, content-filter/hallucination issues in the old pipeline. The peak-hours fallback is the sole call site.
+- Nemotron quirk: 3/3 real calls made an unrequested edit to an unrelated line despite explicit scope instructions (caught, reverted each time).
+- Always diff the full response, not just the requested function, on OpenRouter-fallback calls — a real `deepseek-v4-pro` call came back clean (n=1, still worth diffing, just less suspicion).
+- `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` — was `null`, silently inheriting from `~/.gemini/antigravity-cli/settings.json`, shared with other projects.
+- Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
+- `triapi tui` done: all 6 helper functions landed, `tui` subcommand wired into `task_queue.py`, end-to-end verified (Textual `App.run_test()`, real `claude -p` call, session log correct).
+- Doc audit (2026-09-07): deleted `triapi_tui_plan.md` + its 6 mini-task specs, feature done and tested (git has them); fixed stale test count/dangling refs in `PHASES.md` and `tui_*.py`.
 
 ## Future plans (queued, not started)
 
