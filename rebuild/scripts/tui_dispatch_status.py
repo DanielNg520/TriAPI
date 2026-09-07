@@ -16,4 +16,15 @@ def is_dispatch_running() -> bool:
     Open and close your own connection via sqlite3.connect(DB_PATH) and
     scripts.task_queue.init_conn(conn); don't assume one is passed in.
     """
-    raise NotImplementedError
+    if not DB_PATH.exists():
+        return False
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        init_conn(conn)
+        row = conn.execute(
+            "SELECT 1 FROM tasks WHERE status = 'in_progress' LIMIT 1"
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()

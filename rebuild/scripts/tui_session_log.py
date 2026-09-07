@@ -54,4 +54,6 @@ def append_session_log(log_path: Path, entry: str) -> None:
     missing parent directories) if it doesn't exist yet. Never
     overwrite or truncate existing content -- append only.
     """
-    raise NotImplementedError
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(entry)

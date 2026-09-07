@@ -18,4 +18,12 @@ def stream_claude_output(prompt: str) -> Iterator[str]:
     on the process to reap it. Do not raise if the process exits
     non-zero -- just stop yielding, the caller doesn't need the exit code.
     """
-    raise NotImplementedError
+    proc = subprocess.Popen(
+        ["claude", "-p", prompt],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    for line in proc.stdout:
+        yield line.rstrip("\n")
+    proc.wait()

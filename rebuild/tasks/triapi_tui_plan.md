@@ -1,6 +1,7 @@
 # `triapi tui` — detailed plan
 
-Status: planned, not dispatched. Skeleton + mini-task specs written 2026-09-06.
+Status: done 2026-09-06 — all 6 mini-tasks landed, 66/66 tests pass, `tui` subcommand wired.
+Not yet manually run end-to-end in a real terminal (see "Verification plan" below).
 Resolved design decisions (user, 2026-09-06) are in AGENTS.md's "Future plans" section — this
 file is the implementation-level detail underneath that entry, not a replacement for it.
 

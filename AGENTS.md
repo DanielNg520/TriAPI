@@ -58,12 +58,15 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 
 ## Carryover (current state, 2026-09-06)
 
-- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 48/48 real tests passing.
-  Plus 11 new `test_tui.py` tests, intentionally red (`NotImplementedError` stubs) until the tui mini-tasks land.
+- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site (2026-09-06 audit).
 - DeepSeek peak-hour guard (`llm_client.is_deepseek_peak_hours`, Beijing weekend bypass): `call_deepseek.py` now falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) instead of blocking (2026-09-06, user-approved override of the prior no-OpenRouter stance).
 - OpenRouter otherwise still not added as a general DeepSeek peer — shared rate-limit pool, content-filter false positives, free-tier hallucination were real old-pipeline problems; the peak-hours fallback above is the sole call site.
+- OpenRouter content-filter sanitizer (email/phone/IP redaction) ported into `openrouter_sanitizer.py`, wired into `execute_openrouter` — was missing when the fallback first landed, added same day after being flagged.
+- Nemotron fallback quirk (2026-09-06): 3/3 real dispatch calls through it made an unrequested edit to an unrelated line despite explicit "don't touch anything else" instructions (caught and reverted each time — see `triapi_tui_plan.md`'s mini-tasks). Always diff the full response against the untouched file, not just the requested function, when a call fell back to OpenRouter.
+- Per-concern module split (2026-09-06): `tui.py`'s helpers moved into `tui_session_log.py`/`tui_framing.py`/`tui_dispatch_status.py`/`tui_stream.py`; `llm_client.py`'s sanitizer moved into `openrouter_sanitizer.py`. Convention going forward: split by concern while a file is still small, don't wait for a size ceiling.
+- `triapi tui` (design in `rebuild/tasks/triapi_tui_plan.md`) done 2026-09-06: all 6 mini-tasks landed, `tui` subcommand wired and importable, 66/66 tests pass. Not yet manually run end-to-end in a real terminal.
 - Full audit (2026-09-06) of `rebuild/`'s own claims vs live code — queue lifecycle, task/commit cross-check — all accurate.
   No disconnect-from-live-path bugs here (two found+fixed in SemAI instead — see its own `AGENTS.md`).
 
@@ -84,25 +87,6 @@ A cloud model then integrates the draft into the real file precisely.
 - Known building block: `scripts/edit_blocks.py` (old pipeline) already does Search/Replace materialization — reuse/extend, don't rebuild.
 - Tree-sitter itself is a new dependency, not used anywhere in TriAPI today.
 - Status: design reference only. User wants to work on this together personally — do not start solo.
-
-### 2. `triapi tui` — interactive terminal driver
-
-Goal: a `tui` subcommand on the live `triapi` CLI (`rebuild/scripts/task_queue.py`).
-Each typed prompt triggers a fresh, independent `claude -p` call — explicitly no session continuity.
-Continuity instead comes from a per-session log file under `rebuild/tasks/tui_sessions/`, not this file.
-Streams output live as it's generated, not buffered.
-
-Resolved 2026-09-06 (user decision):
-- Toolkit: `textual` (added to `requirements.txt`) — not curses, not rich alone.
-- Carryover logging: one dated log file per TUI session (covers every prompt in that session), not per call.
-- Framing: inject minimal fixed system framing around each raw prompt so a fresh, memory-less call still knows it's operating as TriAPI's supervisor.
-- Concurrency: warn, don't block, if any queue task is `in_progress` (re-scoped from the old "dispatch process" concept — see `rebuild/tasks/triapi_tui_plan.md`).
-
-Status: full plan (`rebuild/tasks/triapi_tui_plan.md`) and skeleton written 2026-09-06 —
-`rebuild/scripts/tui.py` (constructor: App wiring + 6 stubbed helper contracts), `tui`
-subcommand wired into `task_queue.py`, `rebuild/tests/test_tui.py` (11 real tests, all
-failing on `NotImplementedError` until filled). Six builder mini-tasks written, not yet
-dispatched: `rebuild/tasks/tui/mini_task_{1..6}_*.md`.
 
 ## Archive
 
