@@ -32,7 +32,14 @@ agy:
   # directly instead of returning text for review -- see llm_client.py's
   # _call_agy_cli docstring in the old pipeline for the incident this
   # guards against.
-  model: null        # omit --model to use agy's own default
+  #
+  # Pinned explicitly (2026-09-07, was null/agy's-own-default): agy's
+  # default model lives in ~/.gemini/antigravity-cli/settings.json, a file
+  # TriAPI doesn't own and shares with other projects (ECE111, oh-my-llama,
+  # SemAI) -- a change there for an unrelated project would silently
+  # change TriAPI's docs-tier model too, with nothing in this repo
+  # recording it. Pinning here makes that explicit and immune to drift.
+  model: "gemini-3.8-flash-medium"
   effort: "medium"
 
 # Subprocess timeouts (seconds).
