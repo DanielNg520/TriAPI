@@ -92,14 +92,14 @@ Each typed prompt triggers a fresh, independent `claude -p` call — explicitly 
 Instead, each call's outcome gets logged to this file's carryover section so the next call has context.
 Streams output live as it's generated, not buffered.
 
-Open questions, unresolved:
-- Curses vs. a TUI library (textual/rich) — no dependency choice made yet.
-- One log entry per call, or per session (multiple prompts)?
-- Whether to inject fixed system framing around the raw prompt, or send it verbatim.
-- Whether to block/warn if a dispatch is already running in the background.
+Resolved 2026-09-06 (user decision):
+- Toolkit: `textual`, a new dependency — not curses, not rich alone.
+- Carryover logging: one dated entry per TUI session (covers every prompt in that session), not per call.
+- Framing: inject minimal fixed system framing around each raw prompt so a fresh, memory-less call still knows it's operating as TriAPI's supervisor.
+- Concurrency: warn, don't block, if a `triapi dispatch` is already running in the background.
 
 Predates the rebuild and the new doc policy — needs re-scoping against whichever pipeline is live when planned.
-Status: blocker cleared long ago, never dispatched. Needs the user's input on the open questions first.
+Status: design questions resolved, ready for a `triapi plan` session. Not yet planned or dispatched.
 Was accidentally dropped from this file before 2026-09-06 (uncommitted edit, never diffed against history);
 restored 2026-09-06 when the user asked about it and it turned out to be missing.
 
