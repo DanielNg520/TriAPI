@@ -67,6 +67,8 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - Always diff the full response, not just the requested function, on OpenRouter-fallback calls — a real `deepseek-v4-pro` call came back clean (n=1, still worth diffing, just less suspicion).
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` — was `null`, silently inheriting from `~/.gemini/antigravity-cli/settings.json`, shared with other projects.
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
+- SemAI TickerWatcher reinstate (6 tasks, all done+verified 2026-09-07): schema fields, pyproject yfinance dep, `adapters/stocks.py`, `Store` ticker methods, watcher wiring. See SemAI's own AGENTS.md for follow-ups left open.
+- agy wrapped a plain-file reply in a stray triple-backtick fence despite the "reply with complete file content only" instruction (pyproject.toml task) — stripped before applying, worth checking on future agy file-content calls.
 
 ## Future plans (queued, not started)
 
