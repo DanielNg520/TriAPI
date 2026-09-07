@@ -85,6 +85,24 @@ A cloud model then integrates the draft into the real file precisely.
 - Tree-sitter itself is a new dependency, not used anywhere in TriAPI today.
 - Status: design reference only. User wants to work on this together personally — do not start solo.
 
+### 2. `triapi tui` — interactive terminal driver
+
+Goal: a `triapi tui` subcommand as an alternative entry point.
+Each typed prompt triggers a fresh, independent `claude -p` call — explicitly no session continuity.
+Instead, each call's outcome gets logged to this file's carryover section so the next call has context.
+Streams output live as it's generated, not buffered.
+
+Open questions, unresolved:
+- Curses vs. a TUI library (textual/rich) — no dependency choice made yet.
+- One log entry per call, or per session (multiple prompts)?
+- Whether to inject fixed system framing around the raw prompt, or send it verbatim.
+- Whether to block/warn if a dispatch is already running in the background.
+
+Predates the rebuild and the new doc policy — needs re-scoping against whichever pipeline is live when planned.
+Status: blocker cleared long ago, never dispatched. Needs the user's input on the open questions first.
+Was accidentally dropped from this file before 2026-09-06 (uncommitted edit, never diffed against history);
+restored 2026-09-06 when the user asked about it and it turned out to be missing.
+
 ## Archive
 
 Old bloated docs (plan-block history, file/dir doc overflow, old tier-escalation notes) removed from the tree entirely.
