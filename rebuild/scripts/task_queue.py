@@ -273,6 +273,17 @@ def cmd_complete(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
     return 0
 
 
+def cmd_tui(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
+    """Launch the interactive TUI (scripts/tui.py). Imported lazily so the
+    plain queue CLI (add/list/approve/claim/complete) never pays textual's
+    import cost, and to avoid a circular import (tui.py imports from this
+    module). `conn` is unused -- tui.py manages its own queue.sqlite3
+    connections via is_dispatch_running()."""
+    from scripts import tui
+
+    return tui.main()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -300,6 +311,9 @@ def build_parser() -> argparse.ArgumentParser:
     complete_parser.add_argument("--result", required=True)
     complete_parser.add_argument("--status", choices=["done", "blocked"], required=True)
     complete_parser.set_defaults(func=cmd_complete)
+
+    tui_parser = subparsers.add_parser("tui")
+    tui_parser.set_defaults(func=cmd_tui)
 
     return parser
 

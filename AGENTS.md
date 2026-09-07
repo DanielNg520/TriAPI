@@ -59,6 +59,7 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 ## Carryover (current state, 2026-09-06)
 
 - TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 48/48 real tests passing.
+  Plus 11 new `test_tui.py` tests, intentionally red (`NotImplementedError` stubs) until the tui mini-tasks land.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site (2026-09-06 audit).
 - DeepSeek peak-hour guard (`llm_client.is_deepseek_peak_hours`, Beijing weekend bypass) hard-blocks in `call_deepseek.py`, no bypass flag.
@@ -87,21 +88,22 @@ A cloud model then integrates the draft into the real file precisely.
 
 ### 2. `triapi tui` — interactive terminal driver
 
-Goal: a `triapi tui` subcommand as an alternative entry point.
+Goal: a `tui` subcommand on the live `triapi` CLI (`rebuild/scripts/task_queue.py`).
 Each typed prompt triggers a fresh, independent `claude -p` call — explicitly no session continuity.
-Instead, each call's outcome gets logged to this file's carryover section so the next call has context.
+Continuity instead comes from a per-session log file under `rebuild/tasks/tui_sessions/`, not this file.
 Streams output live as it's generated, not buffered.
 
 Resolved 2026-09-06 (user decision):
-- Toolkit: `textual`, a new dependency — not curses, not rich alone.
-- Carryover logging: one dated entry per TUI session (covers every prompt in that session), not per call.
+- Toolkit: `textual` (added to `requirements.txt`) — not curses, not rich alone.
+- Carryover logging: one dated log file per TUI session (covers every prompt in that session), not per call.
 - Framing: inject minimal fixed system framing around each raw prompt so a fresh, memory-less call still knows it's operating as TriAPI's supervisor.
-- Concurrency: warn, don't block, if a `triapi dispatch` is already running in the background.
+- Concurrency: warn, don't block, if any queue task is `in_progress` (re-scoped from the old "dispatch process" concept — see `rebuild/tasks/triapi_tui_plan.md`).
 
-Predates the rebuild and the new doc policy — needs re-scoping against whichever pipeline is live when planned.
-Status: design questions resolved, ready for a `triapi plan` session. Not yet planned or dispatched.
-Was accidentally dropped from this file before 2026-09-06 (uncommitted edit, never diffed against history);
-restored 2026-09-06 when the user asked about it and it turned out to be missing.
+Status: full plan (`rebuild/tasks/triapi_tui_plan.md`) and skeleton written 2026-09-06 —
+`rebuild/scripts/tui.py` (constructor: App wiring + 6 stubbed helper contracts), `tui`
+subcommand wired into `task_queue.py`, `rebuild/tests/test_tui.py` (11 real tests, all
+failing on `NotImplementedError` until filled). Six builder mini-tasks written, not yet
+dispatched: `rebuild/tasks/tui/mini_task_{1..6}_*.md`.
 
 ## Archive
 
