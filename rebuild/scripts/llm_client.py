@@ -2,12 +2,15 @@
 plus a narrow OpenRouter fallback for DeepSeek's peak-billing window.
 
 Trimmed from the old pipeline's scripts/llm_client.py -- dropped Claude
-CLI, Gemini, Ollama, and the OpenRouter-specific content-filter sanitizers
-(none apply here). OpenRouter itself is back, but only as call_deepseek.py's
-peak-hours fallback (see AGENTS.md) -- not a general peer to DeepSeek/agy.
-Kept: the two original working call paths, agy's mandatory safety flags,
-and the argv-size guard (both were real incidents in the old pipeline, see
-docstrings below).
+CLI, Gemini, and Ollama. OpenRouter itself is back, but only as
+call_deepseek.py's peak-hours fallback (see AGENTS.md) -- not a general
+peer to DeepSeek/agy -- and its content-filter sanitizers came back with
+it (still needed: OpenRouter's filter 403s on email/phone/IP-shaped
+tokens, a real live problem in the old pipeline, see
+_sanitize_for_openrouter_content_filter below). Kept: the two original
+working call paths, agy's mandatory safety flags, and the argv-size
+guard (both were real incidents in the old pipeline, see docstrings
+below).
 """
 
 import json
@@ -24,6 +27,43 @@ from pathlib import Path
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_config.yaml"
 _RULES_PATH = Path(__file__).resolve().parent.parent / "RULES.md"
 _BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+
+# OpenRouter's content filter can 403 a request whose prompt contains an
+# email/phone/IP-shaped token, even a synthetic one in test/task fixture
+# data -- ported from the old pipeline's scripts/llm_client.py (real live
+# blocks there, 2026-08-24/25: 36 blocked requests in one day -- 18 PHONE,
+# 12 EMAIL, 6 IP ADDRESS). Applied to every execute_openrouter() call below,
+# the fallback's single call site.
+_EMAIL_LIKE_RE = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+
+# NANP-style phone shape (3-3-4 digit groups with separators). Anchored to
+# that exact grouping so it does NOT match run-id timestamps ("20260824-
+# 153000-a1b2c3"), hex hashes, or version strings ("1.2.3") -- see
+# rebuild/tests/test_llm_client.py's false-positive cases, ported from the
+# old pipeline's tests/test_llm_client_sanitize.py.
+_PHONE_LIKE_RE = re.compile(
+    r"\b(?:\+\d{1,3}\s*)?(?:\(\d{3}\)\s*|\d{3}[\s.\-])\d{3}[\s.\-]\d{4}\b"
+)
+
+# IPv4-shaped tokens (four dot-separated octets).
+_IP_LIKE_RE = re.compile(
+    r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b"
+)
+
+
+def _redact_phone_like(match: re.Match) -> str:
+    return re.sub(r"[\s.\-()]", "-REDACTED-", match.group(0))
+
+
+def _redact_ip_like(match: re.Match) -> str:
+    return match.group(0).replace(".", "-REDACTED-")
+
+
+def _sanitize_for_openrouter_content_filter(text: str) -> str:
+    text = _EMAIL_LIKE_RE.sub(lambda m: m.group(0).replace("@", "(at)"), text)
+    text = _PHONE_LIKE_RE.sub(_redact_phone_like, text)
+    text = _IP_LIKE_RE.sub(_redact_ip_like, text)
+    return text
 
 
 def load_model_config() -> dict:
@@ -93,8 +133,8 @@ def execute_openrouter(prompt: str, system_prompt: str, api_key: str) -> Tuple[s
     payload = {
         "model": orc["fallback_model"],
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": _sanitize_for_openrouter_content_filter(system_prompt)},
+            {"role": "user", "content": _sanitize_for_openrouter_content_filter(prompt)},
         ],
     }
     timeout = cfg["timeouts"]["http"]

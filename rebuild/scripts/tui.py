@@ -44,7 +44,14 @@ def new_session_log_path() -> Path:
     somehow already taken (SESSIONS_DIR / "<ts>.md" exists), append
     "-2", "-3", etc. before ".md" until an unused path is found.
     """
-    raise NotImplementedError
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    base = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    candidate = SESSIONS_DIR / f"{base}.md"
+    suffix = 2
+    while candidate.exists():
+        candidate = SESSIONS_DIR / f"{base}-{suffix}.md"
+        suffix += 1
+    return candidate
 
 
 def build_framed_prompt(raw_prompt: str) -> str:
@@ -52,7 +59,7 @@ def build_framed_prompt(raw_prompt: str) -> str:
     alter raw_prompt's own content, only prepend the fixed prefix
     already defined above as the module-level constant FRAMING_PREFIX.
     """
-    raise NotImplementedError
+    return FRAMING_PREFIX + raw_prompt
 
 
 def format_log_entry(prompt: str, response: str, ts: str) -> str:
