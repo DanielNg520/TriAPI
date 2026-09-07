@@ -1,0 +1,10 @@
+```python
+    async def _delete_message(self, chat_id: int | str, message_id: int) -> bool:
+        """Delete a message. Returns True on success, False on any failure (never raises)."""
+        try:
+            await self._call("deleteMessage", chat_id=chat_id, message_id=message_id)
+            return True
+        except TelegramError as e:
+            log.debug("deleteMessage failed for %s/%s: %s", chat_id, message_id, e)
+            return False
+```

@@ -1,0 +1,6 @@
+<tool_calls>
+<invoke name="exec_command">
+<parameter name="command" string="true">sed -n '1,240p' /home/dyne/Documents/Coding/SemAI/tests/test_semai_telegram.py && echo '---DAEMON---' && sed -n '1,220p' /home/dyne/Documents/Coding/SemAI/tests/test_semai_daemon.py</parameter>
+</invoke>
+</invoke>
+</tool_calls>

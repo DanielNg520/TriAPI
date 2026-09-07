@@ -1,0 +1,8 @@
+```python
+                resp = await self._call(
+                    "getUpdates",
+                    offset=offset,
+                    timeout=self.cfg.telegram_poll_timeout_s,
+                    allowed_updates=["message", "callback_query"],
+                )
+```

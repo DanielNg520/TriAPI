@@ -1,0 +1,33 @@
+```python
+import html
+```
+
+```python
+    @staticmethod
+    def _clean_mail_text(value: str) -> str:
+        """Undo any HTML-entity-encoding already present in raw mail text
+        (some senders put literal `&quot;` etc. straight in the Subject
+        header) and strip invisible Unicode characters some marketing
+        senders inject to dodge spam/clipping filters."""
+        value = html.unescape(value)
+        for ch in ("\u200b", "\u200c", "\u200d", "\u034f", "\ufeff"):
+            value = value.replace(ch, "")
+        return value
+```
+
+```python
+        if text.startswith("mail_ping:"):
+            try:
+                info = json.loads(text[len("mail_ping:"):])
+                msg_id = info["msg_id"]
+                sender = self._clean_mail_text(info["sender"])
+                subject = self._clean_mail_text(info.get("subject", "(no subject)"))
+                snippet = self._clean_mail_text(info.get("snippet", ""))
+            except Exception:
+                pass
+            else:
+                if snippet:
+                    text = f"📧 **{subject}**\nFrom: {sender}\n\n{snippet}"
+                else:
+                    text = f"📧 **{subject}**\nFrom: {sender}"
+```

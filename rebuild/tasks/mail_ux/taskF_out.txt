@@ -1,0 +1,40 @@
+```python
+    async def run(self) -> None:
+        """Async long‑polling loop."""
+        alerts_task: asyncio.Task | None = None
+        try:
+            me = (await self._call("getMe")).get("result", {})
+            log.info("Telegram bot ready: %s", me)
+            await self._ensure_forum_topics()
+            offset = await self._load_offset()
+            alerts_task = asyncio.create_task(self._poll_alerts())
+            while True:
+                resp = await self._call(
+                    "getUpdates",
+                    offset=offset,
+                    timeout=self.cfg.telegram_poll_timeout_s,
+                )
+                updates = resp.get("result", [])
+                if not updates:
+                    continue
+                for upd in updates:
+                    log.debug("got update %s", upd)
+                    offset = max(offset, int(upd["update_id"]) + 1)
+                    callback_query = upd.get("callback_query")
+                    if callback_query is not None:
+                        await self._handle_callback(
+                            callback_query.get("data", ""), callback_query
+                        )
+                        continue
+                    await self._handle_message(upd)
+        except TelegramError as e:
+            log.warning("Telegram error: %s", e)
+        finally:
+            if alerts_task is not None:
+                alerts_task.cancel()
+                try:
+                    await alerts_task
+                except asyncio.CancelledError:
+                    pass
+            await self._client.aclose()
+```

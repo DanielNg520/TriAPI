@@ -44,7 +44,7 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
   store; `/clear` before a long scheduled gap (prompt-cache TTL ~1hr won't survive a
   multi-hour peak-hour wait anyway); push any individually heavy dispatch into a fork
   rather than absorbing its transcript into the hub session directly.
-- Textual TUI control panel remains a separate, future, not-yet-scoped follow-up.
+- `triapi tui` (Textual UI over the queue) is implemented and wired (`scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand), end-to-end verified.
 
 ## Doc policy
 
@@ -67,15 +67,9 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - Always diff the full response, not just the requested function, on OpenRouter-fallback calls — a real `deepseek-v4-pro` call came back clean (n=1, still worth diffing, just less suspicion).
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` — was `null`, silently inheriting from `~/.gemini/antigravity-cli/settings.json`, shared with other projects.
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
-- `triapi tui` done: all 6 helper functions landed, `tui` subcommand wired into `task_queue.py`, end-to-end verified (Textual `App.run_test()`, real `claude -p` call, session log correct).
-- Doc audit (2026-09-07): deleted `triapi_tui_plan.md` + its 6 mini-task specs, feature done and tested (git has them); fixed stale test count/dangling refs in `PHASES.md` and `tui_*.py`.
-- Queue drained 2026-09-06: 2 placeholder test entries found done; 1 real bug fixed (SemAI `Settings.load()`
-  dropped 2 env vars); 2 mis-scoped tasks (WebUI teardown — already fully removed per ADR 0014, no-op; "full
-  config port" — assumed dead openclaw architecture) closed with findings, not dispatched as worded.
-- Done 2026-09-06: SemAI `ghostwriter_dir` threaded through the path-allow-list security boundary (7 files,
-  8 DeepSeek calls, each diffed+applied+full-suite-verified individually; 2 test fallouts found+fixed along
-  the way). Registry wiring in `cli.py` was the piece that would've made it a no-op in prod — caught before
-  declaring done. 114/114 tests pass throughout. Detail: SemAI's own `AGENTS.md`.
+- SemAI Telegram bug-fix session (2026-09-07): real production bugs found+fixed (auth error logging,
+  mail-keyboard UX, `callback_query`/forum-topic wiring never connected, a topic-table schema crash).
+  Detail: SemAI's own `AGENTS.md` and git history.
 
 ## Future plans (queued, not started)
 

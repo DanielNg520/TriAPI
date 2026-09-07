@@ -1,0 +1,13 @@
+```python
+                keyboard = [
+                    [
+                        {"text": "📄 Full", "callback_data": f"mail_action:full:{msg_id}"},
+                        {"text": "📝 Summary", "callback_data": f"mail_action:summary:{msg_id}"},
+                        {"text": "⏰ Remind", "callback_data": f"mail_action:remind:{msg_id}"},
+                    ],
+                    [
+                        {"text": "✅ Task", "callback_data": f"mail_action:task:{msg_id}"},
+                        {"text": "🔇 Mute", "callback_data": f"mail_action:mute:{msg_id}"},
+                    ],
+                ]
+```

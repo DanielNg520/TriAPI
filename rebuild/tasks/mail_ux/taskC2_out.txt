@@ -1,0 +1,103 @@
+```python
+@pytest.mark.asyncio
+async def test_mail_action_success_deletes_message(store, monkeypatch):
+    class NoopWorker:
+        def __call__(self, intent):
+            return None
+
+    monkeypatch.setattr("semai.workers.mail.MarkMailReadWorker", NoopWorker)
+    adapter, _ = await _setup_adapter(store, {123}, dispatcher_result=Result("done", ok=True))
+
+    callback_query = {"id": "cb1", "message": {"chat": {"id": 123}, "message_id": 55}}
+    await adapter._handle_callback("mail_action:full:m1", callback_query)
+
+    assert any(
+        method == "deleteMessage" and json.get("message_id") == 55
+        for method, json in adapter._calls
+    )
+    assert any(
+        method == "answerCallbackQuery" and json.get("text") == "Done"
+        for method, json in adapter._calls
+    )
+    assert not any(
+        method == "editMessageReplyMarkup"
+        for method, _ in adapter._calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_mail_action_delete_failure_falls_back_to_done_markup(store, monkeypatch):
+    class NoopWorker:
+        def __call__(self, intent):
+            return None
+
+    monkeypatch.setattr("semai.workers.mail.MarkMailReadWorker", NoopWorker)
+    adapter, _ = await _setup_adapter(store, {123}, dispatcher_result=Result("done", ok=True))
+
+    original_post = adapter._client.post
+
+    async def failing_delete_post(url: str, *, json):
+        if "deleteMessage" in url.split("/")[-1]:
+            raise httpx.HTTPError("boom")
+        return await original_post(url, json=json)
+
+    adapter._client.post = failing_delete_post
+
+    callback_query = {"id": "cb1", "message": {"chat": {"id": 123}, "message_id": 55}}
+    await adapter._handle_callback("mail_action:full:m1", callback_query)
+
+    assert any(
+        method == "editMessageReplyMarkup"
+        and json.get("reply_markup")
+        == {"inline_keyboard": [[{"text": "✅ Done", "callback_data": "noop"}]]}
+        for method, json in adapter._calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_mail_action_worker_failure_reports_error(store, monkeypatch):
+    class RaisingWorker:
+        def __call__(self, intent):
+            raise RuntimeError("db locked")
+
+    monkeypatch.setattr("semai.workers.mail.MarkMailReadWorker", RaisingWorker)
+    adapter, _ = await _setup_adapter(store, {123}, dispatcher_result=Result("done", ok=True))
+
+    callback_query = {"id": "cb1", "message": {"chat": {"id": 123}, "message_id": 55}}
+    await adapter._handle_callback("mail_action:full:m1", callback_query)
+
+    assert any(
+        method == "answerCallbackQuery"
+        and json.get("text") == "Failed to process email action"
+        for method, json in adapter._calls
+    )
+    assert not any(
+        method == "deleteMessage"
+        for method, _ in adapter._calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_mail_action_dispatch_failure_reports_error(store, monkeypatch):
+    class NoopWorker:
+        def __call__(self, intent):
+            return None
+
+    monkeypatch.setattr("semai.workers.mail.MarkMailReadWorker", NoopWorker)
+    adapter, _ = await _setup_adapter(
+        store, {123}, dispatcher_result=Result("nope", ok=False)
+    )
+
+    callback_query = {"id": "cb1", "message": {"chat": {"id": 123}, "message_id": 55}}
+    await adapter._handle_callback("mail_action:full:m1", callback_query)
+
+    assert any(
+        method == "answerCallbackQuery"
+        and json.get("text") == "Failed to process email action"
+        for method, json in adapter._calls
+    )
+    assert not any(
+        method == "deleteMessage"
+        for method, _ in adapter._calls
+    )
+```
