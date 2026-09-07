@@ -1,10 +1,13 @@
-"""Minimal LLM client: DeepSeek (OpenAI-compatible HTTP API) + agy (local CLI).
+"""Minimal LLM client: DeepSeek (OpenAI-compatible HTTP API) + agy (local CLI),
+plus a narrow OpenRouter fallback for DeepSeek's peak-billing window.
 
 Trimmed from the old pipeline's scripts/llm_client.py -- dropped Claude
-CLI, Gemini, OpenRouter, Ollama, and the OpenRouter-specific content-filter
-sanitizers (none apply to these two backends). Kept: the two working call
-paths, agy's mandatory safety flags, and the argv-size guard (both were
-real incidents in the old pipeline, see docstrings below).
+CLI, Gemini, Ollama, and the OpenRouter-specific content-filter sanitizers
+(none apply here). OpenRouter itself is back, but only as call_deepseek.py's
+peak-hours fallback (see AGENTS.md) -- not a general peer to DeepSeek/agy.
+Kept: the two original working call paths, agy's mandatory safety flags,
+and the argv-size guard (both were real incidents in the old pipeline, see
+docstrings below).
 """
 
 import json
@@ -70,6 +73,41 @@ def execute_deepseek(prompt: str, system_prompt: str, api_key: str) -> Tuple[str
     if response_text is None:
         raise RuntimeError(
             f"DeepSeek API returned null content (finish_reason="
+            f"{choices[0].get('finish_reason')!r}): {json.dumps(data)[:500]}"
+        )
+    usage = data.get("usage", {})
+    return response_text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+
+
+def execute_openrouter(prompt: str, system_prompt: str, api_key: str) -> Tuple[str, int, int]:
+    """Call OpenRouter's OpenAI-compatible chat completions endpoint with the
+    configured fallback model (config/model_config.yaml: openrouter.fallback_model).
+
+    Peak-hours fallback for execute_deepseek only -- see call_deepseek.py.
+    Returns (response_text, input_tokens, output_tokens).
+    """
+    cfg = load_model_config()
+    orc = cfg["openrouter"]
+    url = f"{orc['endpoint']}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": orc["fallback_model"],
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    timeout = cfg["timeouts"]["http"]
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    choices = data.get("choices")
+    if not choices:
+        raise RuntimeError(f"OpenRouter API returned no choices: {json.dumps(data)[:500]}")
+    response_text = choices[0]["message"]["content"]
+    if response_text is None:
+        raise RuntimeError(
+            f"OpenRouter API returned null content (finish_reason="
             f"{choices[0].get('finish_reason')!r}): {json.dumps(data)[:500]}"
         )
     usage = data.get("usage", {})

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from scripts.llm_client import extract_code_block, is_deepseek_peak_hours
+from scripts.llm_client import execute_openrouter, extract_code_block, is_deepseek_peak_hours
 import pytest
 
 
@@ -61,3 +61,36 @@ def test_is_deepseek_peak_hours_false_on_beijing_weekend():
     with patch("scripts.llm_client.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_dt
         assert is_deepseek_peak_hours(cfg) is False
+
+
+def test_execute_openrouter_returns_content_and_usage():
+    cfg = {
+        "openrouter": {
+            "endpoint": "https://openrouter.ai/api/v1",
+            "fallback_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        },
+        "timeouts": {"http": 600},
+    }
+    fake_response = type(
+        "Resp",
+        (),
+        {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {
+                "choices": [{"message": {"content": "hello"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+            },
+        },
+    )()
+
+    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
+        "scripts.llm_client.requests.post", return_value=fake_response
+    ) as post:
+        text, in_tok, out_tok = execute_openrouter("prompt", "system", "fake-key")
+
+    assert text == "hello"
+    assert (in_tok, out_tok) == (5, 7)
+    called_url = post.call_args.args[0]
+    assert called_url == "https://openrouter.ai/api/v1/chat/completions"
+    called_payload = post.call_args.kwargs["json"]
+    assert called_payload["model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"

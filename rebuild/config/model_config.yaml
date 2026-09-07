@@ -9,11 +9,21 @@ deepseek:
   api_key_secret: deepseek_api_key   # key name in config/secrets.enc.yaml
   model: "deepseek-v4-pro"
   # DeepSeek peak billing is 01:00-04:00 UTC daily -- costs are elevated in
-  # that window. call_deepseek.py warns (does not block) when called inside it.
+  # that window. call_deepseek.py falls back to the OpenRouter free model
+  # below instead of calling DeepSeek during this window.
   peak_hours_utc: [1, 4]
   # Hard cap on cumulative logged spend (rebuild/logs/cost_log.jsonl). Over
   # this, call_deepseek.py refuses the call before it happens -- no bypass flag.
   spend_limit_usd: 5.0
+
+openrouter:
+  provider: openrouter
+  endpoint: "https://openrouter.ai/api/v1"
+  api_key_secret: open_router_api_key   # key name in config/secrets.enc.yaml
+  # Peak-hours-only fallback for call_deepseek.py -- not a general DeepSeek
+  # peer (see AGENTS.md). Free tier: shares the account's one 20 RPM/1000 RPD
+  # OpenRouter pool across all models, so keep this to the narrow peak window.
+  fallback_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 agy:
   # Local CLI, no API key. --dangerously-skip-permissions --mode plan are

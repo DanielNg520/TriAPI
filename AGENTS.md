@@ -62,9 +62,8 @@ This policy applies to every repo TriAPI supervises, not just this one — check
   Plus 11 new `test_tui.py` tests, intentionally red (`NotImplementedError` stubs) until the tui mini-tasks land.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site (2026-09-06 audit).
-- DeepSeek peak-hour guard (`llm_client.is_deepseek_peak_hours`, Beijing weekend bypass) hard-blocks in `call_deepseek.py`, no bypass flag.
-- OpenRouter: recommended against adding now — shared rate-limit pool, content-filter false positives, free-tier hallucination were real old-pipeline problems.
-  If added later, slot it as a Phase-4 escalation fallback, not a DeepSeek peer.
+- DeepSeek peak-hour guard (`llm_client.is_deepseek_peak_hours`, Beijing weekend bypass): `call_deepseek.py` now falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) instead of blocking (2026-09-06, user-approved override of the prior no-OpenRouter stance).
+- OpenRouter otherwise still not added as a general DeepSeek peer — shared rate-limit pool, content-filter false positives, free-tier hallucination were real old-pipeline problems; the peak-hours fallback above is the sole call site.
 - Full audit (2026-09-06) of `rebuild/`'s own claims vs live code — queue lifecycle, task/commit cross-check — all accurate.
   No disconnect-from-live-path bugs here (two found+fixed in SemAI instead — see its own `AGENTS.md`).
 

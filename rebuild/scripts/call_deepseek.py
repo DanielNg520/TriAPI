@@ -34,9 +34,22 @@ def main() -> int:
     prompt = args.prompt_file.read_text() if args.prompt_file else sys.stdin.read()
     system_prompt = llm_client.load_rules() + "\n\n" + args.system_file.read_text()
 
+    task_id = args.task_id or (args.prompt_file.stem if args.prompt_file else "stdin")
+
     if llm_client.is_deepseek_peak_hours():
-        print("[BLOCKED] DeepSeek peak billing window active -- costs elevated, refusing call", file=sys.stderr)
-        return 1
+        print(
+            "[FALLBACK] DeepSeek peak billing window active -- using OpenRouter "
+            f"fallback model {llm_client.load_model_config()['openrouter']['fallback_model']}",
+            file=sys.stderr,
+        )
+        secrets = secrets_loader.load_secrets()
+        response, in_tok, out_tok = llm_client.execute_openrouter(
+            prompt, system_prompt, secrets["open_router_api_key"]
+        )
+        print(response)
+        cost.log_cost(task_id, 0, 0)
+        print(f"[tokens] in={in_tok} out={out_tok} cost_usd=0.000000 (openrouter free fallback)", file=sys.stderr)
+        return 0
 
     limit = llm_client.load_model_config()["deepseek"]["spend_limit_usd"]
     budget = cost.check_budget(limit)
@@ -52,7 +65,6 @@ def main() -> int:
         prompt, system_prompt, secrets["deepseek_api_key"]
     )
     print(response)
-    task_id = args.task_id or (args.prompt_file.stem if args.prompt_file else "stdin")
     cost.log_cost(task_id, in_tok, out_tok)
     print(f"[tokens] in={in_tok} out={out_tok} cost_usd={cost.calculate_cost(in_tok, out_tok):.6f}", file=sys.stderr)
     return 0
