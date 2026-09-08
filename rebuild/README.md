@@ -24,7 +24,7 @@ Task queue and LLM call scaffold with manual audit step before applying.
 - **DeepSeek**: writes code. One function/task per call, strict prompt, exact scope.
 - **OpenRouter**: peak-hours-only fallback for DeepSeek (01:00-04:00 UTC daily, Beijing weekends off-peak) using free model (`nvidia/nemotron-3-ultra-550b-a55b:free`). Not a general peer.
 - **agy**: docs + trivial tasks. Prompt must end "reply with complete file content only, no other text" (required for `--mode plan` to not write directly).
-- **Claude**: writes every prompt, audits every response before applying.
+- **Claude**: writes every prompt, audits every response before applying. Prompts give signature/skeleton/requirements only — never a finished implementation to paste in, even under time pressure or on a precision-sensitive task (that instinct is itself the failure mode: not trusting the worker is a reason to write a tighter spec, not to write the code yourself).
 
 ## Usage
 

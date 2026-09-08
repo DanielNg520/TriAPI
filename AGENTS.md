@@ -58,6 +58,8 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 
 ## Carryover (current state, 2026-09-08)
 
+- `rebuild/RULES.md`/`README.md` were missing the "prompts give spec only, never finished code" hard rule (it only lived in Claude's session memory) — added after a real violation mid-dispatch (SemAI approval-flow task): a multi-site edit prompt pasted a fully-written code block for DeepSeek to copy instead of describing the requirement. Caught by the user, task redone correctly, rest of that dispatch (5 subtasks, SemAI `91937e0`) was clean.
+
 - Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent, instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN), reattached below.
 - Known gap, left as-is: 13 old-dispatcher tests (`tests/`) need a local Ollama server (`mistral-small:latest`). Frozen pipeline, not `rebuild/` (66/66 clean without it) — install only if needed.
 - `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored. Ephemeral, often reference a target repo's absolute path from whichever machine dispatched them.
