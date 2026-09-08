@@ -1,5 +1,0 @@
-```python
-registry.register("ingest_document", make_ingest_worker(settings))
-registry.register_approval_required("write_file", FileWriteWorker(settings))
-registry.register_approval_required("browser_action", BrowserActionWorker(settings))
-```

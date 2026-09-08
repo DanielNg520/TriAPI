@@ -1,7 +1,0 @@
-```python
-    def set_topic_id(self, name: str, topic_id: int) -> None:
-        self.db.execute(
-            "INSERT OR REPLACE INTO telegram_topics (name, topic_id, created_at) VALUES (?, ?, ?)",
-            (name, topic_id, now_iso()),
-        )
-```

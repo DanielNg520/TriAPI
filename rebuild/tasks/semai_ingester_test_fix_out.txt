@@ -1,3 +1,0 @@
-```python
-        ingester._allowed_roots = lambda settings=None: [allow_dir]
-```

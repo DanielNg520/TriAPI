@@ -1,9 +1,0 @@
-```python
-    def _init_schema(self) -> None:
-        self.db.execute(
-            "CREATE TABLE IF NOT EXISTS telegram_meta (key TEXT PRIMARY KEY, value TEXT)"
-        )
-        self.db.execute(
-            "CREATE TABLE IF NOT EXISTS telegram_topics (name TEXT PRIMARY KEY, topic_id INTEGER, created_at TEXT NOT NULL)"
-        )
-```

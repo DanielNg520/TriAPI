@@ -59,6 +59,8 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 ## Carryover (current state, 2026-09-08)
 
 - Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent, instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN), reattached below.
+- Known gap, left as-is: 13 old-dispatcher tests (`tests/`) require a local Ollama server running `mistral-small:latest`. Frozen/deprecated pipeline, not the maintained `rebuild/` suite (66/66 clean without Ollama) — install Ollama only if you need those 13 to pass.
+- `rebuild/tasks/*.md` are per-run dispatch task descriptions (not the pipeline code) — gitignored, not committed. They're ephemeral and often reference a specific target repo's absolute path from whichever machine dispatched them.
 - `tests/test_self_fix_discard.py` paths now derive from `self_fix.TRIAPI_ROOT`, no longer hardcoded to one machine.
 - README.md documents adding a local-model call target to `rebuild/scripts/llm_client.py` as an extension point — none exists today (DeepSeek/OpenRouter/agy only).
 - TriAPI rebuild: Phases 1-3 done (`verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.

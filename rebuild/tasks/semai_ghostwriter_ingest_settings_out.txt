@@ -1,9 +1,0 @@
-```python
-def _ingest(settings: Settings, path: Path, *, extra_allowed_dirs: list[Path] | None = None) -> str:
-    ingest_worker = make_ingest_worker(settings)
-    intent = IngestDocument(confidence=1.0, raw_utterance="", kind="ingest_document", path=str(path))
-    result = ingest_worker(intent, extra_allowed_dirs=extra_allowed_dirs)
-    if not result.ok:
-        raise GhostwriterError(result.message)
-    return result.message
-```
