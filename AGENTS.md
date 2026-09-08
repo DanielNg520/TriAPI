@@ -56,7 +56,7 @@ A pending removal task states the action only ("delete file X"), never the reaso
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
 
-## Carryover (current state, 2026-09-07)
+## Carryover (current state, 2026-09-08)
 
 - TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.
 - Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
