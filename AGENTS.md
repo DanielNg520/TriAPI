@@ -58,7 +58,7 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 
 ## Carryover (current state, 2026-09-08)
 
-- `rebuild/RULES.md`/`README.md` were missing the "prompts give spec only, never finished code" hard rule (it only lived in Claude's session memory) — added after a real violation mid-dispatch (SemAI approval-flow task): a multi-site edit prompt pasted a fully-written code block for DeepSeek to copy instead of describing the requirement. Caught by the user, task redone correctly, rest of that dispatch (5 subtasks, SemAI `91937e0`) was clean.
+- `rebuild/RULES.md`/`README.md`'s "prompts give spec only" rule was fixed twice same day (2026-09-08): first for literal code blocks, then again hours later for the same violation in prose form (exact vars/control-flow/strings dictated step by step — functionally identical, different syntax). First fix didn't generalize. New test in the rule: could two different competent implementations satisfy this prompt, or only the one already written in my head?
 
 - Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent, instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN), reattached below.
 - Known gap, left as-is: 13 old-dispatcher tests (`tests/`) need a local Ollama server (`mistral-small:latest`). Frozen pipeline, not `rebuild/` (66/66 clean without it) — install only if needed.
