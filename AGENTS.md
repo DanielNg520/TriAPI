@@ -59,13 +59,10 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 ## Carryover (current state, 2026-09-08)
 
 - Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent, instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN), reattached below.
-- Known gap, left as-is: 13 old-dispatcher tests (`tests/`) require a local Ollama server running `mistral-small:latest`. Frozen/deprecated pipeline, not the maintained `rebuild/` suite (66/66 clean without Ollama) — install Ollama only if you need those 13 to pass.
-- `rebuild/tasks/*.md` are per-run dispatch task descriptions (not the pipeline code) — gitignored, not committed. They're ephemeral and often reference a specific target repo's absolute path from whichever machine dispatched them.
-- `tests/test_self_fix_discard.py` paths now derive from `self_fix.TRIAPI_ROOT`, no longer hardcoded to one machine.
+- Known gap, left as-is: 13 old-dispatcher tests (`tests/`) need a local Ollama server (`mistral-small:latest`). Frozen pipeline, not `rebuild/` (66/66 clean without it) — install only if needed.
+- `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored. Ephemeral, often reference a target repo's absolute path from whichever machine dispatched them.
 - README.md documents adding a local-model call target to `rebuild/scripts/llm_client.py` as an extension point — none exists today (DeepSeek/OpenRouter/agy only).
-- TriAPI rebuild: Phases 1-3 done (`verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.
-- Phase 3 complete: resource_guard reattached into `call_deepseek.py`/`call_agy.py` via `rebuild/scripts/_root_resource_guard.py` — works around a `scripts` package-name collision between rebuild/ and TriAPI-root via importlib file-path loading (see PHASES.md).
-- Phase 4 (auto tier-escalation) rejected permanently 2026-09-08 (was "deferred" 2026-09-05) — threshold-based escalation is the waterfall failure mode the salvage killed. Hub-and-spoke routes every failure to Claude for diagnosis on the first retry, not after N automated attempts.
+- Rebuild Phases 1-3 done (`verify.py`, `dispatch.py`, `cost.py`, resource_guard reattached), 66/66 tests passing; Phase 4 (tier escalation) rejected permanently — see PHASES.md.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site.
 - `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking — sanitized via `openrouter_sanitizer.py` (content filter blocks email/phone/IP-shaped tokens).
 - OpenRouter still not a general DeepSeek peer — shared rate-limit pool, content-filter/hallucination issues in the old pipeline. The peak-hours fallback is the sole call site.
@@ -73,7 +70,7 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - Always diff the full response, not just the requested function, on OpenRouter-fallback calls — a real `deepseek-v4-pro` call came back clean (n=1, still worth diffing, just less suspicion).
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` — was `null`, silently inheriting from `~/.gemini/antigravity-cli/settings.json`, shared with other projects.
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
-- agy wrapped a plain-file reply in a stray triple-backtick fence despite the "reply with complete file content only" instruction (pyproject.toml task) — stripped before applying, worth checking on future agy file-content calls.
+- agy wrapped a plain-file reply in a stray triple-backtick fence despite "file content only" instructions (pyproject.toml task) — strip before applying; check future agy file-content calls too.
 
 ## Future plans (queued, not started)
 
