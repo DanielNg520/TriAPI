@@ -8,6 +8,7 @@ Task queue and LLM call scaffold with manual audit step before applying.
 - `queue.sqlite3` — SQLite backing database for task queue.
 - `scripts/secrets_loader.py` — reads `../config/secrets.enc.yaml`. Requires `deepseek_api_key`, `ollama_host`, `google_ai_studio_api_key`, `open_router_api_key` (optional: `google_jules_apikey`, `groq_api_key`).
 - `scripts/llm_client.py` — `execute_deepseek()`, `execute_openrouter()`, `execute_agy()`.
+- `scripts/_root_resource_guard.py` — bridges to TriAPI-root's `scripts/resource_guard.py` (importlib file-path loading, works around a `scripts` package-name collision between this repo and the root repo — see PHASES.md Phase 3). `call_deepseek.py`/`call_agy.py` wrap their outbound call in `pause_services()`/`resume_services()`, config-gated by root `config/resource_guard.yaml` (empty by default — no-op).
 - `scripts/openrouter_sanitizer.py` — sanitizes OpenRouter-bound text (content filter blocks email/phone/IP-shaped tokens).
 - `scripts/cost.py` — logs DeepSeek tokens and cost to `logs/cost_log.jsonl`.
 - `scripts/call_deepseek.py`, `scripts/call_agy.py` — CLI wrappers, print response to stdout. `call_deepseek.py` hard-blocks if cumulative spend exceeds `model_config.yaml`'s `deepseek.spend_limit_usd` ($5.00 default, no bypass flag) and calls OpenRouter during peak hours.

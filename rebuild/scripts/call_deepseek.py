@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import cost, llm_client, secrets_loader
+from scripts._root_resource_guard import pause_services, resume_services, load_resource_guard_services
 
 
 def main() -> int:
@@ -43,9 +44,13 @@ def main() -> int:
             file=sys.stderr,
         )
         secrets = secrets_loader.load_secrets()
-        response, in_tok, out_tok = llm_client.execute_openrouter(
-            prompt, system_prompt, secrets["open_router_api_key"]
-        )
+        paused = pause_services(load_resource_guard_services())
+        try:
+            response, in_tok, out_tok = llm_client.execute_openrouter(
+                prompt, system_prompt, secrets["open_router_api_key"]
+            )
+        finally:
+            resume_services(paused)
         print(response)
         cost.log_cost(task_id, 0, 0)
         print(f"[tokens] in={in_tok} out={out_tok} cost_usd=0.000000 (openrouter free fallback)", file=sys.stderr)
@@ -61,9 +66,13 @@ def main() -> int:
         return 1
 
     secrets = secrets_loader.load_secrets()
-    response, in_tok, out_tok = llm_client.execute_deepseek(
-        prompt, system_prompt, secrets["deepseek_api_key"]
-    )
+    paused = pause_services(load_resource_guard_services())
+    try:
+        response, in_tok, out_tok = llm_client.execute_deepseek(
+            prompt, system_prompt, secrets["deepseek_api_key"]
+        )
+    finally:
+        resume_services(paused)
     print(response)
     cost.log_cost(task_id, in_tok, out_tok)
     print(f"[tokens] in={in_tok} out={out_tok} cost_usd={cost.calculate_cost(in_tok, out_tok):.6f}", file=sys.stderr)

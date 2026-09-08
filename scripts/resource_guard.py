@@ -23,6 +23,7 @@ try/finally:
 import atexit
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -38,6 +39,13 @@ log = get_logger("resource_guard")
 LOCK_PATH = Path(__file__).resolve().parent.parent / "logs" / "resource_guard_lock.json"
 
 _state = {"resumed": False}
+
+# systemd (and therefore systemctl) is Linux-only. On macOS this whole guard
+# is a no-op: pause_services()/snapshot_ollama_state() report nothing to
+# pause/nothing active rather than crashing dispatch with FileNotFoundError.
+HAS_SYSTEMCTL = shutil.which("systemctl") is not None
+if not HAS_SYSTEMCTL:
+    log.info("systemctl not found on this platform -- resource_guard is a no-op")
 
 
 def _pid_alive(pid: int) -> bool:
@@ -71,6 +79,8 @@ def _reap_stale_lock() -> None:
 
 
 def _do_resume(paused: list[str]) -> None:
+    if not HAS_SYSTEMCTL:
+        return
     for service in paused:
         log.info("Resuming %s", service)
         subprocess.run(["systemctl", "--user", "start", service], stdin=subprocess.DEVNULL)
@@ -107,6 +117,9 @@ def snapshot_ollama_state(ollama_host: str, service: str = "ollama.service") -> 
         - 'resident_models': list of names of currently resident/warm models.
         - 'service': str, the name of the service checked and possibly started.
     """
+    if not HAS_SYSTEMCTL:
+        return {"was_active": False, "resident_models": [], "service": service}
+
     active_result = subprocess.run(
         ["systemctl", "--user", "is-active", "--quiet", service],
         stdin=subprocess.DEVNULL,
@@ -166,6 +179,9 @@ def restore_ollama_state(snapshot: dict, ollama_host: str) -> None:
         except requests.RequestException as exc:
             log.warning("Failed to reload model %s: %s", name, exc)
 
+    if not HAS_SYSTEMCTL:
+        return
+
     if not snapshot.get("was_active"):
         service = snapshot.get("service") or "ollama.service"
         log.info("Stopping %s back to its pre-dispatch state", service)
@@ -184,6 +200,8 @@ def pause_services(services: list[str]) -> list[str]:
     an unrelated reason is left alone in both directions, so this never
     resurrects something the user (or another process) deliberately turned
     off before the dispatch run started."""
+    if not HAS_SYSTEMCTL:
+        return []
     _reap_stale_lock()
 
     paused = []

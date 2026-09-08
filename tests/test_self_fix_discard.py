@@ -139,9 +139,8 @@ class TechDebtBuildCmdTests(unittest.TestCase):
     hardcoded TECH_DEBT_PATH, and passed for the wrong reason)."""
 
     def test_absolute_test_path_gets_module_specific_unittest_run(self) -> None:
-        build_cmd = triapi._tech_debt_build_cmd(
-            "/home/dyne/Documents/Coding/TriAPI/tests/test_llm_client_sanitize.py"
-        )
+        abs_path = self_fix.TRIAPI_ROOT / "tests" / "test_llm_client_sanitize.py"
+        build_cmd = triapi._tech_debt_build_cmd(str(abs_path))
         self.assertIn("py_compile", build_cmd)
         self.assertIn("unittest tests.test_llm_client_sanitize -v", build_cmd)
 
@@ -151,9 +150,8 @@ class TechDebtBuildCmdTests(unittest.TestCase):
         self.assertIn("unittest tests.test_something -v", build_cmd)
 
     def test_non_test_path_falls_back_to_shared_suite(self) -> None:
-        build_cmd = triapi._tech_debt_build_cmd(
-            "/home/dyne/Documents/Coding/TriAPI/scripts/non_test.py"
-        )
+        abs_path = self_fix.TRIAPI_ROOT / "scripts" / "non_test.py"
+        build_cmd = triapi._tech_debt_build_cmd(str(abs_path))
         self.assertIn("py_compile", build_cmd)
         self.assertIn(
             "PYTHONPATH=. python3 -m unittest tests.test_branch_features tests.test_tier5_librarian -v",

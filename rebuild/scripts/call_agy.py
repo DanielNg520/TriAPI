@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import llm_client
+from scripts._root_resource_guard import pause_services, resume_services, load_resource_guard_services
 
 
 def main() -> int:
@@ -30,7 +31,11 @@ def main() -> int:
     task_system = args.system_file.read_text() if args.system_file else ""
     system_prompt = llm_client.load_rules() + "\n\n" + task_system
 
-    response = llm_client.execute_agy(prompt, system_prompt)
+    paused = pause_services(load_resource_guard_services())
+    try:
+        response = llm_client.execute_agy(prompt, system_prompt)
+    finally:
+        resume_services(paused)
     print(response)
     return 0
 

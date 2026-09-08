@@ -1,6 +1,6 @@
 # AGENTS.md
 
-TriAPI: multi-tier LLM dispatch pipeline. Read this file first, it is the only doc kept live.
+TriAPI: LLM dispatch pipeline (DeepSeek + agy workers, Claude supervision). Read this file first, it is the only doc kept live.
 Everything else, including `docs/artifact/`, is frozen history, not maintained.
 
 ## Current architecture
@@ -58,8 +58,12 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 
 ## Carryover (current state, 2026-09-08)
 
-- TriAPI rebuild: Phases 1-3 done (`rebuild/scripts/verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.
-- Phase 4 (auto tier-escalation) deferred by user decision — steady state is manual DeepSeek+agy+Claude.
+- Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent, instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN), reattached below.
+- `tests/test_self_fix_discard.py` paths now derive from `self_fix.TRIAPI_ROOT`, no longer hardcoded to one machine.
+- README.md documents adding a local-model call target to `rebuild/scripts/llm_client.py` as an extension point — none exists today (DeepSeek/OpenRouter/agy only).
+- TriAPI rebuild: Phases 1-3 done (`verify.py`, `dispatch.py`, `cost.py`), 66/66 real tests passing.
+- Phase 3 complete: resource_guard reattached into `call_deepseek.py`/`call_agy.py` via `rebuild/scripts/_root_resource_guard.py` — works around a `scripts` package-name collision between rebuild/ and TriAPI-root via importlib file-path loading (see PHASES.md).
+- Phase 4 (auto tier-escalation) rejected permanently 2026-09-08 (was "deferred" 2026-09-05) — threshold-based escalation is the waterfall failure mode the salvage killed. Hub-and-spoke routes every failure to Claude for diagnosis on the first retry, not after N automated attempts.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site.
 - `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking — sanitized via `openrouter_sanitizer.py` (content filter blocks email/phone/IP-shaped tokens).
 - OpenRouter still not a general DeepSeek peer — shared rate-limit pool, content-filter/hallucination issues in the old pipeline. The peak-hours fallback is the sole call site.
