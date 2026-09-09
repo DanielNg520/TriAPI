@@ -73,6 +73,9 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` — was `null`, silently inheriting from `~/.gemini/antigravity-cli/settings.json`, shared with other projects.
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
 - agy wrapped a plain-file reply in a stray triple-backtick fence despite "file content only" instructions (pyproject.toml task) — strip before applying; check future agy file-content calls too.
+- SemAI stock watcher (Phase A watchlist/cleanup + Phase B news) shipped, committed `a47a7da`, 154/154 SemAI tests pass. Run SemAI tests with its own `.venv/bin/python3 -m pytest`, not system python — `pytest-asyncio` only lives in the venv.
+- A1-1's first design (column on `ticker_watch`) got blocked mid-dispatch and replaced by A1-1-fixed (separate `watchlist` table) — 3 queue tasks written against the old design (old A1-2/A2/A3) are now permanently inert, chained to the blocked root task, harmless to leave.
+- SemAI mail cleanup fix (4-task dispatch, `834874d` on branch `migration-clean-up`): Approve/Reject now deletes the source message and reissues+tracks the confirmation (resolved=True) instead of editing in place; `expired_message_ids` now also ages out never-decided messages from their own `created_at`, individually, not just already-resolved ones. Tests updated/added by Claude directly (verification, not implementation).
 
 ## Future plans (queued, not started)
 
