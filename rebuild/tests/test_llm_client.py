@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from scripts.llm_client import execute_openrouter, extract_code_block, is_deepseek_peak_hours
+from scripts.llm_client import execute_planner
 from scripts.openrouter_sanitizer import _PHONE_LIKE_RE
 import pytest
 
@@ -127,3 +128,98 @@ def test_execute_openrouter_sanitizes_prompt_and_system_prompt():
     sent_prompt = sent_payload["messages"][1]["content"]
     assert phone not in sent_prompt
     assert _PHONE_LIKE_RE.search(sent_prompt) is None
+
+
+def test_execute_planner_returns_content_and_usage():
+    cfg = {
+        "planner": {
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        },
+        "timeouts": {"http": 600},
+    }
+    fake_response = type(
+        "Resp",
+        (),
+        {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {
+                "choices": [{"message": {"content": "hello planner"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+            },
+        },
+    )()
+
+    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
+        "scripts.llm_client.requests.post", return_value=fake_response
+    ) as post:
+        text, in_tok, out_tok = execute_planner("prompt", "system", "fake-key")
+
+    assert text == "hello planner"
+    assert (in_tok, out_tok) == (5, 7)
+    called_url = post.call_args.args[0]
+    assert called_url == "https://openrouter.ai/api/v1/chat/completions"
+    called_payload = post.call_args.kwargs["json"]
+    assert called_payload["model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+
+
+def test_execute_planner_uses_planner_config_model_not_openrouter():
+    cfg = {
+        "planner": {
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "nvidia/nemotron-planner",
+        },
+        "openrouter": {
+            "endpoint": "https://openrouter.ai/api/v1",
+            "fallback_model": "nvidia/nemotron-openrouter-fallback",
+        },
+        "timeouts": {"http": 600},
+    }
+    fake_response = type(
+        "Resp",
+        (),
+        {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        },
+    )()
+
+    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
+        "scripts.llm_client.requests.post", return_value=fake_response
+    ) as post:
+        execute_planner("prompt", "system", "fake-key")
+
+    called_payload = post.call_args.kwargs["json"]
+    assert called_payload["model"] == "nvidia/nemotron-planner"
+    assert called_payload["model"] != cfg["openrouter"]["fallback_model"]
+
+
+def test_execute_planner_no_choices_raises():
+    cfg = {
+        "planner": {
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        },
+        "timeouts": {"http": 600},
+    }
+    fake_response = type(
+        "Resp",
+        (),
+        {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: {
+                "choices": [],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        },
+    )()
+
+    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
+        "scripts.llm_client.requests.post", return_value=fake_response
+    ):
+        with pytest.raises(RuntimeError):
+            execute_planner("prompt", "system", "fake-key")
+

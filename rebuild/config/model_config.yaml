@@ -25,6 +25,18 @@ openrouter:
   # OpenRouter pool across all models, so keep this to the narrow peak window.
   fallback_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
 
+# Standing Planner role (promoted from a one-off trial) that drafts task
+# breakdowns for Claude to review/correct before dispatching to DeepSeek/agy.
+# Claude remains the hub -- planner output never goes straight to a worker.
+# Shares the same OpenRouter free-tier rate-limit pool (20 RPM/1000 RPD) as
+# call_deepseek.py's peak-hours fallback above, so heavy planner use can
+# starve that fallback and vice versa.
+planner:
+  provider: openrouter
+  endpoint: "https://openrouter.ai/api/v1"
+  api_key_secret: open_router_api_key
+  model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+
 agy:
   # Local CLI, no API key. --dangerously-skip-permissions --mode plan are
   # always set by call_agy.py (mandatory, not configurable): without

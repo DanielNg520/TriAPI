@@ -117,6 +117,39 @@ def execute_openrouter(prompt: str, system_prompt: str, api_key: str) -> Tuple[s
     return response_text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
 
 
+def execute_planner(prompt: str, system_prompt: str, api_key: str) -> Tuple[str, int, int]:
+    """Standing Planner role call (nemotron via OpenRouter) -- drafts task
+    breakdowns for Claude to review before dispatching. Not gated by DeepSeek
+    peak-hours; see call_planner.py. Returns (response_text, input_tokens,
+    output_tokens)."""
+    cfg = load_model_config()
+    plc = cfg["planner"]
+    url = f"{plc['endpoint']}/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": plc["model"],
+        "messages": [
+            {"role": "system", "content": sanitize_for_openrouter_content_filter(system_prompt)},
+            {"role": "user", "content": sanitize_for_openrouter_content_filter(prompt)},
+        ],
+    }
+    timeout = cfg["timeouts"]["http"]
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    choices = data.get("choices")
+    if not choices:
+        raise RuntimeError(f"OpenRouter API returned no choices: {json.dumps(data)[:500]}")
+    response_text = choices[0]["message"]["content"]
+    if response_text is None:
+        raise RuntimeError(
+            f"OpenRouter API returned null content (finish_reason="
+            f"{choices[0].get('finish_reason')!r}): {json.dumps(data)[:500]}"
+        )
+    usage = data.get("usage", {})
+    return response_text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+
+
 # agy -p requires its prompt as an argv element, not stdin (confirmed live
 # in the old pipeline: piping stdin makes agy exit status 2). A prompt too
 # large for the OS argv limit crashes subprocess.run() with an uncaught
