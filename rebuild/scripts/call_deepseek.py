@@ -30,6 +30,7 @@ def main() -> int:
         help="System prompt file (the strict instructions/constraints for this task)",
     )
     ap.add_argument("--task-id", default=None, help="Task id for cost log (default: prompt filename or 'stdin')")
+    ap.add_argument("--no-fallback", action="store_true", help="Fail fast during DeepSeek peak hours instead of using the OpenRouter fallback")
     args = ap.parse_args()
 
     prompt = args.prompt_file.read_text() if args.prompt_file else sys.stdin.read()
@@ -38,6 +39,12 @@ def main() -> int:
     task_id = args.task_id or (args.prompt_file.stem if args.prompt_file else "stdin")
 
     if llm_client.is_deepseek_peak_hours():
+        if args.no_fallback:
+            print(
+                "[BLOCKED] DeepSeek peak hours active and fallback disabled for this call",
+                file=sys.stderr,
+            )
+            return 1
         print(
             "[FALLBACK] DeepSeek peak billing window active -- using OpenRouter "
             f"fallback model {llm_client.load_model_config()['openrouter']['fallback_model']}",
