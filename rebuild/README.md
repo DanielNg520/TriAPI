@@ -19,6 +19,7 @@ Task queue and LLM call scaffold with manual audit step before applying.
 - `scripts/tui_framing.py` — `build_framed_prompt` (prefixes prompts with supervisor-role reminder).
 - `scripts/tui_dispatch_status.py` — `is_dispatch_running` (warns if a queue task is `in_progress`).
 - `scripts/tui_stream.py` — `stream_claude_output` (streams `claude -p` subprocess output line by line).
+- `scripts/vcb_slicer.py`, `scripts/vcb_patcher.py`, `scripts/vcb_materializer.py`, `scripts/vcb_deepseek_call.py`, `scripts/vcb_planner_call.py`, `scripts/vcb_run.py` — Virtual Codebase Plan (VCB): a local Planner drafts an edit over a CodeGraph-built skeleton of an oversized file, DeepSeek materializes it into a real SEARCH/REPLACE patch. `vcb_run.py`'s `run_vcb(...)` is the entrypoint (also runnable as `python3 -m scripts.vcb_run --repo-path ... --file-path ... --target-symbol ... --task-description ... --planner-system-file ...`); it never writes to disk, only returns `(new_content, error)` for human review/apply. See AGENTS.md's Virtual Codebase Plan section for design detail.
 
 ## Roles
 
@@ -52,5 +53,5 @@ Review `out.txt` before applying anything.
 
 ## Tests
 
-66/66 real tests pass (`pytest` from the `rebuild/` directory).
+99/99 real tests pass (`pytest` from the `rebuild/` directory).
 
