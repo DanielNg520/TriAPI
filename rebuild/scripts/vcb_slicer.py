@@ -2,6 +2,7 @@
 
 import re
 import subprocess
+from pathlib import Path
 
 
 def extract_import_block(file_path: str) -> str:
@@ -121,7 +122,7 @@ def run_single_symbol(repo_path: str, symbol_name: str) -> str:
 
 
 def build_skeleton(repo_path: str, file_path: str, target_symbol: str) -> str:
-    import_block = extract_import_block(file_path)
+    import_block = extract_import_block(Path(repo_path) / file_path)
     symbols = run_symbols_only(repo_path, file_path)
 
     target = None

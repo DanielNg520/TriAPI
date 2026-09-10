@@ -102,8 +102,18 @@ A cloud model then integrates the draft into the real file precisely.
   tests pass. File map and per-module contracts: `rebuild/README.md`.
 - Design decisions and rationale for each piece: git log on
   `rebuild/scripts/vcb_*.py`, not repeated here.
-- Not yet done: a real live smoke test against an actual oversized file —
-  every run so far is unit-tested with mocks only.
+- Live smoke test passed 2026-09-10: real end-to-end run against
+  `scripts/dispatcher.py`'s `_default_build_cmd` (1279 lines) produced a
+  correct, syntactically valid patch; rest of the file byte-for-byte
+  unchanged; disk untouched (`run_vcb` only returns content).
+- Bug found by that test, fixed same session: `run_vcb` and
+  `vcb_slicer.build_skeleton` both called plain `open(file_path)`, but
+  `codegraph` resolves `file_path` relative to `repo_path` regardless of
+  cwd — the two only agreed by coincidence. Both call sites now join
+  `repo_path`/`file_path`. Mocked tests couldn't catch this; only the live
+  run did. 99/99 rebuild tests still pass.
+- VCB is now considered done pending real-world use — no more queued work
+  here unless a future run surfaces another gap.
 
 ## Archive
 

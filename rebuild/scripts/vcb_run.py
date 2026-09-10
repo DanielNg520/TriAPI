@@ -35,7 +35,7 @@ def run_vcb(
     skeleton = build_skeleton(repo_path, file_path, target_symbol)
     prompt = build_planner_prompt(skeleton, task_description)
     skeleton_draft = planner_call_fn(prompt)
-    with open(file_path) as f:
+    with open(Path(repo_path) / file_path) as f:
         file_content = f.read()
     return materialize(file_path, file_content, skeleton_draft, task_description, materializer_call_fn)
 
