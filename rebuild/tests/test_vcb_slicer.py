@@ -137,6 +137,19 @@ def test_run_single_symbol_success():
     assert result == "def target_function(data):\n    return len(data)"
 
 
+def test_run_single_symbol_with_file_path():
+    mock_res = MagicMock(returncode=0, stdout=SAMPLE_SINGLE_SYMBOL_OUTPUT, stderr="")
+    with patch("scripts.vcb_slicer.subprocess.run", return_value=mock_res) as mock_run:
+        result = run_single_symbol(".", "target_function", "pkg/module.py")
+
+    mock_run.assert_called_once_with(
+        ["codegraph", "node", "target_function", "-p", ".", "-f", "pkg/module.py"],
+        capture_output=True,
+        text=True,
+    )
+    assert result == "def target_function(data):\n    return len(data)"
+
+
 def test_run_single_symbol_failure():
     mock_res = MagicMock(returncode=1, stdout="", stderr="codegraph error")
     with patch("scripts.vcb_slicer.subprocess.run", return_value=mock_res):

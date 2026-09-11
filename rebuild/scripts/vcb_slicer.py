@@ -108,9 +108,12 @@ def parse_single_symbol_output(output: str) -> str:
     return "\n".join(result)
 
 
-def run_single_symbol(repo_path: str, symbol_name: str) -> str:
+def run_single_symbol(repo_path: str, symbol_name: str, file_path: str | None = None) -> str:
+    cmd = ["codegraph", "node", symbol_name, "-p", repo_path]
+    if file_path is not None:
+        cmd += ["-f", file_path]
     result = subprocess.run(
-        ["codegraph", "node", symbol_name, "-p", repo_path],
+        cmd,
         capture_output=True,
         text=True,
     )
@@ -139,5 +142,5 @@ def build_skeleton(repo_path: str, file_path: str, target_symbol: str) -> str:
         if symbol_name != target_symbol:
             skeleton += f"{symbol_name}{signature}:\n    ...\n"
 
-    skeleton += run_single_symbol(repo_path, target_symbol)
+    skeleton += run_single_symbol(repo_path, target_symbol, file_path)
     return skeleton

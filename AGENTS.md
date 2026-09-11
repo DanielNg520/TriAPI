@@ -15,7 +15,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `cd rebuild && python3 -m pytest -v tests/` (99/99, 2026-09-10)
+Test command: `cd rebuild && python3 -m pytest -v tests/` (100/100, 2026-09-11)
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
@@ -56,8 +56,11 @@ A pending removal task states the action only ("delete file X"), never the reaso
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
 
-## Carryover (current state, 2026-09-10)
+## Carryover (current state, 2026-09-11)
 
+- Plain (non-VCB) dispatch this session for SemAI's morning-briefing stocks feature caught two dispatch-discipline slips (mid-session, flagged by the user): early task prompts spelled out finished code instead of signature+behavior, and both DeepSeek and Claude repeated the same class of bug — mock news items as dicts instead of `NewsItem` attribute access. Every task from that point on stayed signature/behavior-only; DeepSeek's own bugs (test double signature mismatches, a wrong constructor arity, a `now` variable shadowing bug in daemon.py, a `.get()` on a frozen dataclass) get caught by verify-before-apply and either sent back with a precise fix description or hand-fixed directly when purely mechanical (no design decision) — never silently applied.
+- VCB's first live dispatch against an external target repo (SemAI's `src/semai/adapters/stocks.py`, target symbol `price`, silent-exception-swallow fix) ran the full Slicer→Planner(Nemotron)→Materializer(DeepSeek) chain end to end and produced a clean, minimal, exactly-scoped diff on the first try. Applied via the dispatch-gate escape hatch; SemAI's full suite (143 tests) still passes.
+- Bug that dispatch surfaced: `vcb_slicer.run_single_symbol`/`build_skeleton` called `codegraph node <symbol> -p <repo_path>` with no file disambiguation, so a symbol name that isn't unique repo-wide (e.g. a method also matched by a same-named local variable elsewhere) made `codegraph` return a multi-match listing and `parse_single_symbol_output` raise. Fixed: `run_single_symbol` takes an optional `file_path`, passed as `-f <file_path>` (codegraph's documented disambiguation flag) whenever `build_skeleton` already knows the file. Test added (`test_run_single_symbol_with_file_path`). 100/100 rebuild tests pass.
 - `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): escalated 2026-09-09 from a nudge (`permissionDecision: allow` + reminder) to a **hard `deny`** on any path listed in `~/.claude/dispatch-gate-paths.txt` (gated target-repo dirs plus this repo's `rebuild/scripts`/`rebuild/tests`; the actual target-repo paths live only in that file, not named here) — the nudge kept getting ignored under task momentum despite repeated memory tightening. Escape hatch: `~/.claude/hooks/dispatch-gate-arm.sh <ttl_seconds> <file>...` writes a single-use, short-TTL marker (`~/.claude/dispatch-gate-armed.json`) that the hook consumes on the next matching Edit/Write for that exact path; run it immediately before applying an already-reviewed DeepSeek/agy response, or before a hand fix the user explicitly approves in the moment. Live-tested 2026-09-09: real Edit denied with no marker, allowed once after arming, denied again on reuse (single-use), denied on an expired marker. Still relies on Claude choosing to run the arm command honestly, but converts a silent drift into a hand-edit into a deliberate, separately-timed, auditable action instead of a same-call self-check that's easy to skip.
 - Nemotron promoted from one-off trial to a standing Planner role: `rebuild/scripts/call_planner.py` + `llm_client.execute_planner()` + `config/model_config.yaml`'s `planner:` section, documented in `rebuild/README.md`. Not gated by DeepSeek peak-hours; shares the OpenRouter free-tier rate-limit pool with that fallback role. Hub-and-spoke unchanged: planner drafts route through Claude before becoming queue tasks, never straight to DeepSeek/agy. 69/69 rebuild tests pass, live end-to-end call confirmed.
 - Third same-session recurrence of the finished-code-in-prompt violation (this time as a full reference file pasted + line-by-line mirror instructions for a new file) — caught by the user, not self-caught despite having just fixed the rule twice earlier the same day and built a hook meant to catch exactly this. Output was correct and kept per user call, but the pattern needs active attention at the start of every dispatch prompt, not just when editing an existing file.
@@ -110,8 +113,9 @@ A cloud model then integrates the draft into the real file precisely.
   cwd — the two only agreed by coincidence. Both call sites now join
   `repo_path`/`file_path`. Mocked tests couldn't catch this; only the live
   run did. 99/99 rebuild tests still pass.
-- VCB is now considered done pending real-world use — no more queued work
-  here unless a future run surfaces another gap.
+- First real-world dispatch done 2026-09-11 (SemAI `stocks.py` fix, see
+  carryover above) — surfaced and fixed one gap (symbol disambiguation).
+  No more queued work here unless a future run surfaces another gap.
 
 ## Archive
 
