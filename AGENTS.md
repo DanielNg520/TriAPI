@@ -44,7 +44,7 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
   store; `/clear` before a long scheduled gap (prompt-cache TTL ~1hr won't survive a
   multi-hour peak-hour wait anyway); push any individually heavy dispatch into a fork
   rather than absorbing its transcript into the hub session directly.
-- `triapi tui` (Textual UI over the queue) is implemented and wired (`scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand), end-to-end verified.
+- `triapi tui` (Textual UI over the queue) is implemented and wired (`rebuild/scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand in `task_queue.py`), end-to-end verified.
 
 ## Doc policy
 
@@ -67,9 +67,10 @@ This policy applies to every repo TriAPI supervises, not just this one — check
 - Hands-on tested `codegraph node <file> --symbols-only` (deterministic full signature map of a file's top-level functions/classes/methods/vars, no relevance filtering) and `codegraph node <symbol>` (one symbol's full verbatim source + call trail) — both confirmed via `Nodes by Kind` in `codegraph status` to track imports too as their own node kind, contrary to an earlier assumption that `--symbols-only`'s text output omits them; worth re-checking the actual CLI output shape (not just node-kind counts) before the Virtual Codebase Plan's assembly module depends on it.
 - Virtual Codebase Plan: Slicer/Patcher/Materializer all shipped this session — see Future plans below for full current status, don't duplicate here as it progresses.
 - Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent, instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN), reattached below.
-- Known gap, left as-is: 13 old-dispatcher tests (`tests/`) need a local Ollama server (`mistral-small:latest`). Frozen pipeline, not `rebuild/` (66/66 clean without it) — install only if needed.
+- Ollama gap resolved 2026-09-10: `ollama` was already installed (`~/.local/bin/ollama`, v0.32.5) with `mistral-small:latest` pulled and `ollama serve` running (pid confirmed, `/api/tags` responds). Full `tests/` suite: 352 passed, 0 skipped, no real-server dependency triggered — the old "13 tests need a local Ollama server" note no longer reproduces and is removed. Those old-dispatcher tests mock the Ollama call site (`scripts/llm_client.py`'s `provider == "ollama"` branch, `tier_5_librarian`'s endpoint), so a live server was never actually required for them to pass.
 - `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored. Ephemeral, often reference a target repo's absolute path from whichever machine dispatched them.
-- README.md documents adding a local-model call target to `rebuild/scripts/llm_client.py` as an extension point — none exists today (DeepSeek/OpenRouter-fallback/agy/Planner, all cloud, only).
+- `rebuild/scripts/llm_client.py` calls no local model today — cloud only (DeepSeek, OpenRouter peak-hours fallback, Planner/nemotron, plus local `agy` CLI which is not Ollama). Ollama/Gemini/Claude-CLI were deliberately dropped in the salvage rebuild (see its module docstring). README documents adding a local-model call target back in as an extension point, unimplemented — the frozen `scripts/llm_client.py` (old pipeline) is the one with an actual `ollama` provider branch, used by `tier_5_librarian`.
+- Queue purged 2026-09-10: removed the 3 inert A1-2/A2/A3 (`approved`) + 1 blocked A1-1 SemAI tasks and 1 stray "test task, ignore" (`pending`) from `rebuild/queue.sqlite3`. Queue is now empty except 86 `done`.
 - Rebuild Phases 1-3 done (`verify.py`, `dispatch.py`, `cost.py`, resource_guard reattached), 66/66 tests passing; Phase 4 (tier escalation) rejected permanently — see PHASES.md.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag. Confirmed the only call site.
 - `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking — sanitized via `openrouter_sanitizer.py` (content filter blocks email/phone/IP-shaped tokens).
