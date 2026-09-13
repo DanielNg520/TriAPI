@@ -55,6 +55,7 @@ A removed/retired feature gets zero doc trace: no "X removed" line, no rationale
 A pending removal task states the action only ("delete file X"), never the reasoning for removing it.
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
+Hard rule: wrap-up always ends with `git push` right after committing, not just a local commit. This repo runs on multiple machines (git is the only sync path in use) — a commit that never leaves the local machine is what caused the two copies to diverge before (see 2026-09-12 reconciliation in git log).
 
 ## Carryover (current state, 2026-09-12)
 
