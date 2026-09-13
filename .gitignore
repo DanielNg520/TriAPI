@@ -17,4 +17,6 @@ logs/triapi_bugs/*
 !logs/triapi_bugs/.gitkeep
 rebuild/logs/*.jsonl
 rebuild/queue.sqlite3
+rebuild/queue.sqlite3-shm
+rebuild/queue.sqlite3-wal
 rebuild/tasks/
