@@ -8,6 +8,12 @@ deepseek:
   endpoint: "https://api.deepseek.com"
   api_key_secret: deepseek_api_key   # key name in config/secrets.enc.yaml
   model: "deepseek-v4-pro"
+  # Thinking-mode control (api-docs.deepseek.com/guides/thinking_mode/):
+  # nested "thinking" object in the chat-completions request body --
+  # type: enabled|disabled, reasoning_effort: none|low|high|max (only
+  # meaningful when type is enabled). Disabled here per 2026-09-12 decision.
+  thinking:
+    type: "disabled"
   # DeepSeek peak billing is 01:00-04:00 UTC daily -- costs are elevated in
   # that window. call_deepseek.py falls back to the OpenRouter free model
   # below instead of calling DeepSeek during this window.

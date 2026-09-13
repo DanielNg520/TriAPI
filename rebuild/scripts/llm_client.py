@@ -65,6 +65,8 @@ def execute_deepseek(prompt: str, system_prompt: str, api_key: str) -> Tuple[str
             {"role": "user", "content": prompt},
         ],
     }
+    if "thinking" in ds:
+        payload["thinking"] = ds["thinking"]
     timeout = cfg["timeouts"]["http"]
     resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
     resp.raise_for_status()
