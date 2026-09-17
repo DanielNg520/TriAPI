@@ -45,6 +45,7 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
   multi-hour peak-hour wait anyway); push any individually heavy dispatch into a fork
   rather than absorbing its transcript into the hub session directly.
 - `triapi tui` (Textual UI over the queue) is implemented and wired (`rebuild/scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand in `task_queue.py`), end-to-end verified.
+- Native-app launchers, 2026-09-16: `packaging/linux/` (`triapi.desktop` + `install.sh`, copies to `~/.local/share/applications/`) and `packaging/macos/` (`TriAPI.command` + `install.sh`, copies to `~/Applications/`) both launch `triapi tui`. Dispatched through this pipeline (agy, 4 tasks), Linux install verified live. macOS install.sh not live-tested (no Mac here) — verify on next macOS session.
 
 ## Doc policy
 

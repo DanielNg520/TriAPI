@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TriAPI
+Comment=TriAPI dispatch queue TUI
+Exec=x-terminal-emulator -e triapi tui
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;
