@@ -21,7 +21,7 @@ def ensure_codegraph_installed() -> bool:
 
 
 def ensure_codegraph_index(repo_path: str) -> bool:
-    if (Path(repo_path) / '.codegraph').exists():
+    if (Path(repo_path) / '.codegraph' / 'codegraph.db').exists():
         return True
     if not ensure_codegraph_installed():
         return False
