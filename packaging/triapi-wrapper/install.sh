@@ -7,6 +7,7 @@ TARGET_DIR="$HOME/.local/bin"
 TARGET="$TARGET_DIR/triapi"
 
 source "$SCRIPT_DIR/../ensure_venv.sh"
+"$PYTHON" "$REPO_DIR/rebuild/scripts/ensure_codegraph.py" "$REPO_DIR" || true
 
 mkdir -p "$TARGET_DIR"
 cat > "$TARGET" <<EOF
