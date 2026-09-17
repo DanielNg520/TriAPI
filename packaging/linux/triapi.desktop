@@ -2,7 +2,7 @@
 Type=Application
 Name=TriAPI
 Comment=TriAPI dispatch queue TUI
-Exec=x-terminal-emulator -e __TRIAPI_LAUNCH_CMD__
+Exec=__TRIAPI_LAUNCH_CMD__
 Icon=utilities-terminal
-Terminal=false
+Terminal=true
 Categories=Development;

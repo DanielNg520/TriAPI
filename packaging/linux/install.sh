@@ -10,7 +10,7 @@ if [ ! -x "$REPO_DIR/.venv/bin/python" ]; then
     exit 1
 fi
 
-LAUNCH_CMD="/bin/bash -c 'cd \"$REPO_DIR/rebuild\" && exec \"$REPO_DIR/.venv/bin/python\" -m scripts.task_queue tui'"
+LAUNCH_CMD="/bin/bash -c \"cd '$REPO_DIR/rebuild' && exec '$REPO_DIR/.venv/bin/python' -m scripts.task_queue tui\""
 LAUNCH_CMD_ESCAPED="$(printf '%s' "$LAUNCH_CMD" | sed -e 's/[&\]/\\&/g')"
 
 mkdir -p "$TARGET_DIR"
