@@ -5,14 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 TARGET_DIR="$HOME/.local/share/applications"
 
-if [ -x "$REPO_DIR/.venv/bin/python" ]; then
-    PYTHON="$REPO_DIR/.venv/bin/python"
-elif command -v python3 >/dev/null 2>&1; then
-    PYTHON="python3"
-else
-    echo "No venv found at $REPO_DIR/.venv -- run the repo setup first (see README.md)." >&2
-    exit 1
-fi
+source "$SCRIPT_DIR/../ensure_venv.sh"
 
 LAUNCH_CMD="/bin/bash -c \"cd '$REPO_DIR/rebuild' && exec '$PYTHON' -m scripts.task_queue tui\""
 LAUNCH_CMD_ESCAPED="$(printf '%s' "$LAUNCH_CMD" | sed -e 's/[&\\]/\\&/g')"
