@@ -15,7 +15,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `cd rebuild && python3 -m pytest -v tests/` (100/100, 2026-09-11)
+Test command: `cd rebuild && python3 -m pytest -v tests/` (100/100, 2026-09-16)
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
@@ -45,7 +45,7 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
   multi-hour peak-hour wait anyway); push any individually heavy dispatch into a fork
   rather than absorbing its transcript into the hub session directly.
 - `triapi tui` (Textual UI over the queue) is implemented and wired (`rebuild/scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand in `task_queue.py`), end-to-end verified.
-- Native-app launchers, 2026-09-16: `packaging/linux/` (`triapi.desktop` + `install.sh`, copies to `~/.local/share/applications/`) and `packaging/macos/` (`TriAPI.command` + `install.sh`, copies to `~/Applications/`). Original agy-dispatched version assumed a `triapi` command on PATH, which doesn't exist (no console-script entry point anywhere in the repo) — both launchers failed. Fixed on macOS (hand fix, user-approved): resolve the repo path themselves (baked in at install time via `sed`) and invoke `-m scripts.task_queue tui` from `rebuild/` directly — that `-m` form is required by a real `cmd_tui` bug (`from scripts import tui`, task_queue.py:282, only resolves under `-m`; `rebuild/README.md` corrected to match). Fedora Fix 1 (hardcoded `x-terminal-emulator`, Debian/Ubuntu-only, missing on Fedora): `.desktop` switched to `Terminal=true` so the DE's own default terminal is used. Fedora Fix 2 (Mac's version hardcoded `.venv/bin/python`, but this repo has no `.venv` at all on Fedora — plain system `python3`): dispatched through this pipeline (3 agy tasks) — all three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists. Verified end-to-end on Fedora (no `.venv`, `python3` fallback path): installed `.desktop` baked in `python3` correctly, TUI rendered live with no errors. macOS side verified by the Mac session (`.venv` path), confirmed no regression against `a8feb33`. Xubuntu unverified (same code path as Fedora, `Terminal=true` sidesteps the `x-terminal-emulator` gap either way, but not actually run there) — run it live if a Xubuntu box is available.
+- Native-app launchers, 2026-09-16: `packaging/linux/` (`triapi.desktop` + `install.sh`, copies to `~/.local/share/applications/`) and `packaging/macos/` (`TriAPI.command` + `install.sh`, copies to `~/Applications/`). Original agy-dispatched version assumed a `triapi` command on PATH, which doesn't exist (no console-script entry point anywhere in the repo) — both launchers failed. Fixed on macOS (hand fix, user-approved): resolve the repo path themselves (baked in at install time via `sed`) and invoke `-m scripts.task_queue tui` from `rebuild/` directly — that `-m` form is required by a real `cmd_tui` bug (`from scripts import tui`, task_queue.py:282, only resolves under `-m`; `rebuild/README.md` corrected to match). Fedora Fix 1 (hardcoded `x-terminal-emulator`, Debian/Ubuntu-only, missing on Fedora): `.desktop` switched to `Terminal=true` so the DE's own default terminal is used. Fedora Fix 2 (Mac's version hardcoded `.venv/bin/python`, but this repo has no `.venv` at all on Fedora — plain system `python3`): dispatched through this pipeline (3 agy tasks) — all three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists. Verified end-to-end on Fedora (no `.venv`, `python3` fallback path): installed `.desktop` baked in `python3` correctly, TUI rendered live with no errors. macOS side verified by the Mac session (`.venv` path), confirmed no regression against `a8feb33`. Xubuntu verified 2026-09-16 (Ubuntu 26.04 host, same code path as Fedora): `.venv`-at-repo-root created, `install.sh` baked in `.venv/bin/python` correctly, `.desktop` launcher and direct `-m scripts.task_queue tui` both rendered live with no errors.
 
 ## Doc policy
 
@@ -57,6 +57,12 @@ A pending removal task states the action only ("delete file X"), never the reaso
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
 Hard rule: wrap-up always ends with `git push` right after committing, not just a local commit. This repo runs on multiple machines (git is the only sync path in use) — a commit that never leaves the local machine is what caused the two copies to diverge before (see 2026-09-12 reconciliation in git log).
+
+## Carryover (current state, 2026-09-16)
+
+- Three-way cross-platform check (Mac/Fedora/Xubuntu-equivalent Ubuntu) via parallel sessions: 100/100 tests on Fedora and Ubuntu, 98/100 on Mac — the 2 "failures" are a false alarm (`test_verify.py` shells to bare `python3`, which only has `pytest` when a venv is active on `PATH`; confirmed passing on Ubuntu once activated), not a repo bug. Launcher verified live on all three.
+- Gap, not yet fixed: `agy`, `codegraph`, and the `triapi` global wrapper are required (dispatch calls, VCB's Slicer, the hub-loop CLI) but installed separately per-machine (`~/.local/bin/{agy,codegraph,triapi}`) with no install source or setup doc anywhere in this repo. A genuinely fresh clone on any OS is stuck until these are documented — needs each tool's actual install source before it can be written up here.
+- Python version floor: codebase uses PEP 604 `X | None` throughout, needs 3.10+. Fine on Ubuntu 22.04+/24.04+/26.04, current Fedora, and macOS; would break on a 20.04-based Xubuntu (ships 3.8). No 3.11+/3.12+-only syntax found.
 
 ## Carryover (current state, 2026-09-15)
 
