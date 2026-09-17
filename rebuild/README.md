@@ -57,6 +57,10 @@ Review `out.txt` before applying anything.
 (`uv pip install --python ../.venv/bin/python -r ../requirements-dev.txt`, or plain
 `pip install -r ../requirements-dev.txt` inside an activated venv) to get `pytest`.
 
-100/100 real tests pass (`pytest` from the `rebuild/` directory, with the venv active
-on `PATH` — a bare subprocess `python3` call in one test only sees `pytest` that way).
+100/100 real tests pass: `python3 -m pytest -v tests/` from the `rebuild/` directory,
+with the venv active on `PATH`. Use the `-m` form, not a bare `pytest`/`uv run pytest` —
+`-m pytest` prepends cwd to `sys.path` so `tests/` can import the local `scripts` package;
+the bare console script doesn't, and fails every test with `ModuleNotFoundError: No module
+named 'scripts'`. `uv run` also won't use `.venv`'s site-packages unless a `pyproject.toml`
+ties it to that env — it silently spins up its own ephemeral one otherwise.
 
