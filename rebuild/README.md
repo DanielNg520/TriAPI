@@ -53,5 +53,10 @@ Review `out.txt` before applying anything.
 
 ## Tests
 
-99/99 real tests pass (`pytest` from the `rebuild/` directory).
+`requirements.txt` covers the app only — install `../requirements-dev.txt` first
+(`uv pip install --python ../.venv/bin/python -r ../requirements-dev.txt`, or plain
+`pip install -r ../requirements-dev.txt` inside an activated venv) to get `pytest`.
+
+100/100 real tests pass (`pytest` from the `rebuild/` directory, with the venv active
+on `PATH` — a bare subprocess `python3` call in one test only sees `pytest` that way).
 
