@@ -39,7 +39,7 @@ python3 scripts/task_queue.py list [--status STATUS]
 python3 scripts/task_queue.py approve <id>
 python3 scripts/task_queue.py claim [id]
 python3 scripts/task_queue.py complete --id ID --result RESULT --status done|blocked
-python3 scripts/task_queue.py tui
+python3 -m scripts.task_queue tui  # tui needs the -m form; `python3 scripts/task_queue.py tui` fails (ModuleNotFoundError: scripts)
 ```
 
 ### Direct LLM Calls
