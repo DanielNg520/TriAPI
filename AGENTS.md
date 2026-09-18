@@ -68,6 +68,26 @@ Hard rule: wrap-up always ends with `git push` right after committing, not just 
 This repo runs on multiple machines — git is the only sync path in use.
 A commit that stays local caused two copies to diverge before (2026-09-12 reconciliation in git log).
 
+## Carryover (current state, 2026-09-18)
+
+- SemAI professional-flow dispatch is next (new session): drafts professional writing generally
+  (not just LinkedIn) via OpenClaw's existing browser plugin, gated by Telegram approval. Full
+  spec: SemAI's own AGENTS.md carryover. Not blocked (OpenClaw Phase 1-3 already shipped).
+- `rebuild/config/model_config.yaml`'s `planner:` block is a TEMPORARY override (2026-09-18):
+  `provider: cli`, `model: "sonnet"`, `effort: "high"` — runs the local `claude` CLI via
+  `llm_client._call_claude_cli`, zero API cost. Standing OpenRouter config (nemotron free model)
+  is commented directly below it in the same file, not deleted.
+- Hard rule (see `feedback_never_call_paid_openrouter_without_approval` memory): never call a
+  paid OpenRouter model without explicit user approval — this override exists specifically to
+  avoid that for the professional-flow session's planning calls.
+- Revert instruction for the session that finishes SemAI's professional-flow dispatch: in
+  `rebuild/config/model_config.yaml`, delete the `provider: cli`/`model: "sonnet"`/`effort: "high"`
+  override lines and uncomment the standing OpenRouter block below them. No code change needed —
+  `execute_planner` in `llm_client.py` already branches on `provider`. Verify with
+  `git diff rebuild/config/model_config.yaml` showing only the standing block, no cli override.
+- Creative-writing flow (was briefly scoped into SemAI by mistake) is NOT part of TriAPI-dispatched
+  work — moved entirely to the separate `~/Documents/Coding/Ghostwriter` repo's own `plan.md`.
+
 ## Carryover (current state, 2026-09-17)
 
 - Three-way (Mac/Fedora/Xubuntu) native-app launcher + `triapi` wrapper rollout complete.

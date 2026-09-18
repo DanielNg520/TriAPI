@@ -119,13 +119,37 @@ def execute_openrouter(prompt: str, system_prompt: str, api_key: str) -> Tuple[s
     return response_text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
 
 
+def _call_claude_cli(prompt: str, system_prompt: str, model: str | None, effort: str | None) -> str:
+    """Run the local `claude` CLI as a pure text-in/text-out completion backend.
+
+    `--tools ""` is mandatory, not optional: without it `claude -p` is fully
+    agentic and can Read/Edit/Bash the caller's cwd directly instead of
+    returning text -- a real incident in the old (dropped) pipeline, see
+    that pipeline's own `_call_claude_cli` docstring (`../../scripts/llm_client.py`).
+    """
+    cmd = ["claude", "-p", "--tools", "", "--system-prompt", system_prompt]
+    if model:
+        cmd.extend(["--model", model])
+    if effort:
+        cmd.extend(["--effort", effort])
+    result = subprocess.run(cmd, input=prompt, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
 def execute_planner(prompt: str, system_prompt: str, api_key: str) -> Tuple[str, int, int]:
-    """Standing Planner role call (nemotron via OpenRouter) -- drafts task
-    breakdowns for Claude to review before dispatching. Not gated by DeepSeek
-    peak-hours; see call_planner.py. Returns (response_text, input_tokens,
-    output_tokens)."""
+    """Standing Planner role call -- drafts task breakdowns for Claude to
+    review before dispatching. Not gated by DeepSeek peak-hours; see
+    call_planner.py. Returns (response_text, input_tokens, output_tokens).
+
+    Dispatches on config/model_config.yaml's planner.provider: "cli" runs
+    the local `claude` CLI (no API cost, no token counts reported -- zeroed
+    out); anything else (the standing default) calls OpenRouter.
+    """
     cfg = load_model_config()
     plc = cfg["planner"]
+    if plc.get("provider") == "cli":
+        response_text = _call_claude_cli(prompt, system_prompt, plc.get("model"), plc.get("effort"))
+        return response_text, 0, 0
     url = f"{plc['endpoint']}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     payload = {

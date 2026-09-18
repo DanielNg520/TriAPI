@@ -38,10 +38,20 @@ openrouter:
 # call_deepseek.py's peak-hours fallback above, so heavy planner use can
 # starve that fallback and vice versa.
 planner:
-  provider: openrouter
-  endpoint: "https://openrouter.ai/api/v1"
-  api_key_secret: open_router_api_key
-  model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+  # TEMPORARY OVERRIDE (2026-09-18, active until the SemAI professional-flow
+  # dispatch session finishes -- see TriAPI/AGENTS.md carryover for the
+  # exact revert instruction). Uses the local `claude` CLI, no API cost,
+  # per explicit user request -- never the paid OpenRouter API without
+  # explicit approval (see feedback_never_call_paid_openrouter_without_approval).
+  provider: cli
+  model: "sonnet"
+  effort: "high"
+  # --- Standing config (revert target -- restore this block, delete the
+  # override above, when the professional-flow session is done) ---
+  # provider: openrouter
+  # endpoint: "https://openrouter.ai/api/v1"
+  # api_key_secret: open_router_api_key
+  # model: "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 agy:
   # Local CLI, no API key. --dangerously-skip-permissions --mode plan are
