@@ -70,21 +70,16 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-18)
 
-- SemAI professional-flow dispatch is next (new session): drafts professional writing generally
-  (not just LinkedIn) via OpenClaw's existing browser plugin, gated by Telegram approval. Full
-  spec: SemAI's own AGENTS.md carryover. Not blocked (OpenClaw Phase 1-3 already shipped).
-- `rebuild/config/model_config.yaml`'s `planner:` block is a TEMPORARY override (2026-09-18):
-  `provider: cli`, `model: "sonnet"`, `effort: "high"` — runs the local `claude` CLI via
-  `llm_client._call_claude_cli`, zero API cost. Standing OpenRouter config (nemotron free model)
-  is commented directly below it in the same file, not deleted.
-- Hard rule (see `feedback_never_call_paid_openrouter_without_approval` memory): never call a
-  paid OpenRouter model without explicit user approval — this override exists specifically to
-  avoid that for the professional-flow session's planning calls.
-- Revert instruction for the session that finishes SemAI's professional-flow dispatch: in
-  `rebuild/config/model_config.yaml`, delete the `provider: cli`/`model: "sonnet"`/`effort: "high"`
-  override lines and uncomment the standing OpenRouter block below them. No code change needed —
-  `execute_planner` in `llm_client.py` already branches on `provider`. Verify with
-  `git diff rebuild/config/model_config.yaml` showing only the standing block, no cli override.
+- SemAI professional-flow dispatch done (2026-09-18): `DraftProfessionalPost` intent,
+  `ProfessionalWriterWorker`, `openclaw_browser.py` adapter, all tests passing. See SemAI's own
+  AGENTS.md. `rebuild/config/model_config.yaml`'s planner override reverted to standing OpenRouter
+  config — confirmed via `git diff` showing only the standing block.
+- SemAI Telegram forum-topic auto-creation removed entirely (2026-09-18, same session, via this
+  pipeline): recurring duplicate-topic bug traced to `.state-semai/semai.sqlite3` (WAL sqlite on
+  btrfs) corrupting/resetting at least twice, wiping the only record of created topics each time.
+  Fix: topic ids now come solely from operator config (`.secret/telegram_topics.json` +
+  `TELEGRAM_TOPIC_IDS` env, never git), plus a new `/register_topic` chat command. Full detail in
+  SemAI's own AGENTS.md.
 - Creative-writing flow (was briefly scoped into SemAI by mistake) is NOT part of TriAPI-dispatched
   work — moved entirely to the separate `~/Documents/Coding/Ghostwriter` repo's own `plan.md`.
 
