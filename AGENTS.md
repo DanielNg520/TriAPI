@@ -47,10 +47,13 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
 - `triapi tui` (Textual UI over the queue) is implemented and wired (`rebuild/scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand in `task_queue.py`), end-to-end verified.
 - Native-app launchers, 2026-09-16: `packaging/linux/` (`triapi.desktop` + `install.sh`, copies to `~/.local/share/applications/`) and `packaging/macos/` (`TriAPI.command` + `install.sh`, copies to `~/Applications/`).
   - Original agy-dispatched version assumed a `triapi` command on PATH (no console-script entry point exists) — both launchers failed.
-  - Fixed on macOS (hand fix, user-approved): resolve the repo path at install time via `sed`, invoke `-m scripts.task_queue tui` from `rebuild/` — required by a real `cmd_tui` bug (`from scripts import tui`, `task_queue.py:282`, only resolves under `-m`); `rebuild/README.md` corrected to match.
-  - Fedora Fix 1: `.desktop` hardcoded `x-terminal-emulator` (Debian/Ubuntu-only) — switched to `Terminal=true` so the DE's own default terminal is used.
-  - Fedora Fix 2: Mac's version hardcoded `.venv/bin/python`, but Fedora has no `.venv` — dispatched (3 agy tasks): all three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists.
-  - Verified end-to-end: Fedora (`python3` fallback, TUI rendered live, no errors), macOS (`.venv` path, no regression vs `a8feb33`), Xubuntu (`.venv` created at repo root, `.desktop` + direct `-m` invocation both rendered live, no errors).
+  - Fixed on macOS (hand fix, user-approved): resolve the repo path at install time via `sed`, invoke `-m scripts.task_queue tui` from `rebuild/`.
+    Required by a real `cmd_tui` bug: `from scripts import tui` (`task_queue.py:282`) only resolves under `-m`. `rebuild/README.md` corrected to match.
+  - Fedora Fix 1: `.desktop` hardcoded `x-terminal-emulator` (Debian/Ubuntu-only) — switched to `Terminal=true`, uses the DE's own default terminal.
+  - Fedora Fix 2: Mac's version hardcoded `.venv/bin/python`, but Fedora has no `.venv`. Dispatched (3 agy tasks).
+    All three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists.
+  - Verified end-to-end: Fedora (`python3` fallback, TUI rendered live, no errors).
+    macOS (`.venv` path, no regression vs `a8feb33`). Xubuntu (`.venv` at repo root, `.desktop` + direct `-m` both rendered live, no errors).
 
 ## Doc policy
 
@@ -61,40 +64,77 @@ A removed/retired feature gets zero doc trace: no "X removed" line, no rationale
 A pending removal task states the action only ("delete file X"), never the reasoning for removing it.
 This repo's docs never reference or absorb another repo's content — relocate that repo's own docs there instead, never delete it.
 This policy applies to every repo TriAPI supervises, not just this one — check each target repo's own AGENTS.md follows it too.
-Hard rule: wrap-up always ends with `git push` right after committing, not just a local commit. This repo runs on multiple machines (git is the only sync path in use) — a commit that never leaves the local machine is what caused the two copies to diverge before (see 2026-09-12 reconciliation in git log).
+Hard rule: wrap-up always ends with `git push` right after committing, not just a local commit.
+This repo runs on multiple machines — git is the only sync path in use.
+A commit that stays local caused two copies to diverge before (2026-09-12 reconciliation in git log).
 
 ## Carryover (current state, 2026-09-17)
 
-- Three-way (Mac/Fedora/Xubuntu) native-app launcher + `triapi` wrapper rollout complete: `packaging/ensure_venv.sh` builds a real `.venv` via `uv` + `requirements.txt` on all three (replaced the old fallback-to-system-python3 logic). `requirements-dev.txt` adds `pytest` (was missing, blocked a fresh clone's test run). 100/100 tests pass on all three with a real venv+pytest present.
-- `ensure_codegraph.py`: installs codegraph via npm if missing, runs `codegraph init` if `.codegraph/codegraph.db` is absent (fixed 2026-09-17 — first version checked directory existence, always true here since `.codegraph/.gitignore` is tracked in git). Wired into `packaging/triapi-wrapper/install.sh`. Hard rule: run it first on any repo before dispatch work starts.
-- Secrets: `.sops.yaml` lists three age recipients, one per machine (Mac, Fedora, Xubuntu) — fixed 2026-09-17, Mac had been sharing Fedora's private key file rather than having its own; `sops updatekeys` re-wrapped `config/secrets.enc.yaml` for the corrected 3-key list. Gitignored — synced via ciphertext only, never plaintext. All three machines decrypt clean with their own distinct key.
-- Dispatch-gate hook (`~/.claude/hooks/dispatch-gate.sh` + `dispatch-gate-arm.sh`): now synced via the `Hivemind` repo (`~/Developer/Hivemind/claude/dispatch-gate/`, symlinked into `~/.claude/hooks/` on all three machines) — no longer local-only. `dispatch-gate-paths.txt` stays local per machine (holds machine-specific absolute paths, gitignored in Hivemind).
-- Hard rule, added 2026-09-17: any commit touching secrets/access-control paths (`.sops.yaml`, `config/secrets*`, auth config, `~/.claude/` permission-enforcement files) needs the user's explicit confirmation *before* committing/pushing or installing locally, not after — a same-session peer-relay chain skipped this twice (an OAuth-grant relay, and a sops-recipient key) before being caught.
+- Three-way (Mac/Fedora/Xubuntu) native-app launcher + `triapi` wrapper rollout complete.
+  - `packaging/ensure_venv.sh` builds a real `.venv` via `uv` + `requirements.txt` on all three, replacing the old fallback-to-system-python3 logic.
+  - `requirements-dev.txt` adds `pytest` (was missing, blocked a fresh clone's test run). 100/100 tests pass on all three with a real venv+pytest present.
+- `ensure_codegraph.py`: installs codegraph via npm if missing, runs `codegraph init` if `.codegraph/codegraph.db` is absent.
+  - Fixed 2026-09-17: first version checked directory existence, always true since `.codegraph/.gitignore` is tracked in git.
+  - Wired into `packaging/triapi-wrapper/install.sh`. Hard rule: run it first on any repo before dispatch work starts.
+- Secrets: `.sops.yaml` lists three age recipients, one per machine (Mac, Fedora, Xubuntu).
+  - Fixed 2026-09-17: Mac had been sharing Fedora's private key file rather than having its own; `sops updatekeys` re-wrapped `config/secrets.enc.yaml` for the corrected 3-key list.
+  - Gitignored, synced via ciphertext only, never plaintext. All three machines decrypt clean with their own distinct key.
+- Dispatch-gate hook (`~/.claude/hooks/dispatch-gate.sh` + `dispatch-gate-arm.sh`): now synced via the `Hivemind` repo (`~/Developer/Hivemind/claude/dispatch-gate/`), symlinked into `~/.claude/hooks/` on all three machines — no longer local-only.
+  - `dispatch-gate-paths.txt` stays local per machine (machine-specific absolute paths, gitignored in Hivemind).
+- Hard rule, added 2026-09-17: any commit touching secrets/access-control paths (`.sops.yaml`, `config/secrets*`, auth config, `~/.claude/` permission-enforcement files) needs the user's explicit confirmation before committing/pushing or installing, not after.
+  - A same-session peer-relay chain skipped this twice (an OAuth-grant relay, and a sops-recipient key) before being caught.
 - Gap: `agy` (Google's Antigravity CLI) still has no install doc here — OAuth-only, no known download URL found on any machine checked.
 - Manual test-task cleanup: deleting a `tasks` row alone leaves an orphaned `events` row (no FK cascade) — delete from both tables.
 - Python version floor: PEP 604 `X | None` needs 3.10+, fine on all three machines' actual OS versions.
 
 ## Carryover (current state, 2026-09-15)
 
-- Ops Center dispatch (`/home/dyne/Documents/Coding/Ops Center`, not a git repo): `vlog_bridge/` gained multi-recipient recording-status broadcast (new `broadcast.py`, `bridge_state.py` report-state tracking, `telegram_io.py` delete/return-id support, `bridge.py` lock-file-diff watcher covering both manual `/record` and the recorder's own automatic polling) — 5 tasks, hub-and-spoke reviewed. Two DeepSeek responses rejected and redispatched (fabricated code for parts of the file only described, not pasted verbatim, in the prompt — always paste full current file content for a full-file edit-in-place task). Also replaced Ops Center's `MAPPING.md` with `AGENTS.md` per this repo's doc policy (single-call agy task timed out/returned empty twice; split into two section-level calls, both succeeded).
+- Ops Center dispatch (`/home/dyne/Documents/Coding/Ops Center`, not a git repo): `vlog_bridge/` gained multi-recipient recording-status broadcast.
+  - New `broadcast.py`, `bridge_state.py` report-state tracking, `telegram_io.py` delete/return-id support, `bridge.py` lock-file-diff watcher covering both manual `/record` and the recorder's own automatic polling — 5 tasks, hub-and-spoke reviewed.
+  - Two DeepSeek responses rejected and redispatched: fabricated code for parts of the file only described, not pasted verbatim.
+    Always paste full current file content for a full-file edit-in-place task.
+  - Also replaced Ops Center's `MAPPING.md` with `AGENTS.md` per this repo's doc policy — single-call agy task timed out/returned empty twice, split into two section-level calls, both succeeded.
 
 ## Carryover (current state, 2026-09-14)
 
-- Four SemAI dispatch sessions today, full detail in SemAI's own AGENTS.md: (1) Telegram mail-actions Delete button + `_clean_body_text` boilerplate-stripping fix. (2) Root-caused and fixed a real Notion duplicate-database/duplicate-interface incident (`ensure_database`/`_ensure_actions_page_structure` trusted local cache alone before creating — now reconciles against Notion's actual state first; general principle, not Notion-specific). (3) Confirmed email→task/reminder→Notion sync was already fully wired, just unexercised; added missing `Category` property push. (4) New email→calendar "📅 Event" button (`CreateCalendarEventWorker` gained an email-sourced path); live-tested against a real appointment email and caught+fixed two real bugs (snippet-only body truncating before the actual date/time; a found-start-but-no-title case leaking the literal string "None") that the mocked unit tests didn't surface — live testing against real data caught what mocks missed. All work went through this repo's dispatch pipeline (DeepSeek/agy write, Claude reviews/applies/verifies), OpenRouter free-fallback used throughout (session ran during DeepSeek peak hours), several 502 "Nvidia overloaded" transient failures resolved by one retry each. 195/195 SemAI pytest pass, both live services restarted clean after each fix.
+- Four SemAI dispatch sessions today, full detail in SemAI's own AGENTS.md:
+  1. Telegram mail-actions Delete button + `_clean_body_text` boilerplate-stripping fix.
+  2. Root-caused and fixed a real Notion duplicate-database/duplicate-interface incident: `ensure_database`/`_ensure_actions_page_structure` trusted local cache alone before creating.
+     Now reconciles against Notion's actual state first — general principle, not Notion-specific.
+  3. Confirmed email→task/reminder→Notion sync was already fully wired, just unexercised; added missing `Category` property push.
+  4. New email→calendar "📅 Event" button (`CreateCalendarEventWorker` gained an email-sourced path).
+     Live-tested against a real appointment email, caught+fixed two real bugs: snippet-only body truncating before the actual date/time, and a found-start-but-no-title case leaking the literal string "None".
+     Mocked unit tests didn't surface either — live testing against real data caught what mocks missed.
+  - All work went through this repo's dispatch pipeline (DeepSeek/agy write, Claude reviews/applies/verifies).
+  - OpenRouter free-fallback used throughout (session ran during DeepSeek peak hours); several 502 "Nvidia overloaded" transient failures resolved by one retry each.
+  - 195/195 SemAI pytest pass, both live services restarted clean after each fix.
 
 ## Carryover (current state, 2026-09-13)
 
-- `task_queue.py`'s schema is single-parent only — `--depends-on` silently corrupts on multiple space-joined ids. Validate a bulk `add` sequence's dependencies resolve to real task ids right away, don't wait for a `claim` failure.
-- `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored, ephemeral, often reference a target repo's absolute path from whichever machine dispatched them.
-- `rebuild/scripts/llm_client.py` calls no local model — cloud only (DeepSeek, OpenRouter peak-hours fallback, Planner/Nemotron, plus local `agy` which is not Ollama); the frozen old `scripts/llm_client.py` is the one with an actual `ollama` provider branch.
+- `task_queue.py`'s schema is single-parent only — `--depends-on` silently corrupts on multiple space-joined ids.
+  Validate a bulk `add` sequence's dependencies resolve to real task ids right away, don't wait for a `claim` failure.
+- `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored, ephemeral.
+  Often reference a target repo's absolute path from whichever machine dispatched them.
+- `rebuild/scripts/llm_client.py` calls no local model — cloud only (DeepSeek, OpenRouter peak-hours fallback, Planner/Nemotron, plus local `agy` which is not Ollama).
+  The frozen old `scripts/llm_client.py` is the one with an actual `ollama` provider branch.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag — confirmed the only call site.
-- `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking, sanitized via `openrouter_sanitizer.py`. Not a general DeepSeek peer otherwise — shared rate-limit pool, content-filter/hallucination issues in the old pipeline; peak-hours fallback is the sole call site. Nemotron quirk: has made an unrequested edit to an unrelated line despite explicit scope instructions on 3/3 real calls seen so far — always diff the full response, not just the requested function.
-- `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` (was `null`, silently inheriting a shared setting file). agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
-- `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): hard `deny` on any path in `~/.claude/dispatch-gate-paths.txt`. Escape hatch: `~/.claude/hooks/dispatch-gate-arm.sh <ttl_seconds> <file>...` writes a single-use, short-TTL marker consumed by the next matching Edit/Write — run it immediately before applying an already-reviewed DeepSeek/agy response, or before a hand fix the user explicitly approves in the moment.
-- Nemotron is a standing Planner role: `rebuild/scripts/call_planner.py` + `llm_client.execute_planner()` + `model_config.yaml`'s `planner:` section (documented in `rebuild/README.md`). Not gated by DeepSeek peak-hours; shares the OpenRouter free-tier pool. Planner drafts still route through Claude before becoming queue tasks, never straight to DeepSeek/agy.
-- Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent instead of crashing on macOS (no systemd). Frozen infra (SALVAGE_PLAN).
-- Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`. Split by concern while a file's still small, don't wait for a size ceiling.
-- When dispatching against any target repo, run its tests via the command its own AGENTS.md documents — don't assume system python; a repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
+- `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking, sanitized via `openrouter_sanitizer.py`.
+  Not a general DeepSeek peer otherwise — shared rate-limit pool, content-filter/hallucination issues in the old pipeline; peak-hours fallback is the sole call site.
+  Nemotron quirk: made an unrequested edit to an unrelated line despite explicit scope instructions on 3/3 real calls so far.
+  Always diff the full response, not just the requested function.
+- `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` (was `null`, silently inheriting a shared setting file).
+  agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
+- `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): hard `deny` on any path in `~/.claude/dispatch-gate-paths.txt`.
+  Escape hatch: `~/.claude/hooks/dispatch-gate-arm.sh <ttl_seconds> <file>...` writes a single-use, short-TTL marker consumed by the next matching Edit/Write.
+  Run it immediately before applying an already-reviewed DeepSeek/agy response, or before a hand fix the user explicitly approves in the moment.
+- Nemotron is a standing Planner role: `rebuild/scripts/call_planner.py` + `llm_client.execute_planner()` + `model_config.yaml`'s `planner:` section (documented in `rebuild/README.md`).
+  Not gated by DeepSeek peak-hours; shares the OpenRouter free-tier pool. Planner drafts still route through Claude before becoming queue tasks, never straight to DeepSeek/agy.
+- Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent instead of crashing on macOS (no systemd).
+  Frozen infra (see Archive, SALVAGE_PLAN).
+- Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`.
+  Split by concern while a file's still small, don't wait for a size ceiling.
+- When dispatching against any target repo, run its tests via the command its own AGENTS.md documents — don't assume system python.
+  A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
 ## Future plans (queued, not started)
 
@@ -103,7 +143,9 @@ Hard rule: wrap-up always ends with `git push` right after committing, not just 
 Goal: a local model drafts edits on oversized files without hitting context limits.
 A cloud model then integrates the draft into the real file precisely.
 
-- Slicer: revised 2026-09-09, no Tree-sitter — reuse the already-installed/indexed CodeGraph CLI instead. `codegraph node <file> --symbols-only` gives every other symbol's signature; `codegraph node <target-symbol>` gives its full verbatim source; the file's own import block is grabbed by a plain text read. No new parsing dependency needed — see carryover above for the hands-on verification.
+- Slicer: revised 2026-09-09, no Tree-sitter — reuse the already-installed/indexed CodeGraph CLI instead.
+  `codegraph node <file> --symbols-only` gives every other symbol's signature; `codegraph node <target-symbol>` gives its full verbatim source; the file's own import block is grabbed by a plain text read.
+  No new parsing dependency needed — see carryover above for the hands-on verification.
 - Produces a small skeleton file: imports, other functions'/class's signatures only, target function in full.
 - Local Planner (Tier 4-equivalent): drafts logic on the skeleton. Correctness only, formatting doesn't matter.
 - Cloud Materializer (DeepSeek/Gemini): given the full real file (prompt-cached) plus the local draft, emits a patch.
