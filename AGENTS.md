@@ -7,7 +7,7 @@ Everything else, including `docs/artifact/`, is frozen history, not maintained.
 
 Old dispatcher (`scripts/dispatcher.py` + tier1-5 escalation) is deprecated in place, not deleted, not running.
 Root cause: its own verification never verified real state.
-See `SALVAGE_PLAN.md` for the keep/rewrite/drop decision.
+Keep/rewrite/drop decision (executed, see Archive) was in `SALVAGE_PLAN.md`.
 
 Active work lives in `rebuild/`: DeepSeek writes code, agy writes docs, Claude plans+audits every response.
 Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RULES.md` (hard rules shared by every call).
@@ -45,7 +45,12 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
   multi-hour peak-hour wait anyway); push any individually heavy dispatch into a fork
   rather than absorbing its transcript into the hub session directly.
 - `triapi tui` (Textual UI over the queue) is implemented and wired (`rebuild/scripts/tui.py` + 4 `tui_*.py` helper modules, `cmd_tui` subcommand in `task_queue.py`), end-to-end verified.
-- Native-app launchers, 2026-09-16: `packaging/linux/` (`triapi.desktop` + `install.sh`, copies to `~/.local/share/applications/`) and `packaging/macos/` (`TriAPI.command` + `install.sh`, copies to `~/Applications/`). Original agy-dispatched version assumed a `triapi` command on PATH, which doesn't exist (no console-script entry point anywhere in the repo) — both launchers failed. Fixed on macOS (hand fix, user-approved): resolve the repo path themselves (baked in at install time via `sed`) and invoke `-m scripts.task_queue tui` from `rebuild/` directly — that `-m` form is required by a real `cmd_tui` bug (`from scripts import tui`, task_queue.py:282, only resolves under `-m`; `rebuild/README.md` corrected to match). Fedora Fix 1 (hardcoded `x-terminal-emulator`, Debian/Ubuntu-only, missing on Fedora): `.desktop` switched to `Terminal=true` so the DE's own default terminal is used. Fedora Fix 2 (Mac's version hardcoded `.venv/bin/python`, but this repo has no `.venv` at all on Fedora — plain system `python3`): dispatched through this pipeline (3 agy tasks) — all three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists. Verified end-to-end on Fedora (no `.venv`, `python3` fallback path): installed `.desktop` baked in `python3` correctly, TUI rendered live with no errors. macOS side verified by the Mac session (`.venv` path), confirmed no regression against `a8feb33`. Xubuntu verified 2026-09-16 (Ubuntu 26.04 host, same code path as Fedora): `.venv`-at-repo-root created, `install.sh` baked in `.venv/bin/python` correctly, `.desktop` launcher and direct `-m scripts.task_queue tui` both rendered live with no errors.
+- Native-app launchers, 2026-09-16: `packaging/linux/` (`triapi.desktop` + `install.sh`, copies to `~/.local/share/applications/`) and `packaging/macos/` (`TriAPI.command` + `install.sh`, copies to `~/Applications/`).
+  - Original agy-dispatched version assumed a `triapi` command on PATH (no console-script entry point exists) — both launchers failed.
+  - Fixed on macOS (hand fix, user-approved): resolve the repo path at install time via `sed`, invoke `-m scripts.task_queue tui` from `rebuild/` — required by a real `cmd_tui` bug (`from scripts import tui`, `task_queue.py:282`, only resolves under `-m`); `rebuild/README.md` corrected to match.
+  - Fedora Fix 1: `.desktop` hardcoded `x-terminal-emulator` (Debian/Ubuntu-only) — switched to `Terminal=true` so the DE's own default terminal is used.
+  - Fedora Fix 2: Mac's version hardcoded `.venv/bin/python`, but Fedora has no `.venv` — dispatched (3 agy tasks): all three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists.
+  - Verified end-to-end: Fedora (`python3` fallback, TUI rendered live, no errors), macOS (`.venv` path, no regression vs `a8feb33`), Xubuntu (`.venv` created at repo root, `.desktop` + direct `-m` invocation both rendered live, no errors).
 
 ## Doc policy
 
@@ -129,3 +134,4 @@ A cloud model then integrates the draft into the real file precisely.
 
 Old bloated docs (plan-block history, file/dir doc overflow, old tier-escalation notes) removed from the tree entirely.
 Recoverable via `git show 82e81f8:docs/artifact/<path>` (last commit before removal) if ever needed.
+`SALVAGE_PLAN.md` (2026-09-05 keep/rewrite/drop decision, executed) removed 2026-09-18 — `git show b27204f:SALVAGE_PLAN.md`.
