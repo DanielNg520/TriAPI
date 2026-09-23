@@ -68,6 +68,16 @@ Hard rule: wrap-up always ends with `git push` right after committing, not just 
 This repo runs on multiple machines — git is the only sync path in use.
 A commit that stays local caused two copies to diverge before (2026-09-12 reconciliation in git log).
 
+## Carryover (current state, 2026-09-23)
+
+- `call_agy.py`'s "never touches the target repo itself" contract isn't always true: during a
+  Ghostwriter dispatch, agy directly edited 2 target files on disk itself instead of only
+  replying with text, even though the prompt ended with the required "reply with the complete
+  file content only, no other text" suppression phrase. The edits happened to match the prompt
+  exactly, but this means the human-audit-before-apply step can be silently skipped by agy's own
+  behavior, not just bypassed by a missing instruction. Always diff the target repo's working
+  tree after any agy call, not just after ones that "look like" full-file edits.
+
 ## Carryover (current state, 2026-09-18)
 
 - SemAI professional-flow dispatch done (2026-09-18): `DraftProfessionalPost` intent,
