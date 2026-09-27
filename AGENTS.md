@@ -55,6 +55,29 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
   - Verified end-to-end: Fedora (`python3` fallback, TUI rendered live, no errors).
     macOS (`.venv` path, no regression vs `a8feb33`). Xubuntu (`.venv` at repo root, `.desktop` + direct `-m` both rendered live, no errors).
 
+### Ad hoc direct dispatch via temp task file (added 2026-09-27)
+
+When Claude's own usage cap blocks the queue-driven loop, work can bypass
+`task_queue.py` and go straight to agy inside the target repo instead.
+Claude writes `AGY_TASKS.md` at that repo's root: ground rules (isolated
+branch, smallest diff, no blind addition, never invent APIs, run that repo's
+real test command, stop-and-report instead of guessing), then an ordered
+list of low-risk tasks (investigation-only first, then mechanical fixes),
+then a required `AGY_REPORT.md` format (status, diff, test output, blockers).
+User relays a short fixed prompt to agy telling it to read that file, follow
+it exactly, and write the report; Claude later reads the report, verifies
+each claim against the real diff/tests/logs (an agy report has been wrong
+before — see below), commits, merges to the target repo's main, folds
+findings into its own AGENTS.md, then deletes both temp files.
+Only trivial, fully-specified tasks: report-only investigations or fixes
+that reuse an existing primitive. Never architecture-affecting work.
+First used on SemAI 2026-09-26/27: `PINNED_TOPIC_PREFIX` dedup, a missing
+stocks-TTL test, a placeholder PWA icon — all landed clean after audit.
+One agy report was wrong, not malicious: it ran `journalctl --user` on a
+system-level unit and reported "log empty" as a clean result; the unit was
+never queried. Always re-run report-only findings yourself before trusting
+them, especially anything that shells out to check external state.
+
 ## Doc policy
 
 One file only: this one. Carryover is the section below, not a separate file.
