@@ -38,8 +38,8 @@ def test_extract_code_block_missing_raises_value_error():
         extract_code_block("no code blocks here at all")
 
 
-def test_is_deepseek_peak_hours_true_inside_window_on_weekday():
-    cfg = {"deepseek": {"peak_hours_utc": [1, 4]}}
+def test_is_deepseek_peak_hours_true_first_window_weekday():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
     fixed_dt = datetime(2026, 9, 8, 2, 0, tzinfo=timezone.utc)
 
     with patch("scripts.llm_client.datetime") as mock_dt:
@@ -47,22 +47,76 @@ def test_is_deepseek_peak_hours_true_inside_window_on_weekday():
         assert is_deepseek_peak_hours(cfg) is True
 
 
-def test_is_deepseek_peak_hours_false_outside_window_on_weekday():
-    cfg = {"deepseek": {"peak_hours_utc": [1, 4]}}
-    fixed_dt = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
+def test_is_deepseek_peak_hours_true_second_window_weekday():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
+    fixed_dt = datetime(2026, 9, 8, 7, 0, tzinfo=timezone.utc)
+
+    with patch("scripts.llm_client.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_dt
+        assert is_deepseek_peak_hours(cfg) is True
+
+
+def test_is_deepseek_peak_hours_false_between_windows_weekday():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
+    fixed_dt = datetime(2026, 9, 8, 5, 0, tzinfo=timezone.utc)
 
     with patch("scripts.llm_client.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_dt
         assert is_deepseek_peak_hours(cfg) is False
 
 
-def test_is_deepseek_peak_hours_false_on_beijing_weekend():
-    cfg = {"deepseek": {"peak_hours_utc": [1, 4]}}
+def test_is_deepseek_peak_hours_false_end_exclusive_boundaries_weekday():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
+    for hour in [4, 10]:
+        fixed_dt = datetime(2026, 9, 8, hour, 0, tzinfo=timezone.utc)
+        with patch("scripts.llm_client.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_dt
+            assert is_deepseek_peak_hours(cfg) is False
+
+
+def test_is_deepseek_peak_hours_true_start_inclusive_boundaries_weekday():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
+    for hour in [1, 6]:
+        fixed_dt = datetime(2026, 9, 8, hour, 0, tzinfo=timezone.utc)
+        with patch("scripts.llm_client.datetime") as mock_dt:
+            mock_dt.now.return_value = fixed_dt
+            assert is_deepseek_peak_hours(cfg) is True
+
+
+def test_is_deepseek_peak_hours_false_saturday_inside_window():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
     fixed_dt = datetime(2026, 9, 12, 2, 0, tzinfo=timezone.utc)
 
     with patch("scripts.llm_client.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_dt
         assert is_deepseek_peak_hours(cfg) is False
+
+
+def test_is_deepseek_peak_hours_false_friday_holiday_inside_window():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
+    fixed_dt = datetime(2026, 9, 25, 2, 0, tzinfo=timezone.utc)
+
+    with patch("scripts.llm_client.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_dt
+        assert is_deepseek_peak_hours(cfg) is False
+
+
+def test_is_deepseek_peak_hours_false_saturday_makeup_workday_inside_window():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]], "china_holiday_dates": ["2026-09-25"]}}
+    fixed_dt = datetime(2026, 10, 10, 2, 0, tzinfo=timezone.utc)
+
+    with patch("scripts.llm_client.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_dt
+        assert is_deepseek_peak_hours(cfg) is False
+
+
+def test_is_deepseek_peak_hours_true_missing_holiday_key_weekday():
+    cfg = {"deepseek": {"peak_hours_utc": [[1, 4], [6, 10]]}}
+    fixed_dt = datetime(2026, 9, 8, 2, 0, tzinfo=timezone.utc)
+
+    with patch("scripts.llm_client.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_dt
+        assert is_deepseek_peak_hours(cfg) is True
 
 
 def test_execute_openrouter_returns_content_and_usage():

@@ -15,7 +15,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (100/100, 2026-09-17)
+Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (106/106, 2026-09-29)
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
@@ -54,6 +54,13 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
     All three launcher files now prefer `.venv/bin/python` if present, else fall back to `python3` on PATH, erroring only if neither exists.
   - Verified end-to-end: Fedora (`python3` fallback, TUI rendered live, no errors).
     macOS (`.venv` path, no regression vs `a8feb33`). Xubuntu (`.venv` at repo root, `.desktop` + direct `-m` both rendered live, no errors).
+
+### DeepSeek peak schedule (verified 2026-09-29)
+
+Source: api-docs.deepseek.com/quick_start/pricing. Peak is 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri, excluding Chinese public holidays.
+Live gate: `rebuild/scripts/llm_client.py` `is_deepseek_peak_hours`, config `deepseek.peak_hours_utc` (list of `[start, end)` pairs) and `china_holiday_dates`.
+DeepSeek publishes no holiday list; dates come from the State Council notice. Refresh `china_holiday_dates` each November; missing dates count as weekdays.
+Make-up workdays fall on weekends, so they are already off-peak. The deprecated `scripts/` pipeline still has the old single-window `_is_deepseek_peak_hours`; not running, left unchanged.
 
 ### Ad hoc direct dispatch via temp task file (added 2026-09-27)
 

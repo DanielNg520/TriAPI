@@ -40,13 +40,17 @@ def load_rules() -> str:
 
 
 def is_deepseek_peak_hours(cfg: dict | None = None) -> bool:
-    """DeepSeek peak billing window (UTC), configurable in model_config.yaml; Beijing weekends are off-peak."""
+    """DeepSeek peak billing: Mon-Fri Beijing, not a China holiday, UTC hour in any peak window."""
     cfg = cfg or load_model_config()
     now = datetime.now(timezone.utc)
-    if now.astimezone(_BEIJING_TZ).weekday() >= 5:
+    beijing_now = now.astimezone(_BEIJING_TZ)
+    if beijing_now.weekday() >= 5:
         return False
-    start, end = cfg["deepseek"]["peak_hours_utc"]
-    return start <= now.hour < end
+    holidays = cfg["deepseek"].get("china_holiday_dates", [])
+    if beijing_now.date().isoformat() in holidays:
+        return False
+    windows = cfg["deepseek"]["peak_hours_utc"]
+    return any(start <= now.hour < end for start, end in windows)
 
 
 def execute_deepseek(prompt: str, system_prompt: str, api_key: str) -> Tuple[str, int, int]:
