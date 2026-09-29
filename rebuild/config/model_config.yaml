@@ -25,6 +25,10 @@ deepseek:
   # Make-up workdays fall on weekends, so they are already off-peak. DeepSeek
   # publishes no list: refresh each November when the next year's notice issues;
   # dates missing from the list are treated as ordinary weekdays.
+  # Auto-refresh source (NateScarlet/holiday-cn, MIT): daily scrape of the State
+  # Council notice; a year file is only trusted when its "papers" list is non-empty.
+  # refresh_if_stale() fetches into config/china_holidays.json (generated, untracked).
+  holiday_source_url_template: "https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/{year}.json"
   china_holiday_dates:
     - "2026-01-01"
     - "2026-01-02"

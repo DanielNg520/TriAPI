@@ -22,6 +22,7 @@ import requests
 import yaml
 from pathlib import Path
 
+from scripts.holiday_calendar import known_holiday_dates
 from scripts.openrouter_sanitizer import sanitize_for_openrouter_content_filter
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "model_config.yaml"
@@ -40,14 +41,13 @@ def load_rules() -> str:
 
 
 def is_deepseek_peak_hours(cfg: dict | None = None) -> bool:
-    """DeepSeek peak billing: Mon-Fri Beijing, not a China holiday, UTC hour in any peak window."""
+    """DeepSeek peak billing: Mon-Fri Beijing, not a merged known holiday, UTC hour in any peak window."""
     cfg = cfg or load_model_config()
     now = datetime.now(timezone.utc)
     beijing_now = now.astimezone(_BEIJING_TZ)
     if beijing_now.weekday() >= 5:
         return False
-    holidays = cfg["deepseek"].get("china_holiday_dates", [])
-    if beijing_now.date().isoformat() in holidays:
+    if beijing_now.date().isoformat() in known_holiday_dates(cfg):
         return False
     windows = cfg["deepseek"]["peak_hours_utc"]
     return any(start <= now.hour < end for start, end in windows)

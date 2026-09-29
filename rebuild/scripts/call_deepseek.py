@@ -12,11 +12,13 @@ applying anything -- this script never touches the target repo itself.
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts import cost, llm_client, secrets_loader
+from scripts import cost, holiday_calendar, llm_client, secrets_loader
 from scripts._root_resource_guard import pause_services, resume_services, load_resource_guard_services
 
 
@@ -37,6 +39,12 @@ def main() -> int:
     system_prompt = llm_client.load_rules() + "\n\n" + args.system_file.read_text()
 
     task_id = args.task_id or (args.prompt_file.stem if args.prompt_file else "stdin")
+
+    cfg = llm_client.load_model_config()
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    refreshed_years = holiday_calendar.refresh_if_stale(cfg, today)
+    if refreshed_years:
+        print(f"[HOLIDAYS] refreshed years: {', '.join(map(str, refreshed_years))}", file=sys.stderr)
 
     if llm_client.is_deepseek_peak_hours():
         if args.no_fallback:

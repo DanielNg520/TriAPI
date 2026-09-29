@@ -15,7 +15,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (106/106, 2026-09-29)
+Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (133/133, 2026-09-29)
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
@@ -59,7 +59,12 @@ caught the one real gap (`cmd_claim`'s depends_on check), not the diff review.
 
 Source: api-docs.deepseek.com/quick_start/pricing. Peak is 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri, excluding Chinese public holidays.
 Live gate: `rebuild/scripts/llm_client.py` `is_deepseek_peak_hours`, config `deepseek.peak_hours_utc` (list of `[start, end)` pairs) and `china_holiday_dates`.
-DeepSeek publishes no holiday list; dates come from the State Council notice. Refresh `china_holiday_dates` each November; missing dates count as weekdays.
+DeepSeek publishes no holiday list; dates come from the State Council notice, mirrored by NateScarlet/holiday-cn (2026 verified identical, 33 rest days).
+Auto-refresh: `scripts/call_deepseek.py` `main()` calls `holiday_calendar.refresh_if_stale` before the peak check; lazy, no timer, never raises.
+Stale means no known date for this year, or, from November, none for next year. One attempt per day (`logs/holiday_refresh_attempt.txt`).
+Valid year file needs non-empty `papers` and 20+ in-year rest days; an unpublished placeholder (`days: []`) is rejected and retried tomorrow.
+Result merges into untracked `config/china_holidays.json`; `known_holiday_dates` unions it with the YAML list. Source URL: `holiday_source_url_template`.
+A failed fetch logs one warning with traceback (stderr); dispatch continues, a stale list fails safe to the free fallback.
 Make-up workdays fall on weekends, so they are already off-peak. The deprecated `scripts/` pipeline still has the old single-window `_is_deepseek_peak_hours`; not running, left unchanged.
 
 ### Ad hoc direct dispatch via temp task file (added 2026-09-27)

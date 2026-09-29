@@ -277,3 +277,23 @@ def test_execute_planner_no_choices_raises():
         with pytest.raises(RuntimeError):
             execute_planner("prompt", "system", "fake-key")
 
+
+def test_is_deepseek_peak_hours_false_on_holiday():
+    cfg = {
+        "deepseek": {
+            "peak_hours_utc": [[1, 4], [6, 10]],
+            "china_holiday_dates": [],
+        }
+    }
+    fixed_dt = datetime(2026, 9, 8, 2, 0, tzinfo=timezone.utc)
+
+    with patch("scripts.llm_client.datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_dt
+        assert is_deepseek_peak_hours(cfg) is True
+
+    with patch("scripts.llm_client.known_holiday_dates", return_value={"2026-09-08"}), patch(
+        "scripts.llm_client.datetime"
+    ) as mock_dt:
+        mock_dt.now.return_value = fixed_dt
+        assert is_deepseek_peak_hours(cfg) is False
+
