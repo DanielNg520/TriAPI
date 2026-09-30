@@ -196,6 +196,10 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - When dispatching against any target repo, run its tests via the command its own AGENTS.md documents — don't assume system python.
   A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
+## Findings
+F1 [low · 1 · 2026-09-30] `scripts/jules_client.py:202`: reads `google_jules_apikey`, secrets file has `google_jules_api_key`; Jules reports key missing (verified, frozen root pipeline).
+Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
+
 ## Future plans (queued, not started)
 
 ### 1. Virtual Codebase Plan — tiered Planner-Materializer for large-file edits
