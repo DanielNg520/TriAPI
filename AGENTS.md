@@ -199,7 +199,8 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
 ## Findings
-No open findings (F1, Jules key spelling, fixed 2026-09-30).
+F2 [low · 1 · 2026-09-30] `rebuild/scripts/dispatch.py`: `apply_change` needs an existing file and `dispatch_task` rolls back on zero pytest runs, so new files and docs need a placeholder plus `apply_change` (verified).
+(Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
 ## Future plans (queued, not started)
