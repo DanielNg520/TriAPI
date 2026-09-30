@@ -6,7 +6,7 @@ Task queue and LLM call scaffold with manual audit step before applying.
 
 - `config/model_config.yaml` — endpoint/model/effort/timeouts, spend limit, and OpenRouter fallback model. Edit here, not in code.
 - `queue.sqlite3` — SQLite backing database for task queue.
-- `scripts/secrets_loader.py` — reads `../config/secrets.enc.yaml`. Requires only `deepseek_api_key`; `open_router_api_key` is read for the peak-hours fallback and the planner. The old root pipeline's keys (`ollama_host`, `google_ai_studio_api_key`, `groq_api_key`) are legacy and unused here.
+- `scripts/secrets_loader.py` — reads `../config/secrets.enc.yaml`. Requires only `deepseek_api_key`; `open_router_api_key` is read for the peak-hours fallback and the planner. The old root pipeline's keys (`ollama_host`, `google_ai_studio_api_key`, `groq_api_key`) are legacy and device-specific: kept on Fedora for possible future use, omitted on Xubuntu; `rebuild/` never reads them.
 - `scripts/llm_client.py` — `execute_deepseek()`, `execute_openrouter()`, `execute_agy()`.
 - `scripts/_root_resource_guard.py` — bridges to TriAPI-root's `scripts/resource_guard.py` (importlib file-path loading, works around a `scripts` package-name collision between this repo and the root repo — see PHASES.md Phase 3). `call_deepseek.py`/`call_agy.py` wrap their outbound call in `pause_services()`/`resume_services()`, config-gated by root `config/resource_guard.yaml` (empty by default — no-op).
 - `scripts/openrouter_sanitizer.py` — sanitizes OpenRouter-bound text (content filter blocks email/phone/IP-shaped tokens).
