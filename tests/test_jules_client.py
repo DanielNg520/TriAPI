@@ -18,7 +18,7 @@ class JulesClientUnavailableTests(unittest.TestCase):
         ):
             result = jules_client.run_jules_test(prompt="p", source="s")
         self.assertEqual(result["status"], "error")
-        self.assertIn("google_jules_apikey", result["reason"])
+        self.assertIn("google_jules_api_key", result["reason"])
         create_session.assert_not_called()
         post.assert_not_called()
 
@@ -27,7 +27,7 @@ class JulesClientErrorTests(unittest.TestCase):
     def test_create_session_request_exception_returns_error(self) -> None:
         with (
             mock.patch.object(
-                jules_client, "load_secrets", return_value={"google_jules_apikey": "k"}
+                jules_client, "load_secrets", return_value={"google_jules_api_key": "k"}
             ),
             mock.patch.object(
                 jules_client,

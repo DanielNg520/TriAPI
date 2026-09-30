@@ -105,6 +105,8 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-23)
 
+- 2026-09-30: Jules secret key renamed in code, tests and example to `google_jules_api_key`, matching both machines' encrypted files.
+- 2026-09-30: Xubuntu tests need the venv first on PATH (two `test_verify.py` tests spawn bare `python3 -m pytest`), or system pytest installed.
 - `call_agy.py`'s "never touches the target repo itself" contract isn't always true: during a
   Ghostwriter dispatch, agy directly edited 2 target files on disk itself instead of only
   replying with text, even though the prompt ended with the required "reply with the complete
@@ -197,7 +199,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
 ## Findings
-F1 [low · 1 · 2026-09-30] `scripts/jules_client.py:202`: reads `google_jules_apikey`, secrets file has `google_jules_api_key`; Jules reports key missing (verified, frozen root pipeline).
+No open findings (F1, Jules key spelling, fixed 2026-09-30).
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
 ## Future plans (queued, not started)

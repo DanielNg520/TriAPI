@@ -6,7 +6,7 @@ request-building/parsing helpers, and a poll loop. Used to hand off a task
 to Jules as an out-of-band tier and later collect its result.
 
 Auth is a plain API key header (`X-Goog-Api-Key`), loaded via
-secrets_loader.load_secrets()["google_jules_apikey"] -- never logged.
+secrets_loader.load_secrets()["google_jules_api_key"] -- never logged.
 """
 
 import argparse
@@ -199,10 +199,10 @@ def run_jules_test(
         log.error("Jules test: could not load secrets: %s", e)
         return {"status": "error", "reason": f"Could not load secrets: {e}"}
 
-    api_key = secrets.get("google_jules_apikey")
+    api_key = secrets.get("google_jules_api_key")
     if not api_key:
-        log.error("Jules test: 'google_jules_apikey' missing from secrets")
-        return {"status": "error", "reason": "'google_jules_apikey' missing from secrets"}
+        log.error("Jules test: 'google_jules_api_key' missing from secrets")
+        return {"status": "error", "reason": "'google_jules_api_key' missing from secrets"}
 
     try:
         session = create_session(
