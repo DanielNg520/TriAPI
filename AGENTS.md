@@ -211,6 +211,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Findings
 F2 [low · 2 · 2026-09-30→2026-10-01] `rebuild/scripts/dispatch.py`: `dispatch_task` rolls back when `--test` runs zero pytest tests, so non-pytest verification (docs, shell) must omit `--test`; new files are handled by `apply_dispatch.py --new` (verified).
+F3 [medium · 1 · 2026-10-01] `rebuild/scripts/call_agy.py`, root `scripts/` escalation tiers: worker responses are not stored, so agy docs/tests cannot use `apply_dispatch.py` and old-pipeline writes would fail the ledger check (verified). Fix: store at the shared `llm_client` emission point, then install the hook here.
 (Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
