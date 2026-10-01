@@ -90,6 +90,17 @@ system-level unit and reported "log empty" as a clean result; the unit was
 never queried. Always re-run report-only findings yourself before trusting
 them, especially anything that shells out to check external state.
 
+### Provenance and apply (added 2026-10-01)
+Worker output reaches repos only through `rebuild/scripts/apply_dispatch.py`; never retype a response with Edit/Write.
+`call_deepseek.py` stores every response at `rebuild/logs/responses/<sha256>.txt` (`dispatch.store_response`) and prints `[response] <path>` to stderr.
+`python3 scripts/apply_dispatch.py --target F --response <stored path> [--new] [--language L] [--test CMD] [--cwd D]`; exit 0 applied, 1 failed, 2 response not stored.
+Edit mode takes SEARCH/REPLACE blocks; `--new` takes the first fenced block for a file that must not exist. Verification failure rolls back and removes a new file.
+`dispatch_task` appends the final file sha256 to the ledger (`DISPATCH_LEDGER_PATH`, default `~/.local/state/dispatch-ledger/applied.sha256`) only after verification passes.
+Enforcement is a git pre-commit hook (`~/.claude/hooks/dispatch-ledger-check.sh`, source in Hivemind `claude/dispatch-gate/`): staged `.py .js .css .html` under gated dirs must have a ledger hash.
+Installed so far in SemAI only (`.git/hooks/pre-commit` runs the check); TriAPI's own commits are not yet checked. Hand fixes: the user runs `dispatch-ledger-hand.sh <file>`.
+`git commit --no-verify` and `git -c core.hooksPath` are denied in `~/.claude/settings.json`. Tests redirect ledger and responses dir via `tests/conftest.py`.
+Not done by design: response signing or a separate-user daemon; forging a stored response by hand remains possible but deliberate.
+
 ## Doc policy
 
 One file only: this one. Carryover is the section below, not a separate file.
@@ -199,7 +210,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
 ## Findings
-F2 [low · 1 · 2026-09-30] `rebuild/scripts/dispatch.py`: `apply_change` needs an existing file and `dispatch_task` rolls back on zero pytest runs, so new files and docs need a placeholder plus `apply_change` (verified).
+F2 [low · 2 · 2026-09-30→2026-10-01] `rebuild/scripts/dispatch.py`: `dispatch_task` rolls back when `--test` runs zero pytest tests, so non-pytest verification (docs, shell) must omit `--test`; new files are handled by `apply_dispatch.py --new` (verified).
 (Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 

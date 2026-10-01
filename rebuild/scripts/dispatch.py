@@ -1,6 +1,58 @@
+import hashlib
+import os
 from pathlib import Path
 
 from scripts.verify import verify_task
+
+LEDGER_ENV = "DISPATCH_LEDGER_PATH"
+
+
+def ledger_path() -> Path:
+    return (
+        Path(os.environ[LEDGER_ENV])
+        if LEDGER_ENV in os.environ
+        else Path.home() / ".local" / "state" / "dispatch-ledger" / "applied.sha256"
+    )
+
+
+def record_applied(file_path: str) -> None:
+    digest = hashlib.sha256(Path(file_path).read_bytes()).hexdigest()
+    ledger = ledger_path()
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with ledger.open("a") as f:
+        f.write(f"{digest}\n")
+
+
+RESPONSES_ENV = "DISPATCH_RESPONSES_DIR"
+
+
+def responses_dir() -> Path:
+    return (
+        Path(os.environ[RESPONSES_ENV])
+        if RESPONSES_ENV in os.environ
+        else Path(__file__).resolve().parents[1] / "logs" / "responses"
+    )
+
+
+def store_response(text: str) -> Path:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    directory = responses_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    response_path = directory / f"{digest}.txt"
+    response_path.write_text(text, encoding="utf-8")
+    return response_path
+
+
+def load_stored_response(path: str | Path) -> str:
+    directory = responses_dir().resolve()
+    resolved_path = Path(path).resolve()
+    if resolved_path.parent != directory:
+        raise ValueError("response path is not directly inside the responses directory")
+    file_bytes = resolved_path.read_bytes()
+    expected_digest = hashlib.sha256(file_bytes).hexdigest()
+    if resolved_path.stem != expected_digest:
+        raise ValueError("response file stem does not match its content hash")
+    return file_bytes.decode("utf-8")
 
 
 def apply_change(
@@ -76,4 +128,5 @@ def dispatch_task(
         restore_file(file_path, original_content)
         return {**result, "rolled_back": True}
 
+    record_applied(file_path)
     return {**result, "rolled_back": False}

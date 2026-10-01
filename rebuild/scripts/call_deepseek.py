@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts import cost, holiday_calendar, llm_client, secrets_loader
+from scripts import cost, dispatch, holiday_calendar, llm_client, secrets_loader
 from scripts._root_resource_guard import pause_services, resume_services, load_resource_guard_services
 
 
@@ -67,6 +67,8 @@ def main() -> int:
         finally:
             resume_services(paused)
         print(response)
+        saved = dispatch.store_response(response)
+        print(f"[response] {saved}", file=sys.stderr)
         cost.log_cost(task_id, 0, 0)
         print(f"[tokens] in={in_tok} out={out_tok} cost_usd=0.000000 (openrouter free fallback)", file=sys.stderr)
         return 0
@@ -89,6 +91,8 @@ def main() -> int:
     finally:
         resume_services(paused)
     print(response)
+    saved = dispatch.store_response(response)
+    print(f"[response] {saved}", file=sys.stderr)
     cost.log_cost(task_id, in_tok, out_tok)
     print(f"[tokens] in={in_tok} out={out_tok} cost_usd={cost.calculate_cost(in_tok, out_tok):.6f}", file=sys.stderr)
     return 0
