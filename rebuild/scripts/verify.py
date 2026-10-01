@@ -4,7 +4,11 @@ import re
 import subprocess
 from pathlib import Path
 
+_ANSI_SGR_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
 def parse_test_output(output: str) -> dict[str, int]:
+    output = _ANSI_SGR_RE.sub('', output)
     ran_matches = list(re.finditer(r'\bRan\s+(\d+)\s+tests?\b', output))
     pytest_matches = list(re.finditer(r'\b(\d+)\s+(passed|failed|errors?|skipped)\b', output))
 

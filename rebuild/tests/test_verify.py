@@ -17,6 +17,12 @@ def test_parse_test_output_pytest_style():
     }
 
 
+def test_parse_test_output_strips_ansi_color_codes():
+    colored = "\x1b[33m\x1b[32m8 passed\x1b[0m, \x1b[33m1 warning\x1b[0m in 0.16s"
+    assert parse_test_output(colored)["passed"] == 8
+    assert parse_test_output(colored)["total_executed"] == 8
+
+
 def test_parse_test_output_mixed_format_last_wins():
     # A wrapping script prints an early unittest sub-suite summary, then the
     # real final pytest summary later -- the later one must win, not the
