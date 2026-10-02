@@ -18,7 +18,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import llm_client, secrets_loader
-from scripts._root_resource_guard import pause_services, resume_services, load_resource_guard_services
 
 
 def main() -> int:
@@ -39,13 +38,9 @@ def main() -> int:
     task_id = args.task_id or (args.prompt_file.stem if args.prompt_file else "stdin")
 
     secrets = secrets_loader.load_secrets()
-    paused = pause_services(load_resource_guard_services())
-    try:
-        response, in_tok, out_tok = llm_client.execute_planner(
-            prompt, system_prompt, secrets["open_router_api_key"]
-        )
-    finally:
-        resume_services(paused)
+    response, in_tok, out_tok = llm_client.execute_planner(
+        prompt, system_prompt, secrets["open_router_api_key"]
+    )
 
     print(response)
     print(f"[tokens] in={in_tok} out={out_tok}", file=sys.stderr)
