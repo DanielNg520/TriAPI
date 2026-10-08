@@ -28,8 +28,11 @@ BLOCK_RE = re.compile(
     # model wrote exactly that natural empty form and the old mandatory
     # "\n" before ">>>" could never match it (there was no spare newline
     # character left after "={3,}\s*\n" already consumed the only one).
-    r"<{3,}\s*SEARCH\s*\n(.*?)\n={3,}\s*\n(.*?)\n?>{3,}\s*REPLACE",
-    re.DOTALL | re.IGNORECASE,
+    # 2026-10-08: markers are line-anchored ('^' + re.MULTILINE); without
+    # this a REPLACE section quoting the closing marker in backticks was
+    # cut mid-line and truncated code got written out.
+    r"^<{3,}\s*SEARCH\s*\n(.*?)\n^={3,}\s*\n(.*?)\n?^>{3,}\s*REPLACE",
+    re.DOTALL | re.IGNORECASE | re.MULTILINE,
 )
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9_+-]*\n(.*)\n```$", re.DOTALL)
 
@@ -117,7 +120,14 @@ def apply_edit_blocks(original: str, response_text: str) -> tuple[str | None, st
     # "marker not in original" exemption so legitimate Markdown setext-
     # style ==== headers in the file are not flagged as leaks) -- only a
     # NEW such line, introduced by the patch, counts as a leak.
-    _LEAK_RE = re.compile(r"^[<=>]{3,}\s*$", re.MULTILINE)
+    # 2026-10-08: a leaked line that is a full marker line carrying its
+    # keyword (start marker plus SEARCH, end marker plus REPLACE, optional
+    # spaces, trailing whitespace only) also counts now; marker mentions
+    # mid-line stay allowed. Existing lines in 'original' remain exempt.
+    _LEAK_RE = re.compile(
+        r"^(?:[<=>]{3,}\s*$|[<>]{3,}\s*(?:SEARCH|REPLACE)\s*$)",
+        re.MULTILINE | re.IGNORECASE,
+    )
     leaked = []
     for line in _LEAK_RE.findall(content):
         # Need to confirm it's actually present in original; if it is, this

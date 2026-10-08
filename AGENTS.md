@@ -15,7 +15,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (133/133, 2026-09-29)
+Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (158 pass, 2026-10-08); root `tests/` 358 pass
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
