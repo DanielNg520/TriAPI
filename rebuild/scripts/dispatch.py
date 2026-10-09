@@ -70,6 +70,12 @@ def apply_change(
         raise ValueError("exactly one of new_content or search_replace_blocks must be provided")
 
     path = Path(file_path)
+    raw_bytes = path.read_bytes()
+    has_crlf = b"\r\n" in raw_bytes
+    has_bare_lf = b"\n" in raw_bytes.replace(b"\r\n", b"")
+    if has_crlf and has_bare_lf:
+        raise ValueError(f"mixed line endings (both CRLF and LF) in file: {file_path}")
+
     original = path.read_text(encoding="utf-8")
 
     if new_content is not None:

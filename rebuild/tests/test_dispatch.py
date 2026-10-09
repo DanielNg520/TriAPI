@@ -111,6 +111,30 @@ def test_apply_change_new_content_writes_crlf_for_crlf_file(tmp_path):
     assert path.read_bytes() == b"new\r\n"
 
 
+def test_apply_change_search_replace_blocks_mixed_endings_raises(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"aaa\r\nbbb\nccc\r\n")
+
+    with pytest.raises(ValueError):
+        apply_change(path, search_replace_blocks=[("aaa", "xxx")])
+
+    assert path.read_bytes() == b"aaa\r\nbbb\nccc\r\n"
+
+
+def test_dispatch_task_mixed_endings_rejects_without_verify(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"aaa\r\nbbb\nccc\r\n")
+
+    with patch("scripts.dispatch.verify_task") as mock_verify:
+        result = dispatch_task(path, search_replace_blocks=[("aaa", "xxx")])
+
+    assert result["passed"] is False
+    assert result["rolled_back"] is False
+    assert "Dispatch error" in result["summary"]
+    assert path.read_bytes() == b"aaa\r\nbbb\nccc\r\n"
+    mock_verify.assert_not_called()
+
+
 def test_dispatch_task_rollback_preserves_crlf(tmp_path):
     path = tmp_path / "file.txt"
     path.write_bytes(b"old line\r\n")
