@@ -89,3 +89,36 @@ def test_dispatch_task_apply_error_returns_failure(tmp_path):
     assert "Dispatch error" in result["summary"]
     assert path.read_text() == original
     mock_verify.assert_not_called()
+
+
+def test_apply_change_search_replace_blocks_preserves_crlf(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"aaa bbb ccc\r\n")
+
+    original = apply_change(path, search_replace_blocks=[("aaa", "xxx")])
+
+    assert original == "aaa bbb ccc\n"
+    assert path.read_bytes() == b"xxx bbb ccc\r\n"
+
+
+def test_apply_change_new_content_writes_crlf_for_crlf_file(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"old\r\n")
+
+    original = apply_change(path, new_content="new\n")
+
+    assert original == "old\n"
+    assert path.read_bytes() == b"new\r\n"
+
+
+def test_dispatch_task_rollback_preserves_crlf(tmp_path):
+    path = tmp_path / "file.txt"
+    path.write_bytes(b"old line\r\n")
+
+    with patch("scripts.dispatch.verify_task") as mock_verify:
+        mock_verify.return_value = {"passed": False, "summary": "bad", "evidence": {}}
+        result = dispatch_task(path, new_content="new line\n")
+
+    assert result["passed"] is False
+    assert result["rolled_back"] is True
+    assert path.read_bytes() == b"old line\r\n"

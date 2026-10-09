@@ -39,6 +39,30 @@ def test_edit_success(capsys, tmp_path):
     assert lines == [sha256_of("x\nb\n")]
 
 
+def test_edit_preserves_crlf(capsys, tmp_path):
+    target = tmp_path / "target.txt"
+    target.write_bytes(b"a\r\nb\r\n")
+    response_text = (
+        "<<<<<<< SEARCH\n"
+        "a\n"
+        "=======\n"
+        "x\n"
+        ">>>>>>> REPLACE\n"
+    )
+    response = write_response_text(response_text, tmp_path)
+
+    result = apply_dispatch.main(["--target", str(target), "--response", str(response)])
+
+    assert result == 0
+    assert target.read_bytes() == b"x\r\nb\r\n"
+    captured = capsys.readouterr()
+    assert "PASSED" in captured.out
+    assert "+1 -1" in captured.out
+    ledger = ledger_path()
+    lines = ledger.read_text().splitlines()
+    assert lines == [sha256_of("x\r\nb\r\n")]
+
+
 def test_response_outside_responses_dir_returns_2(capsys, tmp_path):
     target = tmp_path / "target.txt"
     target.write_text("unchanged\n")

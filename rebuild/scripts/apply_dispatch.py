@@ -25,7 +25,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def prepare_edit(target: Path, response_text: str) -> tuple[str, str]:
-    old_content = target.read_text()
+    old_content = target.read_text(encoding="utf-8")
     new_content, error = apply_edit_blocks(old_content, response_text)
     if new_content is None:
         raise ValueError(error)

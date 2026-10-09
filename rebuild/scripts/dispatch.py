@@ -55,6 +55,12 @@ def load_stored_response(path: str | Path) -> str:
     return file_bytes.decode("utf-8")
 
 
+def _line_ending(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return "\r\n" if b"\r\n" in path.read_bytes() else "\n"
+
+
 def apply_change(
     file_path: str,
     new_content: str | None = None,
@@ -81,7 +87,7 @@ def apply_change(
         for search_text, replace_text in search_replace_blocks:
             final_content = final_content.replace(search_text, replace_text, 1)
 
-    path.write_text(final_content, encoding="utf-8")
+    path.write_text(final_content, encoding="utf-8", newline=_line_ending(path))
     return original
 
 
@@ -89,7 +95,8 @@ def restore_file(
     file_path: str,
     original_content: str,
 ) -> None:
-    Path(file_path).write_text(original_content, encoding="utf-8")
+    path = Path(file_path)
+    path.write_text(original_content, encoding="utf-8", newline=_line_ending(path))
 
 
 def dispatch_task(
