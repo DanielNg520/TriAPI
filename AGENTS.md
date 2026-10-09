@@ -119,6 +119,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-23)
 
+- 2026-10-09: interdependent edits to one file: check each with a single-test command, full suite only on the last (else each rolls back).
 - 2026-10-09: build prompt excerpts from symbol or `grep -n` anchors (or `vcb_slicer`), never typed line ranges; three prompt errors that day.
 - 2026-10-09: DeepSeek repeatedly emits non-unique SEARCH blocks on large files; `apply_dispatch` refuses them safely. Prefer tiny excerpts around a unique line.
 
