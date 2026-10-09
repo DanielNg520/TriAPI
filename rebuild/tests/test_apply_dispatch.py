@@ -175,3 +175,59 @@ def test_new_verify_failure_rolled_back(capsys, monkeypatch, tmp_path):
     assert not target.exists()
     captured = capsys.readouterr()
     assert "FAILED (rolled back)" in captured.out
+
+
+def test_check_exit_zero_applies(capsys, tmp_path):
+    target = tmp_path / "check_ok.txt"
+    target.write_text("a\nb\n")
+    response = write_response_text("<<<<<<< SEARCH\na\n=======\nx\n>>>>>>> REPLACE\n", tmp_path)
+
+    result = apply_dispatch.main(
+        ["--target", str(target), "--response", str(response), "--check", "python3 -c pass"]
+    )
+
+    assert result == 0
+    assert target.read_text() == "x\nb\n"
+    captured = capsys.readouterr()
+    assert "PASSED" in captured.out
+
+
+def test_check_nonzero_rolls_back(capsys, tmp_path):
+    target = tmp_path / "check_fail.txt"
+    target.write_text("a\nb\n")
+    response = write_response_text("<<<<<<< SEARCH\na\n=======\nx\n>>>>>>> REPLACE\n", tmp_path)
+
+    result = apply_dispatch.main(
+        ["--target", str(target), "--response", str(response), "--check", "python3 -c 'import sys; sys.exit(1)'"]
+    )
+
+    assert result == 1
+    assert target.read_text() == "a\nb\n"
+    captured = capsys.readouterr()
+    assert "FAILED (rolled back)" in captured.out
+
+
+def test_test_without_counts_still_rolls_back(capsys, tmp_path):
+    target = tmp_path / "test_no_counts.txt"
+    target.write_text("a\nb\n")
+    response = write_response_text("<<<<<<< SEARCH\na\n=======\nx\n>>>>>>> REPLACE\n", tmp_path)
+
+    result = apply_dispatch.main(
+        ["--target", str(target), "--response", str(response), "--test", "python3 -c pass"]
+    )
+
+    assert result == 1
+    assert target.read_text() == "a\nb\n"
+
+
+def test_test_and_check_mutually_exclusive(tmp_path):
+    target = tmp_path / "mutual_exclusion.txt"
+    target.write_text("a\nb\n")
+    response = write_response_text("<<<<<<< SEARCH\na\n=======\nx\n>>>>>>> REPLACE\n", tmp_path)
+
+    with pytest.raises(SystemExit) as excinfo:
+        apply_dispatch.main(
+            ["--target", str(target), "--response", str(response), "--test", "python3 -c pass", "--check", "python3 -c pass"]
+        )
+
+    assert excinfo.value.code == 2

@@ -9,6 +9,8 @@ Every prompt sent through this MUST end with an explicit instruction like
 "reply with the complete file content only, no other text" -- agy's
 --mode plan (always set by llm_client.execute_agy) relies on the prompt
 itself to suppress its default propose-and-ask framing.
+
+The response is stored for apply_dispatch.py.
 """
 
 import argparse
@@ -17,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts import llm_client
+from scripts import dispatch, llm_client
 
 
 def main() -> int:
@@ -32,6 +34,8 @@ def main() -> int:
 
     response = llm_client.execute_agy(prompt, system_prompt)
     print(response)
+    saved = dispatch.store_response(response)
+    print(f"[response] {saved}", file=sys.stderr)
     return 0
 
 

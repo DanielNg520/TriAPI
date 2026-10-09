@@ -19,7 +19,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--response", required=True, type=Path)
     parser.add_argument("--new", action="store_true")
     parser.add_argument("--language", default="python")
-    parser.add_argument("--test")
+    tests = parser.add_mutually_exclusive_group()
+    tests.add_argument("--test")
+    tests.add_argument("--check")
     parser.add_argument("--cwd", type=Path)
     return parser.parse_args(argv)
 
@@ -47,12 +49,13 @@ def run_dispatch(
     new_content: str,
     args: argparse.Namespace,
 ) -> dict:
-    test_cmd = shlex.split(args.test) if args.test else None
+    test_cmd = shlex.split(args.test) if args.test else shlex.split(args.check) if args.check else None
     return dispatch_task(
         target,
         new_content=new_content,
         test_cmd=test_cmd,
         cwd=args.cwd,
+        require_tests=args.check is None,
     )
 
 

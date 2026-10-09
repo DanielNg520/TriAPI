@@ -61,6 +61,7 @@ def run_test_command(
     command: str | list[str],
     cwd: str | None = None,
     timeout: int = 120,
+    require_tests: bool = True,
 ) -> dict:
     try:
         result = subprocess.run(
@@ -96,19 +97,26 @@ def run_test_command(
     if counts["total_executed"] == 0:
         counts = parse_test_output(stdout + "\n" + stderr)
     zero_executed = counts["total_executed"] == 0
-    passed = (
-        returncode == 0
-        and counts["failed"] == 0
-        and counts["errors"] == 0
-        and counts["total_executed"] > 0
-    )
+    if require_tests:
+        passed = (
+            returncode == 0
+            and counts["failed"] == 0
+            and counts["errors"] == 0
+            and counts["total_executed"] > 0
+        )
 
-    if passed:
-        error_message = None
-    elif zero_executed:
-        error_message = "Zero tests executed"
+        if passed:
+            error_message = None
+        elif zero_executed:
+            error_message = "Zero tests executed"
+        else:
+            error_message = f"Exit code {returncode} with {counts['failed']} failures, {counts['errors']} errors"
     else:
-        error_message = f"Exit code {returncode} with {counts['failed']} failures, {counts['errors']} errors"
+        passed = returncode == 0
+        if passed:
+            error_message = None
+        else:
+            error_message = f"Exit code {returncode}"
 
     return {
         "passed": passed,
@@ -245,6 +253,7 @@ def verify_task(
     test_cmd: str | list[str] | None = None,
     cwd: str | None = None,
     timeout: int = 120,
+    require_tests: bool = True,
 ) -> dict:
     checks_run = 0
     evidence = {}
@@ -252,7 +261,7 @@ def verify_task(
 
     if test_cmd is not None:
         checks_run += 1
-        evidence["test_run"] = run_test_command(test_cmd, cwd=cwd, timeout=timeout)
+        evidence["test_run"] = run_test_command(test_cmd, cwd=cwd, timeout=timeout, require_tests=require_tests)
         if not evidence["test_run"]["passed"]:
             all_passed = False
 
@@ -291,12 +300,17 @@ def verify_task(
     if "test_run" in evidence:
         test_run = evidence["test_run"]
         if test_run["passed"]:
-            counts = test_run.get("counts") or {}
-            passed_count = counts.get("passed")
-            if isinstance(passed_count, int):
-                details.append(f"tests: {passed_count} passed")
+            if not require_tests:
+                details.append("check: exit 0")
             else:
-                details.append("tests: passed")
+                counts = test_run.get("counts") or {}
+                passed_count = counts.get("passed")
+                if isinstance(passed_count, int):
+                    details.append(f"tests: {passed_count} passed")
+                else:
+                    details.append("tests: passed")
+        elif not require_tests:
+            details.append(f"check: FAILED (exit {test_run['returncode']})")
         elif test_run.get("zero_executed"):
             details.append("tests: FAILED (Zero tests executed)")
         else:

@@ -114,6 +114,7 @@ def dispatch_task(
     test_cmd: str | list[str] | None = None,
     cwd: str | None = None,
     timeout: int = 120,
+    require_tests: bool = True,
 ) -> dict:
     try:
         original_content = apply_change(file_path, new_content, search_replace_blocks)
@@ -135,6 +136,7 @@ def dispatch_task(
         test_cmd=test_cmd,
         cwd=cwd,
         timeout=timeout,
+        require_tests=require_tests,
     )
 
     if result["passed"] is False:

@@ -127,3 +127,40 @@ def test_verify_task_composes_test_run(tmp_path):
     test_file.write_text("def test_pass():\n    assert True\n", encoding="utf-8")
     result = verify_task(test_cmd=["python3", "-m", "pytest", "-v", str(test_file)])
     assert result["passed"] is True
+
+
+def test_run_test_command_check_mode_passes_on_exit_zero_without_counts():
+    result = run_test_command(
+        ["python3", "-c", "print('ALL PASS')"], require_tests=False
+    )
+    assert result["passed"] is True
+    assert result["zero_executed"] is True
+    assert result["error_message"] is None
+
+
+def test_run_test_command_check_mode_fails_on_nonzero_exit():
+    result = run_test_command(
+        ["python3", "-c", "import sys; sys.exit(3)"], require_tests=False
+    )
+    assert result["passed"] is False
+    assert result["error_message"] == "Exit code 3"
+
+
+def test_run_test_command_strict_default_still_fails_without_counts():
+    result = run_test_command(["python3", "-c", "print('ALL PASS')"])
+    assert result["passed"] is False
+    assert result["zero_executed"] is True
+
+
+def test_verify_task_check_mode_summary():
+    result = verify_task(
+        test_cmd=["python3", "-c", "print('ok')"], require_tests=False
+    )
+    assert result["passed"] is True
+    assert "check: exit 0" in result["summary"]
+
+    result = verify_task(
+        test_cmd=["python3", "-c", "import sys; sys.exit(2)"], require_tests=False
+    )
+    assert result["passed"] is False
+    assert "check: FAILED (exit 2)" in result["summary"]

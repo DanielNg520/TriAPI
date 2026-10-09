@@ -15,7 +15,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (162 pass, 2026-10-09); root `tests/` 358 pass
+Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (173 pass, 2026-10-09); root `tests/` 358 pass
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
@@ -92,14 +92,15 @@ them, especially anything that shells out to check external state.
 
 ### Provenance and apply (added 2026-10-01)
 Worker output reaches repos only through `rebuild/scripts/apply_dispatch.py`; never retype a response with Edit/Write.
-`call_deepseek.py` stores every response at `rebuild/logs/responses/<sha256>.txt` (`dispatch.store_response`) and prints `[response] <path>` to stderr.
-`python3 scripts/apply_dispatch.py --target F --response <stored path> [--new] [--language L] [--test CMD] [--cwd D]`; exit 0 applied, 1 failed, 2 response not stored.
+`call_deepseek.py` and `call_agy.py` store every response at `rebuild/logs/responses/<sha256>.txt` (`dispatch.store_response`) and print `[response] <path>` to stderr.
+`python3 scripts/apply_dispatch.py --target F --response <stored path> [--new] [--language L] [--test CMD | --check CMD] [--cwd D]`; exit 0 applied, 1 failed, 2 response not stored.
+`--test` needs parsed pytest/unittest counts (zero executed fails); `--check` passes on exit 0 alone, for plain-assert suites (2026-10-09).
 Edit mode takes SEARCH/REPLACE blocks, matched on `\n`-normalized text; apply and rollback keep the target's CRLF/LF style.
 A target mixing CRLF and bare LF is refused (ValueError, bytes untouched), never normalized (2026-10-09).
 `--new` takes the first fenced block for a file that must not exist. Verification failure rolls back and removes a new file.
 `dispatch_task` appends the final file sha256 to the ledger (`DISPATCH_LEDGER_PATH`, default `~/.local/state/dispatch-ledger/applied.sha256`) only after verification passes.
 Enforcement is a git pre-commit hook (`~/.claude/hooks/dispatch-ledger-check.sh`, source in Hivemind `claude/dispatch-gate/`): staged `.py .js .css .html` under gated dirs must have a ledger hash.
-Installed so far in SemAI only (`.git/hooks/pre-commit` runs the check); TriAPI's own commits are not yet checked. Hand fixes: the user runs `dispatch-ledger-hand.sh <file>`.
+Installed in SemAI and TriAPI (`.git/hooks/pre-commit` runs the check; Fedora clone, owner 2026-10-09; other clones need the same two-line hook). Hand fixes: the user runs `dispatch-ledger-hand.sh <file>`.
 `git commit --no-verify` and `git -c core.hooksPath` are denied in `~/.claude/settings.json`. Tests redirect ledger and responses dir via `tests/conftest.py`.
 Not done by design: response signing or a separate-user daemon; forging a stored response by hand remains possible but deliberate.
 
@@ -215,8 +216,6 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
 ## Findings
-F2 [low · 3 · 2026-09-30→2026-10-09] `rebuild/scripts/dispatch.py`: `dispatch_task` rolls back when `--test` runs zero pytest tests, so non-pytest verification (docs, shell) must omit `--test`; new files are handled by `apply_dispatch.py --new` (verified).
-F3 [medium · 1 · 2026-10-01] `rebuild/scripts/call_agy.py`, root `scripts/` escalation tiers: worker responses are not stored, so agy docs/tests cannot use `apply_dispatch.py` and old-pipeline writes would fail the ledger check (verified). Fix: store at the shared `llm_client` emission point, then install the hook here.
 (Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
