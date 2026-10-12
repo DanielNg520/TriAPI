@@ -204,6 +204,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   Nemotron quirk: made an unrequested edit to an unrelated line despite explicit scope instructions on 3/3 real calls so far.
   Always diff the full response, not just the requested function.
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` (was `null`, silently inheriting a shared setting file).
+- Owner (2026-10-12): every Gemini 3.1 Pro high slot in `config/tiers.yaml` (planner, tier 2 peak_alt, tier 3) runs `gemini-3.8-flash`, effort high; live `agy` check passed.
   agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
 - `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): hard `deny` on any path in `~/.claude/dispatch-gate-paths.txt`.
   Escape hatch: `~/.claude/hooks/dispatch-gate-arm.sh <ttl_seconds> <file>...` writes a single-use, short-TTL marker consumed by the next matching Edit/Write.

@@ -498,7 +498,7 @@ def run_task(task_id: str, description: str, target: str, workdir: str = ".", bu
                                         tier3_escalate, build_cmd, workdir, context_blob, tiers_config, before_content)
 
     if resolved_by is None:
-        # Tier 2: DeepSeek v4 Pro off-peak; gemini-3.1-pro during
+        # Tier 2: DeepSeek v4 Pro off-peak; gemini-3.8-flash during
         # DeepSeek's peak-billing window instead of being skipped outright --
         # tier2_escalate.escalate() resolves which one via
         # budget_guard.resolve_peak_conditional(tiers_config[
