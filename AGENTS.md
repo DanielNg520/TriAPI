@@ -119,6 +119,8 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-23)
 
+- Owner (2026-10-13): wrap-up moves to TriAPI to save Claude tokens; DeepSeek V4 Pro audits every applied dispatch automatically, reports to Claude. Plan pending owner approval.
+- Owner (2026-10-13): DeepSeek dispatches run V4 Pro with thinking on (default effort, behaves as high); nested `reasoning_effort` is ignored by the API (live check).
 - 2026-10-09: a test-task excerpt must include the class fixture/setup it uses, or DeepSeek invents APIs (Archiver t13 rejected).
 - 2026-10-09: interdependent edits to one file: check each with a single-test command, full suite only on the last (else each rolls back).
 - 2026-10-09: build prompt excerpts from symbol or `grep -n` anchors (or `vcb_slicer`), never typed line ranges; three prompt errors that day.
