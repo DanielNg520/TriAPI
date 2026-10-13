@@ -8,12 +8,10 @@ deepseek:
   endpoint: "https://api.deepseek.com"
   api_key_secret: deepseek_api_key   # key name in config/secrets.enc.yaml
   model: "deepseek-v4-pro"
-  # Thinking mode (owner, 2026-10-13: Pro at high effort). Live check 2026-10-13: the API
-  # ignores reasoning_effort nested under "thinking"; only a top-level field changes it
-  # (low 217 vs 400 tokens). Thinking enabled with no effort field runs at the default (high).
-  # A top-level reasoning_effort (e.g. max) needs a llm_client code change.
+  # Thinking off (owner, 2026-10-13: cost). Live check 2026-10-13: the API ignores
+  # reasoning_effort nested under "thinking"; only a top-level field changes it.
   thinking:
-    type: "enabled"
+    type: "disabled"
   # DeepSeek peak billing (api-docs.deepseek.com/quick_start/pricing, verified
   # 2026-09-29): 01:00-04:00 and 06:00-10:00 UTC, Monday-Friday, excluding Chinese
   # public holidays; every other hour, weekends, and holidays are off-peak.

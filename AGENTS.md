@@ -119,10 +119,19 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-23)
 
-- Owner (2026-10-13): wrap-up moves to TriAPI to save Claude tokens; DeepSeek V4 Pro audits every applied dispatch automatically, reports to Claude. Plan pending owner approval; see math below.
-- Owner (2026-10-13): DeepSeek dispatches run V4 Pro with thinking on (default effort, behaves as high); nested `reasoning_effort` is ignored by the API (live check).
+- Owner (2026-10-13): wrap-up stays with Claude ($2/month accepted); DeepSeek thinking off (cost); per-dispatch audit offload not built.
+- Math 2026-10-13: per-dispatch audit at ~2000 calls/month about $66-130; session-end-only about $3; both lose to $2 of Claude wrap-up.
+- Plan, meter hardening (owner, 2026-10-13, for public release): own session, trace done, dispatch per file. Steps below.
+- Gaps (verified): one flash rate from deprecated `config/tiers.yaml`; rows lack model, provider, cache-hit tokens, peak flag, response sha.
+- Gaps (verified): cap is all-time cumulative; fallback calls log 0/0 tokens; `call_agy.py` logs nothing; one malformed log line crashes every `check_budget`.
+- Gap (verified): no outcome record; applied, rolled back and refused responses cannot be joined to spend, so effectiveness is unmeasurable.
+- Step 1: per-model pricing (cache hit, miss, output, peak multiplier, `last_verified`) in `model_config.yaml`; `cost.py` stops reading `tiers.yaml`.
+- Step 2: `execute_*` return a usage record (prompt hit and miss, completion); log row v2 adds provider, model, peak, cost at call time, response sha.
+- Step 3: monthly cap replaces the all-time cap; legacy rows (no model) priced as V4 Pro and tagged legacy; bad lines skipped and counted.
+- Step 4: `apply_dispatch.py` appends an outcome row (response sha, target, applied, rolled back, refused, test counts).
+- Step 5: report command: spend by day, task, model; accept rate; cost per applied change; spend on rejected responses; retries per task.
+- Ask owner: monthly DeepSeek cap value (real spend last 28 days about $5.75, thinking off).
 - Calibration 2026-10-13: V4 Pro thinking audit of SemAI `693ea74` caught the anchor bug, missed F35; in 10.9k, out 29.6k, real $0.066, 4 min.
-- Math 2026-10-13: per-dispatch audit at ~2000 calls/month is about $66-130, versus $2 of Claude wrap-up; session-end-only about $3. Offload loses; owner to decide.
 - 2026-10-09: a test-task excerpt must include the class fixture/setup it uses, or DeepSeek invents APIs (Archiver t13 rejected).
 - 2026-10-09: interdependent edits to one file: check each with a single-test command, full suite only on the last (else each rolls back).
 - 2026-10-09: build prompt excerpts from symbol or `grep -n` anchors (or `vcb_slicer`), never typed line ranges; three prompt errors that day.
