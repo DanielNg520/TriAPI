@@ -119,8 +119,10 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-23)
 
-- Owner (2026-10-13): wrap-up moves to TriAPI to save Claude tokens; DeepSeek V4 Pro audits every applied dispatch automatically, reports to Claude. Plan pending owner approval.
+- Owner (2026-10-13): wrap-up moves to TriAPI to save Claude tokens; DeepSeek V4 Pro audits every applied dispatch automatically, reports to Claude. Plan pending owner approval; see math below.
 - Owner (2026-10-13): DeepSeek dispatches run V4 Pro with thinking on (default effort, behaves as high); nested `reasoning_effort` is ignored by the API (live check).
+- Calibration 2026-10-13: V4 Pro thinking audit of SemAI `693ea74` caught the anchor bug, missed F35; in 10.9k, out 29.6k, real $0.066, 4 min.
+- Math 2026-10-13: per-dispatch audit at ~2000 calls/month is about $66-130, versus $2 of Claude wrap-up; session-end-only about $3. Offload loses; owner to decide.
 - 2026-10-09: a test-task excerpt must include the class fixture/setup it uses, or DeepSeek invents APIs (Archiver t13 rejected).
 - 2026-10-09: interdependent edits to one file: check each with a single-test command, full suite only on the last (else each rolls back).
 - 2026-10-09: build prompt excerpts from symbol or `grep -n` anchors (or `vcb_slicer`), never typed line ranges; three prompt errors that day.
@@ -221,6 +223,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   A repo's real test command (venv, wrapper script, etc.) is that repo's own convention, recorded there, not here.
 
 ## Findings
+F1 [high · 1 · 2026-10-13] `rebuild/scripts/cost.py`: prices every call at flash $0.14/M (`tiers.yaml`); V4 Pro is $0.66 in, $1.98 out off-peak, double at peak; cap undercounts 5-14x (verified).
 (Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
