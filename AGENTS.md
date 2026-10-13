@@ -127,10 +127,10 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - Gap (verified): no outcome record; applied, rolled back and refused responses cannot be joined to spend, so effectiveness is unmeasurable.
 - Step 1: per-model pricing (cache hit, miss, output, peak multiplier, `last_verified`) in `model_config.yaml`; `cost.py` stops reading `tiers.yaml`.
 - Step 2: `execute_*` return a usage record (prompt hit and miss, completion); log row v2 adds provider, model, peak, cost at call time, response sha.
-- Step 3: monthly cap replaces the all-time cap; legacy rows (no model) priced as V4 Pro and tagged legacy; bad lines skipped and counted.
+- Step 3: the $5 all-time cap becomes report-only (DeepSeek capped at source, owner 2026-10-13); legacy rows priced as V4 Pro, tagged legacy; bad lines skipped, counted.
 - Step 4: `apply_dispatch.py` appends an outcome row (response sha, target, applied, rolled back, refused, test counts).
 - Step 5: report command: spend by day, task, model; accept rate; cost per applied change; spend on rejected responses; retries per task.
-- Ask owner: monthly DeepSeek cap value (real spend last 28 days about $5.75, thinking off).
+- Owner (2026-10-13): DeepSeek stays as before this session unless an optimization or new gap is found.
 - Calibration 2026-10-13: V4 Pro thinking audit of SemAI `693ea74` caught the anchor bug, missed F35; in 10.9k, out 29.6k, real $0.066, 4 min.
 - 2026-10-09: a test-task excerpt must include the class fixture/setup it uses, or DeepSeek invents APIs (Archiver t13 rejected).
 - 2026-10-09: interdependent edits to one file: check each with a single-test command, full suite only on the last (else each rolls back).
