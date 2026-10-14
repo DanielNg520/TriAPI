@@ -128,7 +128,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - Gaps (verified): one stale flash rate (`model_config.yaml` `deepseek_reference_pricing`, moved from deleted `tiers.yaml`); rows lack model, provider, cache-hit tokens, peak flag, response sha.
 - Gaps (verified): cap is all-time cumulative; fallback calls log 0/0 tokens; `call_agy.py` logs nothing; one malformed log line crashes every `check_budget`.
 - Gap (verified): no outcome record; applied, rolled back and refused responses cannot be joined to spend, so effectiveness is unmeasurable.
-- Step 1: per-model pricing (cache hit, miss, output, peak multiplier, `last_verified`) in `model_config.yaml`; `cost.py` reads `model_config.yaml` (done 2026-10-13); rates fix waits for step 3, else the $5 cap blocks DeepSeek.
+- Step 1: per-model pricing (cache hit, miss, output, peak multiplier, `last_verified`) in `model_config.yaml`; `cost.py` now reads it there; rates wait for step 3 (else the $5 cap blocks).
 - Step 2: `execute_*` return a usage record (prompt hit and miss, completion); log row v2 adds provider, model, peak, cost at call time, response sha.
 - Step 3: the $5 all-time cap becomes report-only (DeepSeek capped at source, owner 2026-10-13); legacy rows priced as V4 Pro, tagged legacy; bad lines skipped, counted.
 - Step 4: `apply_dispatch.py` appends an outcome row (response sha, target, applied, rolled back, refused, test counts).
