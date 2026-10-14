@@ -129,7 +129,7 @@ def _call_claude_cli(prompt: str, system_prompt: str, model: str | None, effort:
     `--tools ""` is mandatory, not optional: without it `claude -p` is fully
     agentic and can Read/Edit/Bash the caller's cwd directly instead of
     returning text -- a real incident in the old (dropped) pipeline, see
-    that pipeline's own `_call_claude_cli` docstring (`../../scripts/llm_client.py`).
+    its `_call_claude_cli` docstring (`scripts/llm_client.py`, git history only).
     """
     cmd = ["claude", "-p", "--tools", "", "--system-prompt", system_prompt]
     if model:

@@ -10,7 +10,7 @@ def calculate_cost(
     config_path: str | None = None,
 ) -> float:
     if config_path is None:
-        config_path = Path(__file__).resolve().parents[2] / "config" / "tiers.yaml"
+        config_path = Path(__file__).resolve().parents[1] / "config" / "model_config.yaml"
 
     pricing = yaml.safe_load(Path(config_path).read_text())["deepseek_reference_pricing"]
 

@@ -65,6 +65,15 @@ deepseek:
   # this, call_deepseek.py refuses the call before it happens -- no bypass flag.
   spend_limit_usd: 5.0
 
+# Read by scripts/cost.py (moved from the deleted root config/tiers.yaml, 2026-10-13).
+# Stale flash rates kept on purpose: V4 Pro rates would push logged spend past
+# spend_limit_usd and block DeepSeek; meter-hardening steps 1 and 3 fix both together.
+deepseek_reference_pricing:
+  last_verified: "2026-08-09"
+  cache_miss_per_mtok_usd: 0.14
+  cache_hit_per_mtok_usd: 0.0028
+  output_per_mtok_usd: null
+
 openrouter:
   provider: openrouter
   endpoint: "https://openrouter.ai/api/v1"

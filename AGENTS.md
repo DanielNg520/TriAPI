@@ -5,7 +5,8 @@ Everything else, including `docs/artifact/`, is frozen history, not maintained.
 
 ## Current architecture
 
-Old dispatcher (`scripts/dispatcher.py` + tier1-5 escalation) is deprecated in place, not deleted, not running.
+Old dispatcher (root `scripts/` tier1-5 escalation, `config/tiers.yaml`, root tests) deleted (owner, 2026-10-13); recover via `git show 1a6cd5e:<path>`. Old root `logs/` files stay on disk, untracked (`/logs/` ignored).
+Only survivor: root `scripts/edit_blocks.py` (apply_dispatch's SEARCH/REPLACE engine via `_root_edit_blocks.py`) and its test `tests/test_edit_blocks_leak.py`.
 Root cause: its own verification never verified real state.
 Keep/rewrite/drop decision (executed, see Archive) was in `SALVAGE_PLAN.md`.
 
@@ -15,7 +16,7 @@ Nothing auto-applied. See `rebuild/README.md`, `rebuild/PHASES.md`, `rebuild/RUL
 Design principle: hub-and-spoke, not waterfall. Every worker result routes through Claude before the next step.
 No worker-to-worker handoff, ever — that chain shape is what let bugs propagate silently in the old pipeline.
 
-Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (173 pass, 2026-10-09); root `tests/` 358 pass
+Test command: `uv pip install -r requirements-dev.txt` once, then `cd rebuild && python3 -m pytest -v tests/` (173 pass, 2026-10-09); root `python3 -m pytest tests/` covers `edit_blocks.py` only
 
 ### Constructor/builder worker split — optional, judgment call (added 2026-09-06)
 
@@ -65,7 +66,7 @@ Stale means no known date for this year, or, from November, none for next year. 
 Valid year file needs non-empty `papers` and 20+ in-year rest days; an unpublished placeholder (`days: []`) is rejected and retried tomorrow.
 Result merges into untracked `config/china_holidays.json`; `known_holiday_dates` unions it with the YAML list. Source URL: `holiday_source_url_template`.
 A failed fetch logs one warning with traceback (stderr); dispatch continues, a stale list fails safe to the free fallback.
-Make-up workdays fall on weekends, so they are already off-peak. The deprecated `scripts/` pipeline still has the old single-window `_is_deepseek_peak_hours`; not running, left unchanged.
+Make-up workdays fall on weekends, so they are already off-peak.
 
 ### Ad hoc direct dispatch via temp task file (added 2026-09-27)
 
@@ -119,13 +120,15 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-23)
 
+- Last audit: 2026-10-13 wrap-up (audited through `1a6cd5e` plus legacy-pipeline removal; 0 new findings; light path: deletions and two one-line dispatches).
+
 - Owner (2026-10-13): wrap-up stays with Claude ($2/month accepted); DeepSeek thinking off (cost); per-dispatch audit offload not built.
 - Math 2026-10-13: per-dispatch audit at ~2000 calls/month about $66-130; session-end-only about $3; both lose to $2 of Claude wrap-up.
 - Plan, meter hardening (owner, 2026-10-13, for public release): own session, trace done, dispatch per file. Steps below.
-- Gaps (verified): one flash rate from deprecated `config/tiers.yaml`; rows lack model, provider, cache-hit tokens, peak flag, response sha.
+- Gaps (verified): one stale flash rate (`model_config.yaml` `deepseek_reference_pricing`, moved from deleted `tiers.yaml`); rows lack model, provider, cache-hit tokens, peak flag, response sha.
 - Gaps (verified): cap is all-time cumulative; fallback calls log 0/0 tokens; `call_agy.py` logs nothing; one malformed log line crashes every `check_budget`.
 - Gap (verified): no outcome record; applied, rolled back and refused responses cannot be joined to spend, so effectiveness is unmeasurable.
-- Step 1: per-model pricing (cache hit, miss, output, peak multiplier, `last_verified`) in `model_config.yaml`; `cost.py` stops reading `tiers.yaml`.
+- Step 1: per-model pricing (cache hit, miss, output, peak multiplier, `last_verified`) in `model_config.yaml`; `cost.py` reads `model_config.yaml` (done 2026-10-13); rates fix waits for step 3, else the $5 cap blocks DeepSeek.
 - Step 2: `execute_*` return a usage record (prompt hit and miss, completion); log row v2 adds provider, model, peak, cost at call time, response sha.
 - Step 3: the $5 all-time cap becomes report-only (DeepSeek capped at source, owner 2026-10-13); legacy rows priced as V4 Pro, tagged legacy; bad lines skipped, counted.
 - Step 4: `apply_dispatch.py` appends an outcome row (response sha, target, applied, rolled back, refused, test counts).
@@ -210,22 +213,19 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored, ephemeral.
   Often reference a target repo's absolute path from whichever machine dispatched them.
 - `rebuild/scripts/llm_client.py` calls no local model — cloud only (DeepSeek, OpenRouter peak-hours fallback, Planner/Nemotron, plus local `agy` which is not Ollama).
-  The frozen old `scripts/llm_client.py` is the one with an actual `ollama` provider branch.
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag — confirmed the only call site.
 - `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking, sanitized via `openrouter_sanitizer.py`.
   Not a general DeepSeek peer otherwise — shared rate-limit pool, content-filter/hallucination issues in the old pipeline; peak-hours fallback is the sole call site.
   Nemotron quirk: made an unrequested edit to an unrelated line despite explicit scope instructions on 3/3 real calls so far.
   Always diff the full response, not just the requested function.
 - `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` (was `null`, silently inheriting a shared setting file).
-- Owner (2026-10-12): every Gemini 3.1 Pro high slot in `config/tiers.yaml` (planner, tier 2 peak_alt, tier 3) runs `gemini-3.8-flash`, effort high; live `agy` check passed.
-  agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
+- Fact (2026-10-13): Gemini 4 Argon reaches agy only on AI Ultra; Fedora `agy models` (1.3.4) lists none. Use it as an escalation rung only after a live check.
+- agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
 - `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): hard `deny` on any path in `~/.claude/dispatch-gate-paths.txt`.
   Escape hatch: `~/.claude/hooks/dispatch-gate-arm.sh <ttl_seconds> <file>...` writes a single-use, short-TTL marker consumed by the next matching Edit/Write.
   Run it immediately before applying an already-reviewed DeepSeek/agy response, or before a hand fix the user explicitly approves in the moment.
 - Nemotron is a standing Planner role: `rebuild/scripts/call_planner.py` + `llm_client.execute_planner()` + `model_config.yaml`'s `planner:` section (documented in `rebuild/README.md`).
   Not gated by DeepSeek peak-hours; shares the OpenRouter free-tier pool. Planner drafts still route through Claude before becoming queue tasks, never straight to DeepSeek/agy.
-- Cross-platform (Ubuntu/Fedora/macOS): root `scripts/resource_guard.py` no-ops when `systemctl` is absent instead of crashing on macOS (no systemd).
-  Frozen infra (see Archive, SALVAGE_PLAN).
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`.
   Split by concern while a file's still small, don't wait for a size ceiling.
 - When dispatching against any target repo, run its tests via the command its own AGENTS.md documents — don't assume system python.
@@ -252,14 +252,14 @@ A cloud model then integrates the draft into the real file precisely.
 - Emit a Search/Replace block, not a unified diff — benchmarks show ~59% vs ~26% success rate.
 - Patcher: normalize whitespace before matching, apply in-memory only, never write to disk directly.
 - Re-parse (via CodeGraph re-sync, or a plain `ast.parse`/`py_compile` check) after applying; one-shot auto-correct on syntax failure; commit only once it parses clean.
-- Known building block: `scripts/edit_blocks.py` (old pipeline) already does Search/Replace materialization — reuse/extend, don't rebuild.
+- Known building block: root `scripts/edit_blocks.py` already does Search/Replace materialization — reuse/extend, don't rebuild.
 - Status: chain fully shipped 2026-09-10 — Slicer, Patcher, Materializer,
   Planner/DeepSeek call wrappers, `vcb_run.py` entrypoint. 99/99 rebuild
   tests pass. File map and per-module contracts: `rebuild/README.md`.
 - Design decisions and rationale for each piece: git log on
   `rebuild/scripts/vcb_*.py`, not repeated here.
 - Live smoke test passed 2026-09-10: real end-to-end run against
-  `scripts/dispatcher.py`'s `_default_build_cmd` (1279 lines) produced a
+  the since-deleted `scripts/dispatcher.py`'s `_default_build_cmd` (1279 lines) produced a
   correct, syntactically valid patch; rest of the file byte-for-byte
   unchanged; disk untouched (`run_vcb` only returns content).
 - Bug found by that test, fixed same session: `run_vcb` and
