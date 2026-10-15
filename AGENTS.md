@@ -184,14 +184,6 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - Manual test-task cleanup: deleting a `tasks` row alone leaves an orphaned `events` row (no FK cascade) — delete from both tables.
 - Python version floor: PEP 604 `X | None` needs 3.10+, fine on all three machines' actual OS versions.
 
-## Carryover (current state, 2026-09-15)
-
-- Ops Center dispatch (`/home/dyne/Documents/Coding/Ops Center`, not a git repo): `vlog_bridge/` gained multi-recipient recording-status broadcast.
-  - New `broadcast.py`, `bridge_state.py` report-state tracking, `telegram_io.py` delete/return-id support, `bridge.py` lock-file-diff watcher covering both manual `/record` and the recorder's own automatic polling — 5 tasks, hub-and-spoke reviewed.
-  - Two DeepSeek responses rejected and redispatched: fabricated code for parts of the file only described, not pasted verbatim.
-    Always paste full current file content for a full-file edit-in-place task.
-  - Also replaced Ops Center's `MAPPING.md` with `AGENTS.md` per this repo's doc policy — single-call agy task timed out/returned empty twice, split into two section-level calls, both succeeded.
-
 ## Carryover (current state, 2026-09-14)
 
 - Four SemAI dispatch sessions today, full detail in SemAI's own AGENTS.md:
