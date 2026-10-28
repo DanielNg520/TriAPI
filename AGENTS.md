@@ -225,6 +225,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Findings
 F1 [high · 1 · 2026-10-13] `rebuild/scripts/cost.py`: prices every call at flash $0.14/M (`tiers.yaml`); V4 Pro is $0.66 in, $1.98 out off-peak, double at peak; cap undercounts 5-14x (verified).
+F2 [low · 1 · 2026-10-28] `rebuild/scripts/apply_dispatch.py` edit path: SEARCH matches as substring, not whole lines; an empty REPLACE keeps the block's blank lines; an EOF block drops the final newline (verified, SemAI M1 S4).
 (Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
