@@ -204,20 +204,20 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   Validate a bulk `add` sequence's dependencies resolve to real task ids right away, don't wait for a `claim` failure.
 - `rebuild/tasks/*.md` are per-run dispatch task descriptions, not pipeline code — gitignored, ephemeral.
   Often reference a target repo's absolute path from whichever machine dispatched them.
-- `rebuild/scripts/llm_client.py` calls no local model — cloud only (DeepSeek, OpenRouter peak-hours fallback, Planner/Nemotron, plus local `agy` which is not Ollama).
+- `rebuild/scripts/llm_client.py` calls no local model — cloud only (DeepSeek, Planner/Nemotron on OpenRouter, plus local `agy` which is not Ollama).
 - Spend cap: `cost.check_budget`, $5.00 default in `model_config.yaml`, hard-blocks `call_deepseek.py` before the API call, no bypass flag — confirmed the only call site.
-- `call_deepseek.py` falls back to OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`, config in `model_config.yaml`) during DeepSeek peak hours instead of blocking, sanitized via `openrouter_sanitizer.py`.
-  Not a general DeepSeek peer otherwise — shared rate-limit pool, content-filter/hallucination issues in the old pipeline; peak-hours fallback is the sole call site.
-  Nemotron quirk: made an unrequested edit to an unrelated line despite explicit scope instructions on 3/3 real calls so far.
+- Owner (2026-11-12): DeepSeek peak-hours fallback is agy `gemini-4-hydrogen-high`, effort high (`deepseek.peak_fallback`); deliberate opt-in step up, not an automatic escalation.
+  Done (2026-11-12, `triapi_pf1_*`): `call_deepseek.py` calls `execute_agy(model=, effort=)`; `execute_openrouter` and the `openrouter:` config block deleted.
+  Trap: agy `--mode plan` on Hydrogen answers with a plan and asks for approval; end every prompt with "plan approved, reply with ... only, no other text".
   Always diff the full response, not just the requested function.
-- `agy.model` pinned to `"gemini-3.8-flash-medium"` in `model_config.yaml` (was `null`, silently inheriting a shared setting file).
-- Fact (2026-10-13): Gemini 4 Argon reaches agy only on AI Ultra; Fedora `agy models` (1.3.4) lists none. Use it as an escalation rung only after a live check.
+- `agy.model` pinned to `"gemini-4-hydrogen-high"`, `effort: "high"` in `model_config.yaml`; agy writes code tasks too (owner, 2026-11-12).
+- Fact (2026-11-12): Fedora `agy models` lists Gemini 4 Argon and Hydrogen (low to xhigh); Argon stays an escalation rung.
 - agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
 - `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): hard `deny` on any path in `~/.claude/dispatch-gate-paths.txt`.
   Escape hatch: `~/.claude/hooks/dispatch-gate-arm.sh <ttl_seconds> <file>...` writes a single-use, short-TTL marker consumed by the next matching Edit/Write.
   Run it immediately before applying an already-reviewed DeepSeek/agy response, or before a hand fix the user explicitly approves in the moment.
 - Nemotron is a standing Planner role: `rebuild/scripts/call_planner.py` + `llm_client.execute_planner()` + `model_config.yaml`'s `planner:` section (documented in `rebuild/README.md`).
-  Not gated by DeepSeek peak-hours; shares the OpenRouter free-tier pool. Planner drafts still route through Claude before becoming queue tasks, never straight to DeepSeek/agy.
+  Not gated by DeepSeek peak-hours; OpenRouter free-tier pool. Planner drafts still route through Claude before becoming queue tasks, never straight to DeepSeek/agy.
 - Per-concern module split: `tui.py`'s helpers live in 4 `tui_*.py` modules; `llm_client.py`'s sanitizer lives in `openrouter_sanitizer.py`.
   Split by concern while a file's still small, don't wait for a size ceiling.
 - When dispatching against any target repo, run its tests via the command its own AGENTS.md documents — don't assume system python.

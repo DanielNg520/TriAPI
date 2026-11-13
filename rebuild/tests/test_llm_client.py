@@ -1,7 +1,9 @@
+import json
+import types
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from scripts.llm_client import execute_openrouter, extract_code_block, is_deepseek_peak_hours
+from scripts.llm_client import execute_agy, extract_code_block, is_deepseek_peak_hours
 from scripts.llm_client import execute_planner
 from scripts.openrouter_sanitizer import _PHONE_LIKE_RE
 import pytest
@@ -119,44 +121,11 @@ def test_is_deepseek_peak_hours_true_missing_holiday_key_weekday():
         assert is_deepseek_peak_hours(cfg) is True
 
 
-def test_execute_openrouter_returns_content_and_usage():
+def test_execute_planner_sanitizes_prompt_and_system_prompt():
     cfg = {
-        "openrouter": {
+        "planner": {
             "endpoint": "https://openrouter.ai/api/v1",
-            "fallback_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        },
-        "timeouts": {"http": 600},
-    }
-    fake_response = type(
-        "Resp",
-        (),
-        {
-            "raise_for_status": lambda self: None,
-            "json": lambda self: {
-                "choices": [{"message": {"content": "hello"}}],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 7},
-            },
-        },
-    )()
-
-    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
-        "scripts.llm_client.requests.post", return_value=fake_response
-    ) as post:
-        text, in_tok, out_tok = execute_openrouter("prompt", "system", "fake-key")
-
-    assert text == "hello"
-    assert (in_tok, out_tok) == (5, 7)
-    called_url = post.call_args.args[0]
-    assert called_url == "https://openrouter.ai/api/v1/chat/completions"
-    called_payload = post.call_args.kwargs["json"]
-    assert called_payload["model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
-
-
-def test_execute_openrouter_sanitizes_prompt_and_system_prompt():
-    cfg = {
-        "openrouter": {
-            "endpoint": "https://openrouter.ai/api/v1",
-            "fallback_model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
         },
         "timeouts": {"http": 600},
     }
@@ -176,7 +145,7 @@ def test_execute_openrouter_sanitizes_prompt_and_system_prompt():
     with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
         "scripts.llm_client.requests.post", return_value=fake_response
     ) as post:
-        execute_openrouter(f"call {phone}", "system prompt", "fake-key")
+        execute_planner(f"call {phone}", "system prompt", "fake-key")
 
     sent_payload = post.call_args.kwargs["json"]
     sent_prompt = sent_payload["messages"][1]["content"]
@@ -217,15 +186,11 @@ def test_execute_planner_returns_content_and_usage():
     assert called_payload["model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
-def test_execute_planner_uses_planner_config_model_not_openrouter():
+def test_execute_planner_uses_planner_config_model():
     cfg = {
         "planner": {
             "endpoint": "https://openrouter.ai/api/v1",
             "model": "nvidia/nemotron-planner",
-        },
-        "openrouter": {
-            "endpoint": "https://openrouter.ai/api/v1",
-            "fallback_model": "nvidia/nemotron-openrouter-fallback",
         },
         "timeouts": {"http": 600},
     }
@@ -248,7 +213,6 @@ def test_execute_planner_uses_planner_config_model_not_openrouter():
 
     called_payload = post.call_args.kwargs["json"]
     assert called_payload["model"] == "nvidia/nemotron-planner"
-    assert called_payload["model"] != cfg["openrouter"]["fallback_model"]
 
 
 def test_execute_planner_no_choices_raises():
@@ -296,4 +260,48 @@ def test_is_deepseek_peak_hours_false_on_holiday():
     ) as mock_dt:
         mock_dt.now.return_value = fixed_dt
         assert is_deepseek_peak_hours(cfg) is False
+
+
+def test_execute_agy_override_model_and_effort():
+    cfg = {
+        "agy": {"model": "cfg-model", "effort": "medium"},
+        "timeouts": {"agy_cli": 600},
+    }
+    proc = types.SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"status": "SUCCESS", "response": "ok"}),
+        stderr="",
+    )
+
+    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
+        "scripts.llm_client.subprocess.run", return_value=proc
+    ) as run:
+        result = execute_agy("p", "s", model="gemini-4-hydrogen-high", effort="high")
+
+    assert result == "ok"
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("--model") + 1] == "gemini-4-hydrogen-high"
+    assert cmd[cmd.index("--effort") + 1] == "high"
+
+
+def test_execute_agy_defaults_to_agy_config():
+    cfg = {
+        "agy": {"model": "cfg-model", "effort": "medium"},
+        "timeouts": {"agy_cli": 600},
+    }
+    proc = types.SimpleNamespace(
+        returncode=0,
+        stdout=json.dumps({"status": "SUCCESS", "response": "ok"}),
+        stderr="",
+    )
+
+    with patch("scripts.llm_client.load_model_config", return_value=cfg), patch(
+        "scripts.llm_client.subprocess.run", return_value=proc
+    ) as run:
+        result = execute_agy("p", "s")
+
+    assert result == "ok"
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("--model") + 1] == "cfg-model"
+    assert cmd[cmd.index("--effort") + 1] == "medium"
 

@@ -15,9 +15,13 @@ deepseek:
   # DeepSeek peak billing (api-docs.deepseek.com/quick_start/pricing, verified
   # 2026-09-29): 01:00-04:00 and 06:00-10:00 UTC, Monday-Friday, excluding Chinese
   # public holidays; every other hour, weekends, and holidays are off-peak.
-  # call_deepseek.py falls back to the OpenRouter free model below instead of
-  # calling DeepSeek during peak. Windows are [start_hour, end_hour) UTC.
+  # Windows are [start_hour, end_hour) UTC.
   peak_hours_utc: [[1, 4], [6, 10]]
+  # During peak, call_deepseek.py runs the task through agy with this model and
+  # effort instead of DeepSeek (owner, 2026-11-12: deliberate step up, opt-in).
+  peak_fallback:
+    model: "gemini-4-hydrogen-high"
+    effort: "high"
   # Chinese statutory holiday rest days (Beijing calendar dates, State Council
   # General Office notice of 2025-11-04). Weekday dates listed here are off-peak.
   # Make-up workdays fall on weekends, so they are already off-peak. DeepSeek
@@ -74,21 +78,10 @@ deepseek_reference_pricing:
   cache_hit_per_mtok_usd: 0.0028
   output_per_mtok_usd: null
 
-openrouter:
-  provider: openrouter
-  endpoint: "https://openrouter.ai/api/v1"
-  api_key_secret: open_router_api_key   # key name in config/secrets.enc.yaml
-  # Peak-hours-only fallback for call_deepseek.py -- not a general DeepSeek
-  # peer (see AGENTS.md). Free tier: shares the account's one 20 RPM/1000 RPD
-  # OpenRouter pool across all models, so keep this to the narrow peak window.
-  fallback_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
-
 # Standing Planner role (promoted from a one-off trial) that drafts task
 # breakdowns for Claude to review/correct before dispatching to DeepSeek/agy.
 # Claude remains the hub -- planner output never goes straight to a worker.
-# Shares the same OpenRouter free-tier rate-limit pool (20 RPM/1000 RPD) as
-# call_deepseek.py's peak-hours fallback above, so heavy planner use can
-# starve that fallback and vice versa.
+# Free tier: one 20 RPM/1000 RPD OpenRouter pool across the whole account.
 planner:
   provider: openrouter
   endpoint: "https://openrouter.ai/api/v1"
@@ -109,8 +102,8 @@ agy:
   # SemAI) -- a change there for an unrelated project would silently
   # change TriAPI's docs-tier model too, with nothing in this repo
   # recording it. Pinning here makes that explicit and immune to drift.
-  model: "gemini-3.8-flash-medium"
-  effort: "medium"
+  model: "gemini-4-hydrogen-high"
+  effort: "high"
 
 # Subprocess timeouts (seconds).
 timeouts:

@@ -31,7 +31,7 @@ def main() -> int:
         help="System prompt file (the strict instructions/constraints for this task)",
     )
     ap.add_argument("--task-id", default=None, help="Task id for cost log (default: prompt filename or 'stdin')")
-    ap.add_argument("--no-fallback", action="store_true", help="Fail fast during DeepSeek peak hours instead of using the OpenRouter fallback")
+    ap.add_argument("--no-fallback", action="store_true", help="Fail fast during DeepSeek peak hours instead of using the agy peak fallback")
     args = ap.parse_args()
 
     prompt = args.prompt_file.read_text() if args.prompt_file else sys.stdin.read()
@@ -52,20 +52,19 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        fallback = cfg["deepseek"]["peak_fallback"]
         print(
-            "[FALLBACK] DeepSeek peak billing window active -- using OpenRouter "
-            f"fallback model {llm_client.load_model_config()['openrouter']['fallback_model']}",
+            f"[FALLBACK] DeepSeek peak billing window active -- using agy {fallback['model']} (effort {fallback['effort']})",
             file=sys.stderr,
         )
-        secrets = secrets_loader.load_secrets()
-        response, in_tok, out_tok = llm_client.execute_openrouter(
-            prompt, system_prompt, secrets["open_router_api_key"]
+        response = llm_client.execute_agy(
+            prompt, system_prompt, model=fallback["model"], effort=fallback["effort"]
         )
         print(response)
         saved = dispatch.store_response(response)
         print(f"[response] {saved}", file=sys.stderr)
         cost.log_cost(task_id, 0, 0)
-        print(f"[tokens] in={in_tok} out={out_tok} cost_usd=0.000000 (openrouter free fallback)", file=sys.stderr)
+        print("[tokens] in=0 out=0 cost_usd=0.000000 (agy peak fallback)", file=sys.stderr)
         return 0
 
     limit = llm_client.load_model_config()["deepseek"]["spend_limit_usd"]

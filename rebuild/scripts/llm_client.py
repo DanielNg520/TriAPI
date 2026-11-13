@@ -1,14 +1,14 @@
 """Minimal LLM client: DeepSeek (OpenAI-compatible HTTP API) + agy (local CLI),
-plus a narrow OpenRouter fallback for DeepSeek's peak-billing window.
+plus execute_planner on OpenRouter.
 
 Trimmed from the old pipeline's scripts/llm_client.py -- dropped Claude
-CLI, Gemini, and Ollama. OpenRouter itself is back, but only as
-call_deepseek.py's peak-hours fallback (see AGENTS.md) -- not a general
-peer to DeepSeek/agy. Its content-filter sanitizer (still needed: see
-scripts/openrouter_sanitizer.py) lives in its own module. Kept: the two
-original working call paths, agy's mandatory safety flags, and the
-argv-size guard (both were real incidents in the old pipeline, see
-docstrings below).
+CLI, Gemini, and Ollama. During DeepSeek's peak-billing window,
+call_deepseek.py runs the task through execute_agy with the
+deepseek.peak_fallback model and effort (owner, 2026-11-12). OpenRouter is
+used only by execute_planner; its content-filter sanitizer lives in
+scripts/openrouter_sanitizer.py. Kept: the two original working call paths,
+agy's mandatory safety flags, and the argv-size guard (both were real
+incidents in the old pipeline, see docstrings below).
 """
 
 import json
@@ -88,41 +88,6 @@ def execute_deepseek(prompt: str, system_prompt: str, api_key: str) -> Tuple[str
     return response_text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
 
 
-def execute_openrouter(prompt: str, system_prompt: str, api_key: str) -> Tuple[str, int, int]:
-    """Call OpenRouter's OpenAI-compatible chat completions endpoint with the
-    configured fallback model (config/model_config.yaml: openrouter.fallback_model).
-
-    Peak-hours fallback for execute_deepseek only -- see call_deepseek.py.
-    Returns (response_text, input_tokens, output_tokens).
-    """
-    cfg = load_model_config()
-    orc = cfg["openrouter"]
-    url = f"{orc['endpoint']}/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": orc["fallback_model"],
-        "messages": [
-            {"role": "system", "content": sanitize_for_openrouter_content_filter(system_prompt)},
-            {"role": "user", "content": sanitize_for_openrouter_content_filter(prompt)},
-        ],
-    }
-    timeout = cfg["timeouts"]["http"]
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    choices = data.get("choices")
-    if not choices:
-        raise RuntimeError(f"OpenRouter API returned no choices: {json.dumps(data)[:500]}")
-    response_text = choices[0]["message"]["content"]
-    if response_text is None:
-        raise RuntimeError(
-            f"OpenRouter API returned null content (finish_reason="
-            f"{choices[0].get('finish_reason')!r}): {json.dumps(data)[:500]}"
-        )
-    usage = data.get("usage", {})
-    return response_text, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
-
-
 def _call_claude_cli(prompt: str, system_prompt: str, model: str | None, effort: str | None) -> str:
     """Run the local `claude` CLI as a pure text-in/text-out completion backend.
 
@@ -187,7 +152,12 @@ def execute_planner(prompt: str, system_prompt: str, api_key: str) -> Tuple[str,
 _AGY_MAX_PROMPT_CHARS = 100_000
 
 
-def execute_agy(prompt: str, system_prompt: str | None = None) -> str:
+def execute_agy(
+    prompt: str,
+    system_prompt: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+) -> str:
     """Run the local `agy` CLI with JSON output format.
 
     `--dangerously-skip-permissions --mode plan` are always set: without
@@ -201,6 +171,9 @@ def execute_agy(prompt: str, system_prompt: str | None = None) -> str:
     plan mode's default propose-and-ask framing -- keep that instruction
     in every prompt sent through this function.
 
+    `model` and `effort` override the `agy` config block for one call
+    (call_deepseek.py's peak-hours fallback passes `deepseek.peak_fallback`).
+
     Returns the response text verbatim.
     """
     cfg = load_model_config()
@@ -211,11 +184,13 @@ def execute_agy(prompt: str, system_prompt: str | None = None) -> str:
             f"agy prompt too large for argv: {len(full_prompt)} chars "
             f"(limit {_AGY_MAX_PROMPT_CHARS})"
         )
+    resolved_model = model if model is not None else agy_cfg.get("model")
+    resolved_effort = effort if effort is not None else agy_cfg.get("effort")
     cmd = ["agy", "-p", full_prompt]
-    if agy_cfg.get("model"):
-        cmd.extend(["--model", agy_cfg["model"]])
-    if agy_cfg.get("effort"):
-        cmd.extend(["--effort", agy_cfg["effort"]])
+    if resolved_model:
+        cmd.extend(["--model", resolved_model])
+    if resolved_effort:
+        cmd.extend(["--effort", resolved_effort])
     cmd.extend(["--dangerously-skip-permissions", "--mode", "plan", "--output-format", "json"])
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=cfg["timeouts"]["agy_cli"]

@@ -4,8 +4,8 @@ OpenRouter's content filter can 403 a request whose prompt contains an
 email/phone/IP-shaped token, even a synthetic one in test/task fixture
 data -- ported from the old pipeline's scripts/llm_client.py (real live
 blocks there, 2026-08-24/25: 36 blocked requests in one day -- 18 PHONE,
-12 EMAIL, 6 IP ADDRESS). Used by llm_client.execute_openrouter, the
-fallback's single call site.
+12 EMAIL, 6 IP ADDRESS). Used by llm_client.execute_planner, its single
+call site.
 """
 
 import re

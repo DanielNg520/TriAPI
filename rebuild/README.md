@@ -4,13 +4,13 @@ Task queue and LLM call scaffold with manual audit step before applying.
 
 ## Files
 
-- `config/model_config.yaml` — endpoint/model/effort/timeouts, spend limit, and OpenRouter fallback model. Edit here, not in code.
+- `config/model_config.yaml` — endpoint/model/effort/timeouts, spend limit, and the DeepSeek peak fallback (`deepseek.peak_fallback`). Edit here, not in code.
 - `queue.sqlite3` — SQLite backing database for task queue.
 - `scripts/secrets_loader.py` — reads `../config/secrets.enc.yaml`. Requires only `deepseek_api_key`; `open_router_api_key` is read for the peak-hours fallback and the planner. The old root pipeline's keys (`ollama_host`, `google_ai_studio_api_key`, `groq_api_key`) are legacy and device-specific: kept on Fedora for possible future use, omitted on Xubuntu; `rebuild/` never reads them.
-- `scripts/llm_client.py` — `execute_deepseek()`, `execute_openrouter()`, `execute_agy()`.
-- `scripts/openrouter_sanitizer.py` — sanitizes OpenRouter-bound text (content filter blocks email/phone/IP-shaped tokens).
+- `scripts/llm_client.py` — `execute_deepseek()`, `execute_planner()`, `execute_agy()` (optional per-call `model`, `effort`).
+- `scripts/openrouter_sanitizer.py` — sanitizes Planner (OpenRouter) text (content filter blocks email/phone/IP-shaped tokens).
 - `scripts/cost.py` — logs DeepSeek tokens and cost to `logs/cost_log.jsonl`.
-- `scripts/call_deepseek.py`, `scripts/call_agy.py` — CLI wrappers, print response to stdout. `call_deepseek.py` hard-blocks if cumulative spend exceeds `model_config.yaml`'s `deepseek.spend_limit_usd` ($5.00 default, no bypass flag) and calls OpenRouter during peak hours.
+- `scripts/call_deepseek.py`, `scripts/call_agy.py` — CLI wrappers, print response to stdout. `call_deepseek.py` hard-blocks if cumulative spend exceeds `model_config.yaml`'s `deepseek.spend_limit_usd` ($5.00 default, no bypass flag) and runs the task through agy with `deepseek.peak_fallback` during peak hours.
 - `scripts/call_planner.py` — CLI interface for invoking the Planner role, structured identically to `call_deepseek.py`/`call_agy.py` with `--prompt-file` and `--system-file` options, outputting generated text to stdout. Backed by `execute_planner()` in `scripts/llm_client.py`, which dispatches requests to OpenRouter according to the configuration defined in `config/model_config.yaml`'s `planner:` section.
 - `scripts/task_queue.py` — task queue CLI (`add`, `list`, `approve`, `claim`, `complete`, `tui`).
 - `scripts/tui.py` — interactive Textual terminal driver (`App` class + `main()`).
@@ -23,10 +23,10 @@ Task queue and LLM call scaffold with manual audit step before applying.
 ## Roles
 
 - **DeepSeek**: writes code. One function/task per call, strict prompt, exact scope.
-- **OpenRouter**: peak-hours-only fallback for DeepSeek (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri, Chinese public holidays off-peak; see `model_config.yaml`) using free model (`nvidia/nemotron-3-ultra-550b-a55b:free`). Not a general peer.
+- **DeepSeek peak fallback**: during peak (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri, Chinese public holidays off-peak) `call_deepseek.py` uses agy `gemini-4-hydrogen-high`, effort high (owner, 2026-11-12).
 - **agy**: docs + trivial tasks. Prompt must end "reply with complete file content only, no other text" (required for `--mode plan` to not write directly).
 - **Claude**: writes every prompt, audits every response before applying. Prompts give signature/skeleton/requirements only — never a finished implementation to paste in, even under time pressure or on a precision-sensitive task (that instinct is itself the failure mode: not trusting the worker is a reason to write a tighter spec, not to write the code yourself). This includes prose: dictating exact variable names, exact control flow ("if X is None, do A and return, else flip Y, persist, call Z with these params"), exact strings/regexes step by step is the same violation as pasting a code block — a test for whether a prompt is actually a spec: could two different competent implementations satisfy it, or does it only admit the one you already wrote? A behavioral requirement ("look up the draft; if missing, tell the user it expired and stop") is fine — a call-by-call transcription is not.
-- **Planner**: breaks down bug reports and feature requests into an ordered sequence of concise, dispatchable tasks. Promoted from an initial experiment into a permanent standing role, operational at all times rather than being restricted to DeepSeek's peak-hours schedule. Planner output never routes directly to worker models like DeepSeek or agy; adhering to the hub-and-spoke workflow, Claude must first evaluate and amend every draft (preventing issues from Planner hallucinating nonexistent file paths or function identifiers due to lack of codebase access) before creating actual task queue entries. Connects through the shared OpenRouter free tier, pooling limits (20 RPM / 1000 RPD) alongside the peak-hours fallback worker, so high activity in one role risks throttling the other.
+- **Planner**: breaks down bug reports and feature requests into an ordered sequence of concise, dispatchable tasks. Promoted from an initial experiment into a permanent standing role, operational at all times rather than being restricted to DeepSeek's peak-hours schedule. Planner output never routes directly to worker models like DeepSeek or agy; adhering to the hub-and-spoke workflow, Claude must first evaluate and amend every draft (preventing issues from Planner hallucinating nonexistent file paths or function identifiers due to lack of codebase access) before creating actual task queue entries. Connects through the shared OpenRouter free tier (20 RPM / 1000 RPD per account).
 
 ## Usage
 
