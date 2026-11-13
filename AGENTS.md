@@ -99,6 +99,7 @@ Worker output reaches repos only through `rebuild/scripts/apply_dispatch.py`; ne
 Edit mode takes SEARCH/REPLACE blocks, matched on `\n`-normalized text; apply and rollback keep the target's CRLF/LF style.
 A target mixing CRLF and bare LF is refused (ValueError, bytes untouched), never normalized (2026-10-09).
 `--new` takes the first fenced block for a file that must not exist. Verification failure rolls back and removes a new file.
+A `--new` file starting with `#!` gets execute permission before verification (owner, 2026-11-13).
 `dispatch_task` appends the final file sha256 to the ledger (`DISPATCH_LEDGER_PATH`, default `~/.local/state/dispatch-ledger/applied.sha256`) only after verification passes.
 Enforcement is a git pre-commit hook (`~/.claude/hooks/dispatch-ledger-check.sh`, source in Hivemind `claude/dispatch-gate/`): staged `.py .js .css .html` under gated dirs must have a ledger hash.
 Installed in SemAI and TriAPI (`.git/hooks/pre-commit` runs the check; Fedora clone, owner 2026-10-09; other clones need the same two-line hook). Hand fixes: the user runs `dispatch-ledger-hand.sh <file>`.

@@ -105,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.new:
         args.target.parent.mkdir(parents=True, exist_ok=True)
         args.target.touch()
+        if new_content.startswith("#!"):
+            mode = args.target.stat().st_mode
+            args.target.chmod(mode | ((mode & 0o444) >> 2))
 
     result = run_dispatch(args.target, old_content, new_content, args)
 

@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,34 @@ def test_new_success(capsys, tmp_path):
     assert "PASSED" in captured.out
     ledger = ledger_path()
     assert ledger.read_text().splitlines() == [sha256_of(fenced_body + "\n")]
+
+
+def test_new_shebang_file_is_executable(tmp_path):
+    target = tmp_path / "new_file.py"
+    fenced_body = "#!/usr/bin/env python3\ndef hello():\n    return 1"
+    response_text = f"```python\n{fenced_body}\n```\n"
+    response = write_response_text(response_text, tmp_path)
+
+    result = apply_dispatch.main(
+        ["--target", str(target), "--response", str(response), "--new"]
+    )
+
+    assert result == 0
+    assert os.access(target, os.X_OK)
+
+
+def test_new_without_shebang_is_not_executable(tmp_path):
+    target = tmp_path / "new_file.py"
+    fenced_body = "def hello():\n    return 1"
+    response_text = f"```python\n{fenced_body}\n```\n"
+    response = write_response_text(response_text, tmp_path)
+
+    result = apply_dispatch.main(
+        ["--target", str(target), "--response", str(response), "--new"]
+    )
+
+    assert result == 0
+    assert not os.access(target, os.X_OK)
 
 
 def test_new_target_exists_returns_1(capsys, tmp_path):
