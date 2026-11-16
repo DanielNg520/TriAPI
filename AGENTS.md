@@ -84,8 +84,6 @@ before — see below), commits, merges to the target repo's main, folds
 findings into its own AGENTS.md, then deletes both temp files.
 Only trivial, fully-specified tasks: report-only investigations or fixes
 that reuse an existing primitive. Never architecture-affecting work.
-First used on SemAI 2026-09-26/27: `PINNED_TOPIC_PREFIX` dedup, a missing
-stocks-TTL test, a placeholder PWA icon — all landed clean after audit.
 One agy report was wrong, not malicious: it ran `journalctl --user` on a
 system-level unit and reported "log empty" as a clean result; the unit was
 never queried. Always re-run report-only findings yourself before trusting
@@ -102,7 +100,7 @@ A target mixing CRLF and bare LF is refused (ValueError, bytes untouched), never
 A `--new` file starting with `#!` gets execute permission before verification (owner, 2026-11-13).
 `dispatch_task` appends the final file sha256 to the ledger (`DISPATCH_LEDGER_PATH`, default `~/.local/state/dispatch-ledger/applied.sha256`) only after verification passes.
 Enforcement is a git pre-commit hook (`~/.claude/hooks/dispatch-ledger-check.sh`, source in Hivemind `claude/dispatch-gate/`): staged `.py .js .css .html` under gated dirs must have a ledger hash.
-Installed in SemAI and TriAPI (`.git/hooks/pre-commit` runs the check; Fedora clone, owner 2026-10-09; other clones need the same two-line hook). Hand fixes: the user runs `dispatch-ledger-hand.sh <file>`.
+Installed in TriAPI (`.git/hooks/pre-commit` runs the check; Fedora clone, owner 2026-10-09; other clones need the same two-line hook). Hand fixes: the user runs `dispatch-ledger-hand.sh <file>`.
 `git commit --no-verify` and `git -c core.hooksPath` are denied in `~/.claude/settings.json`. Tests redirect ledger and responses dir via `tests/conftest.py`.
 Not done by design: response signing or a separate-user daemon; forging a stored response by hand remains possible but deliberate.
 
@@ -135,7 +133,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - Step 4: `apply_dispatch.py` appends an outcome row (response sha, target, applied, rolled back, refused, test counts).
 - Step 5: report command: spend by day, task, model; accept rate; cost per applied change; spend on rejected responses; retries per task.
 - Owner (2026-10-13): DeepSeek stays as before this session unless an optimization or new gap is found.
-- Calibration 2026-10-13: V4 Pro thinking audit of SemAI `693ea74` caught the anchor bug, missed F35; in 10.9k, out 29.6k, real $0.066, 4 min.
+- Calibration 2026-10-13: V4 Pro thinking audit on a past project (`693ea74`) caught the anchor bug, missed F35; in 10.9k, out 29.6k, real $0.066, 4 min.
 - 2026-10-09: a test-task excerpt must include the class fixture/setup it uses, or DeepSeek invents APIs (Archiver t13 rejected).
 - 2026-10-09: interdependent edits to one file: check each with a single-test command, full suite only on the last (else each rolls back).
 - 2026-10-09: build prompt excerpts from symbol or `grep -n` anchors (or `vcb_slicer`), never typed line ranges; three prompt errors that day.
@@ -153,17 +151,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Carryover (current state, 2026-09-18)
 
-- SemAI professional-flow dispatch done (2026-09-18): `DraftProfessionalPost` intent,
-  `ProfessionalWriterWorker`, `openclaw_browser.py` adapter, all tests passing. See SemAI's own
-  AGENTS.md. `rebuild/config/model_config.yaml`'s planner override reverted to standing OpenRouter
-  config — confirmed via `git diff` showing only the standing block.
-- SemAI Telegram forum-topic auto-creation removed entirely (2026-09-18, same session, via this
-  pipeline): recurring duplicate-topic bug traced to `.state-semai/semai.sqlite3` (WAL sqlite on
-  btrfs) corrupting/resetting at least twice, wiping the only record of created topics each time.
-  Fix: topic ids now come solely from operator config (`.secret/telegram_topics.json` +
-  `TELEGRAM_TOPIC_IDS` env, never git), plus a new `/register_topic` chat command. Full detail in
-  SemAI's own AGENTS.md.
-- Creative-writing flow (was briefly scoped into SemAI by mistake) is NOT part of TriAPI-dispatched
+- Creative-writing flow is NOT part of TriAPI-dispatched
   work — moved entirely to the separate `~/Documents/Coding/Ghostwriter` repo's own `plan.md`.
 
 ## Carryover (current state, 2026-09-17)
@@ -184,20 +172,6 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 - Gap: `agy` (Google's Antigravity CLI) still has no install doc here — OAuth-only, no known download URL found on any machine checked.
 - Manual test-task cleanup: deleting a `tasks` row alone leaves an orphaned `events` row (no FK cascade) — delete from both tables.
 - Python version floor: PEP 604 `X | None` needs 3.10+, fine on all three machines' actual OS versions.
-
-## Carryover (current state, 2026-09-14)
-
-- Four SemAI dispatch sessions today, full detail in SemAI's own AGENTS.md:
-  1. Telegram mail-actions Delete button + `_clean_body_text` boilerplate-stripping fix.
-  2. Root-caused and fixed a real Notion duplicate-database/duplicate-interface incident: `ensure_database`/`_ensure_actions_page_structure` trusted local cache alone before creating.
-     Now reconciles against Notion's actual state first — general principle, not Notion-specific.
-  3. Confirmed email→task/reminder→Notion sync was already fully wired, just unexercised; added missing `Category` property push.
-  4. New email→calendar "📅 Event" button (`CreateCalendarEventWorker` gained an email-sourced path).
-     Live-tested against a real appointment email, caught+fixed two real bugs: snippet-only body truncating before the actual date/time, and a found-start-but-no-title case leaking the literal string "None".
-     Mocked unit tests didn't surface either — live testing against real data caught what mocks missed.
-  - All work went through this repo's dispatch pipeline (DeepSeek/agy write, Claude reviews/applies/verifies).
-  - OpenRouter free-fallback used throughout (session ran during DeepSeek peak hours); several 502 "Nvidia overloaded" transient failures resolved by one retry each.
-  - 195/195 SemAI pytest pass, both live services restarted clean after each fix.
 
 ## Carryover (current state, 2026-09-13)
 
@@ -226,7 +200,7 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
 
 ## Findings
 F1 [high · 1 · 2026-10-13] `rebuild/scripts/cost.py`: prices every call at flash $0.14/M (`tiers.yaml`); V4 Pro is $0.66 in, $1.98 out off-peak, double at peak; cap undercounts 5-14x (verified).
-F2 [medium · 2 · 2026-10-28→2026-10-28] `apply_dispatch.py` edits: SEARCH matches substrings; empty REPLACE keeps blanks; EOF block drops the final newline, trailing-blank REPLACE doubles it (verified, SemAI S4, S6).
+F2 [medium · 2 · 2026-10-28→2026-10-28] `apply_dispatch.py` edits: SEARCH matches substrings; empty REPLACE keeps blanks; EOF block drops the final newline, trailing-blank REPLACE doubles it (verified).
 (Jules key spelling, former F1, fixed 2026-09-30.)
 Legacy keys `ollama_host`, `google_ai_studio_api_key`, `groq_api_key` are device-specific: kept on Fedora, omitted on Xubuntu (user, 2026-09-30).
 
@@ -262,9 +236,6 @@ A cloud model then integrates the draft into the real file precisely.
   cwd — the two only agreed by coincidence. Both call sites now join
   `repo_path`/`file_path`. Mocked tests couldn't catch this; only the live
   run did. 99/99 rebuild tests still pass.
-- First real-world dispatch done 2026-09-11 (SemAI `stocks.py` fix, see
-  carryover above) — surfaced and fixed one gap (symbol disambiguation).
-  No more queued work here unless a future run surfaces another gap.
 
 ## Archive
 
