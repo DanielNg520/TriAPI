@@ -102,7 +102,9 @@ agy:
   # SemAI) -- a change there for an unrelated project would silently
   # change TriAPI's docs-tier model too, with nothing in this repo
   # recording it. Pinning here makes that explicit and immune to drift.
-  model: "gemini-4-hydrogen-high"
+  # Temporary default writer (owner, 2026-11-17); Hydrogen high is coding
+  # backup only (deepseek.peak_fallback).
+  model: "gemini-3.8-flash-high"
   effort: "high"
 
 # Subprocess timeouts (seconds).

@@ -185,7 +185,8 @@ A commit that stays local caused two copies to diverge before (2026-09-12 reconc
   Done (2026-11-12, `triapi_pf1_*`): `call_deepseek.py` calls `execute_agy(model=, effort=)`; `execute_openrouter` and the `openrouter:` config block deleted.
   Trap: agy `--mode plan` on Hydrogen answers with a plan and asks for approval; end every prompt with "plan approved, reply with ... only, no other text".
   Always diff the full response, not just the requested function.
-- `agy.model` pinned to `"gemini-4-hydrogen-high"`, `effort: "high"` in `model_config.yaml`; agy writes code tasks too (owner, 2026-11-12).
+- Owner (2026-11-17): `agy.model` set to `gemini-3.8-flash-high` (effort high) as temporary default writer; `gemini-4-hydrogen-high` is coding backup only (`deepseek.peak_fallback`).
+- Ask owner: test and decide whether `gemini-4-hydrogen-high` returns as writer at medium effort.
 - Fact (2026-11-12): Fedora `agy models` lists Gemini 4 Argon and Hydrogen (low to xhigh); Argon stays an escalation rung.
 - agy occasionally wraps a plain-file reply in a stray triple-backtick fence despite "file content only" instructions — strip before applying.
 - `~/.claude/hooks/dispatch-gate.sh` (global PreToolUse hook on Edit|Write|NotebookEdit): hard `deny` on any path in `~/.claude/dispatch-gate-paths.txt`.
